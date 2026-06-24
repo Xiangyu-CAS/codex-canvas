@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "agent-canvas": {
+      "command": "node",
+      "args": ["./src/mcp-server.mjs"],
+      "cwd": "."
+    }
+  }
+}

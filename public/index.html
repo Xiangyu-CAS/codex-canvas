@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Agent-Canvas</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <main class="canvas-pane">
+        <section class="board-shell" aria-label="Canvas workspace">
+          <header class="project-header">
+            <span class="project-mark"></span>
+            <input id="projectTitle" class="project-title-input" value="Untitled" aria-label="Project title" spellcheck="false" />
+            <button title="Project options" aria-label="Project options">
+              <span class="icon icon-chevron" aria-hidden="true"></span>
+            </button>
+          </header>
+
+          <div id="board" class="board" tabindex="0" aria-label="Agent canvas">
+            <div id="emptyState" class="empty-state">
+            </div>
+            <div id="world" class="world">
+              <div id="objects" class="objects"></div>
+            </div>
+            <div id="selectionToolbar" class="selection-toolbar" hidden>
+              <button data-action="quick-edit" data-tooltip="Quick Edit" title="Quick Edit" aria-label="Quick Edit">
+                <span class="context-icon context-quick" aria-hidden="true"></span>
+                <span>Quick Edit</span>
+                <kbd>Tab</kbd>
+              </button>
+              <button data-action="upscale" data-tooltip="Upscale" title="Upscale" aria-label="Upscale">
+                <span class="context-icon context-upscale" aria-hidden="true"></span>
+                <span>Upscale</span>
+              </button>
+              <button data-action="remove-bg" data-tooltip="Remove BG" title="Remove BG" aria-label="Remove BG">
+                <span class="context-icon context-bg" aria-hidden="true"></span>
+                <span>Remove BG</span>
+              </button>
+              <button data-action="eraser" data-tooltip="Eraser" title="Eraser" aria-label="Eraser">
+                <span class="context-icon context-eraser" aria-hidden="true"></span>
+                <span>Eraser</span>
+              </button>
+              <button data-action="edit-elements" data-tooltip="Edit Elements" title="Edit Elements" aria-label="Edit Elements">
+                <span class="context-icon context-elements" aria-hidden="true"></span>
+                <span>Elements</span>
+              </button>
+              <button data-action="edit-text" data-tooltip="Edit Text" title="Edit Text" aria-label="Edit Text">
+                <span class="context-icon context-text" aria-hidden="true"></span>
+                <span>Text</span>
+              </button>
+              <button class="overflow-action" data-action="multi-angles" data-tooltip="Multi-Angles" title="Multi-Angles" aria-label="Multi-Angles">
+                <span class="context-icon context-cube" aria-hidden="true"></span>
+                <span>Multi-Angles</span>
+              </button>
+              <button class="overflow-action" data-action="move-object" data-tooltip="Move Object" title="Move Object" aria-label="Move Object">
+                <span class="context-icon context-move" aria-hidden="true"></span>
+                <span>Move Object</span>
+              </button>
+              <button class="icon-only more-action" data-action="more" data-tooltip="More" title="More" aria-label="More">
+                <span class="context-icon context-more" aria-hidden="true"></span>
+              </button>
+              <button class="icon-only" data-action="download" data-tooltip="Download" title="Download" aria-label="Download">
+                <span class="context-icon context-download" aria-hidden="true"></span>
+              </button>
+            </div>
+            <div id="selectionMoreMenu" class="selection-more-menu" hidden>
+              <button data-action="multi-angles">
+                <span class="context-icon context-cube" aria-hidden="true"></span>
+                <span>Multi-Angles</span>
+              </button>
+              <button data-action="move-object">
+                <span class="context-icon context-move" aria-hidden="true"></span>
+                <span>Move Object</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="canvas-controls" aria-label="Canvas view controls">
+            <button title="Reset view" aria-label="Reset view">
+              <span class="icon icon-reset" aria-hidden="true"></span>
+            </button>
+            <button title="Layers" aria-label="Layers">
+              <span class="icon icon-layers" aria-hidden="true"></span>
+            </button>
+            <button title="Search" aria-label="Search">
+              <span class="icon icon-search" aria-hidden="true"></span>
+            </button>
+            <button title="Export" aria-label="Export">
+              <span class="icon icon-download" aria-hidden="true"></span>
+            </button>
+            <span id="zoomLabel">5%</span>
+          </div>
+
+          <nav class="tool-dock" aria-label="Canvas tools">
+            <button class="active" title="Select" aria-label="Select" data-tooltip="Select" data-tool="select">
+              <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M5.5 4.5l6.8 15 1.6-5.6 5.6-1.6-14-7.8z"></path>
+              </svg>
+            </button>
+            <button title="Reference" aria-label="Reference" data-tooltip="Reference" data-tool="reference">
+              <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="10" r="5.6"></circle>
+                <circle cx="12" cy="10" r="1.8"></circle>
+                <path d="M12 15.8v4.2"></path>
+                <path d="M9.4 20h5.2"></path>
+              </svg>
+            </button>
+            <button title="Image" aria-label="Image" data-tooltip="Image" data-tool="image">
+              <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="5" y="6" width="12" height="12" rx="2"></rect>
+                <path d="M7.5 15l2.7-2.7 2.2 2.2 1.6-1.6 2 2.3"></path>
+                <path d="M16.8 4.8v3.8"></path>
+                <path d="M14.9 6.7h3.8"></path>
+              </svg>
+            </button>
+            <button title="Layout" aria-label="Layout" data-tooltip="Layout" data-tool="grid">
+              <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M8 4v16"></path>
+                <path d="M16 4v16"></path>
+                <path d="M4 8h16"></path>
+                <path d="M4 16h16"></path>
+              </svg>
+            </button>
+            <button title="Frame" aria-label="Frame" data-tooltip="Frame" data-tool="frame">
+              <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="6" y="6" width="12" height="12" rx="2"></rect>
+              </svg>
+            </button>
+            <button title="Pencil" aria-label="Pencil" data-tooltip="Pencil" data-tool="pencil">
+              <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 20l4.4-1.1L18.8 8.5a2.1 2.1 0 0 0-3-3L5.5 15.9 4 20z"></path>
+                <path d="M14.5 6.8l2.7 2.7"></path>
+              </svg>
+            </button>
+            <button title="Text" aria-label="Text" data-tooltip="Text" data-tool="text">
+              <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M6 5h12"></path>
+                <path d="M12 5v14"></path>
+              </svg>
+            </button>
+            <span class="dock-separator"></span>
+            <button title="Image generator" aria-label="Image generator" data-tooltip="Image generator" data-tool="image-generator">
+              <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="5" y="6" width="13" height="12" rx="2"></rect>
+                <path d="M7.5 15l3-3 2.2 2.2 1.6-1.6 2.2 2.4"></path>
+                <path d="M18.5 4.5v4"></path>
+                <path d="M16.5 6.5h4"></path>
+              </svg>
+            </button>
+            <button title="Upload image" aria-label="Upload image" data-tooltip="Upload image" data-tool="upload-image">
+              <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="6" y="6" width="12" height="12" rx="2"></rect>
+                <path d="M12 15V8"></path>
+                <path d="M9.2 10.8L12 8l2.8 2.8"></path>
+              </svg>
+            </button>
+            <button title="Text variant" aria-label="Text variant" data-tooltip="Text variant" data-action="edit-text">
+              <svg class="dock-icon dock-icon-notified" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M5 5h10"></path>
+                <path d="M10 5v14"></path>
+                <path d="M16 13v6"></path>
+                <path d="M13 16h6"></path>
+                <circle class="dock-notification" cx="19" cy="5" r="2.2"></circle>
+              </svg>
+            </button>
+          </nav>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" hidden></div>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

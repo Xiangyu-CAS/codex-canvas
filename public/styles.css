@@ -1,0 +1,1021 @@
+:root {
+  color-scheme: light;
+  --page: #ffffff;
+  --canvas: #f2f2f1;
+  --panel: #ffffff;
+  --panel-soft: #f7f7f6;
+  --line: #e5e5e2;
+  --line-strong: #d0d0ca;
+  --text: #202124;
+  --muted: #777b82;
+  --accent: #111316;
+  --blue: #2f80ed;
+  --pink: #ff5aa8;
+  --orange: #ff9f2e;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  color: var(--text);
+  background: var(--page);
+  overflow: hidden;
+}
+
+button,
+textarea {
+  color: inherit;
+  font: inherit;
+}
+
+button {
+  border: 0;
+  cursor: pointer;
+}
+
+.app-shell {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  min-width: 0;
+  background: var(--canvas);
+}
+
+.canvas-pane {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.board-shell {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--canvas);
+}
+
+.project-header {
+  position: absolute;
+  top: 18px;
+  left: 18px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 34px;
+  color: #31343a;
+  font-size: 14px;
+}
+
+.project-header button {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+}
+
+.project-title-input {
+  width: 128px;
+  min-width: 68px;
+  max-width: min(280px, calc(100vw - 160px));
+  border: 0;
+  border-radius: 7px;
+  outline: none;
+  background: transparent;
+  color: #31343a;
+  font: inherit;
+  font-weight: 700;
+  padding: 3px 4px;
+}
+
+.project-title-input:hover,
+.project-title-input:focus {
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.project-mark {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #2f3338;
+  box-shadow: inset 0 0 0 6px #2f3338, inset 0 0 0 8px #fff;
+}
+
+.board {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  outline: none;
+  cursor: grab;
+  background: var(--canvas);
+  touch-action: none;
+}
+
+.board.dragging {
+  cursor: grabbing;
+}
+
+.world {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  transform-origin: 0 0;
+}
+
+.objects {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+}
+
+.canvas-object {
+  position: absolute;
+  border: 1px solid rgba(20, 24, 28, 0.16);
+  border-radius: 3px;
+  background: #fff;
+  box-shadow: 0 12px 34px rgba(28, 29, 33, 0.08);
+  overflow: visible;
+  user-select: none;
+  cursor: grab;
+  touch-action: none;
+}
+
+.canvas-object.dragging {
+  cursor: grabbing;
+}
+
+.canvas-object.selected {
+  border-color: #202329;
+  box-shadow:
+    0 0 0 1px rgba(32, 35, 41, 0.92),
+    0 16px 44px rgba(28, 29, 33, 0.12);
+}
+
+.canvas-object img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.object-meta {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -21px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  color: #1684ff;
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.object-meta-name,
+.object-meta-size {
+  max-width: 48%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.object-label {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  padding: 5px 7px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #2a2d32;
+  font-size: 11px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selection-toolbar {
+  position: absolute;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  max-width: calc(100vw - 32px);
+  padding: 3px;
+  border: 1px solid rgba(28, 31, 36, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow:
+    0 10px 28px rgba(22, 25, 30, 0.1),
+    0 1px 2px rgba(22, 25, 30, 0.06);
+  backdrop-filter: blur(12px);
+}
+
+.selection-toolbar[hidden] {
+  display: none;
+}
+
+.selection-more-menu {
+  position: absolute;
+  z-index: 35;
+  display: grid;
+  gap: 2px;
+  width: 168px;
+  padding: 5px;
+  border: 1px solid rgba(28, 31, 36, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow:
+    0 12px 28px rgba(22, 25, 30, 0.14),
+    0 1px 2px rgba(22, 25, 30, 0.06);
+  backdrop-filter: blur(12px);
+}
+
+.selection-more-menu[hidden] {
+  display: none;
+}
+
+.selection-more-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  border-radius: 8px;
+  padding: 0 9px;
+  background: transparent;
+  color: #2f3338;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.selection-more-menu button:hover {
+  background: #e9e9e7;
+}
+
+.selection-toolbar button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  position: relative;
+  height: 30px;
+  border-radius: 7px;
+  padding: 0 7px;
+  background: transparent;
+  color: #2f3338;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.selection-toolbar button.icon-only {
+  width: 28px;
+  justify-content: center;
+  padding: 0;
+}
+
+.selection-toolbar .overflow-action {
+  display: none;
+}
+
+.selection-toolbar .more-action {
+  display: flex;
+}
+
+.selection-toolbar kbd {
+  height: 15px;
+  padding: 0 3px;
+  border: 0;
+  border-radius: 4px;
+  background: #f0f1f2;
+  color: #a4a7ad;
+  font: inherit;
+  font-size: 9px;
+  line-height: 15px;
+}
+
+.context-icon {
+  position: relative;
+  display: block;
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  color: currentColor;
+}
+
+.context-icon::before,
+.context-icon::after {
+  position: absolute;
+  content: "";
+}
+
+.context-quick::before {
+  left: 2px;
+  top: 2px;
+  width: 10px;
+  height: 10px;
+  border: 1.7px solid currentColor;
+  border-radius: 50%;
+}
+
+.context-quick::after {
+  left: 7px;
+  top: 7px;
+  width: 6px;
+  height: 1.7px;
+  background: currentColor;
+  transform: rotate(45deg);
+}
+
+.context-upscale::before {
+  inset: 2px;
+  border: 1.7px solid currentColor;
+  border-radius: 2px;
+}
+
+.context-upscale::after {
+  right: 2px;
+  top: 2px;
+  width: 5px;
+  height: 5px;
+  border-top: 1.7px solid currentColor;
+  border-right: 1.7px solid currentColor;
+}
+
+.context-bg::before {
+  inset: 2px;
+  border: 1.5px solid currentColor;
+  border-radius: 3px;
+}
+
+.context-bg::after {
+  left: 3px;
+  top: 7px;
+  width: 8px;
+  height: 1.5px;
+  background: currentColor;
+  transform: rotate(-35deg);
+}
+
+.context-eraser::before {
+  left: 2px;
+  top: 5px;
+  width: 11px;
+  height: 6px;
+  border: 1.7px solid currentColor;
+  border-radius: 2px;
+  transform: rotate(-42deg);
+}
+
+.context-eraser::after {
+  left: 7px;
+  top: 9px;
+  width: 6px;
+  height: 1.7px;
+  background: currentColor;
+}
+
+.context-elements::before {
+  left: 1px;
+  top: 2px;
+  width: 5px;
+  height: 5px;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+}
+
+.context-elements::after {
+  right: 1px;
+  bottom: 2px;
+  width: 6px;
+  height: 6px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+}
+
+.context-text::before {
+  left: 1px;
+  top: 1px;
+  width: 12px;
+  height: 1.5px;
+  background: currentColor;
+}
+
+.context-text::after {
+  left: 6px;
+  top: 1px;
+  width: 1.5px;
+  height: 12px;
+  background: currentColor;
+}
+
+.context-crop::before {
+  left: 2px;
+  top: 1px;
+  width: 9px;
+  height: 9px;
+  border-left: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+}
+
+.context-crop::after {
+  right: 2px;
+  bottom: 1px;
+  width: 9px;
+  height: 9px;
+  border-right: 1.5px solid currentColor;
+  border-top: 1.5px solid currentColor;
+}
+
+.context-cube::before {
+  left: 3px;
+  top: 2px;
+  width: 8px;
+  height: 8px;
+  border: 1.6px solid currentColor;
+  transform: rotate(30deg) skewY(-20deg);
+}
+
+.context-cube::after {
+  left: 7px;
+  top: 5px;
+  width: 1.6px;
+  height: 8px;
+  background: currentColor;
+  transform: rotate(30deg);
+}
+
+.context-move::before {
+  left: 3px;
+  top: 3px;
+  width: 8px;
+  height: 8px;
+  border: 1.6px solid currentColor;
+  border-radius: 2px;
+}
+
+.context-move::after {
+  right: 1px;
+  top: 1px;
+  width: 5px;
+  height: 5px;
+  border-top: 1.6px solid currentColor;
+  border-right: 1.6px solid currentColor;
+}
+
+.context-more::before {
+  left: 2px;
+  top: 6px;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 5px 0 0 currentColor, 10px 0 0 currentColor;
+}
+
+.context-download::before {
+  left: 6px;
+  top: 2px;
+  width: 2px;
+  height: 8px;
+  background: currentColor;
+}
+
+.context-download::after {
+  left: 3px;
+  bottom: 2px;
+  width: 8px;
+  height: 8px;
+  border-left: 1.7px solid currentColor;
+  border-bottom: 1.7px solid currentColor;
+  transform: rotate(-45deg);
+}
+
+.selection-toolbar button:hover,
+.tool-dock button:hover,
+.canvas-controls button:hover {
+  background: #e9e9e7;
+}
+
+.empty-state {
+  display: none;
+  position: absolute;
+  left: 50%;
+  top: 48%;
+  width: min(380px, calc(100% - 48px));
+  transform: translate(-50%, -50%);
+  text-align: center;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.empty-title {
+  margin-bottom: 8px;
+  color: #2b2d31;
+  font-weight: 800;
+}
+
+.empty-copy {
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.canvas-controls {
+  position: absolute;
+  left: 18px;
+  bottom: 24px;
+  z-index: 15;
+  display: none;
+  align-items: center;
+  gap: 16px;
+  color: #8b8d92;
+  font-size: 13px;
+}
+
+.canvas-controls button {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: transparent;
+  color: #7a7d83;
+}
+
+.tool-dock {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  max-width: calc(100vw - 32px);
+  padding: 5px 8px;
+  border: 1px solid rgba(29, 32, 36, 0.08);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow:
+    0 12px 30px rgba(18, 21, 27, 0.14),
+    0 1px 3px rgba(18, 21, 27, 0.08);
+  transform: translateX(-50%);
+  backdrop-filter: blur(14px);
+}
+
+.tool-dock button {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  position: relative;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: transparent;
+  color: #33373d;
+}
+
+.tool-dock button::after,
+.selection-toolbar button::after {
+  position: absolute;
+  left: 50%;
+  z-index: 80;
+  content: attr(data-tooltip);
+  display: none;
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: rgba(35, 38, 43, 0.95);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.tool-dock button::after {
+  bottom: calc(100% + 7px);
+}
+
+.selection-toolbar button::after {
+  top: calc(100% + 8px);
+}
+
+.tool-dock button:hover::after,
+.selection-toolbar button:hover::after {
+  display: block;
+}
+
+.tool-dock button.active {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: #272b31;
+  color: #fff;
+}
+
+.dock-separator {
+  width: 1px;
+  height: 24px;
+  margin: 0 4px;
+  background: rgba(31, 34, 38, 0.12);
+}
+
+.dock-icon {
+  display: block;
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.dock-icon-play {
+  fill: currentColor;
+  stroke: none;
+}
+
+.dock-notification {
+  fill: #ff4d4f;
+  stroke: #fff;
+  stroke-width: 1.6;
+}
+
+.icon {
+  position: relative;
+  display: block;
+  width: 24px;
+  height: 24px;
+}
+
+.icon::before,
+.icon::after {
+  position: absolute;
+  content: "";
+}
+
+.icon-cursor::before {
+  left: 5px;
+  top: 3px;
+  width: 0;
+  height: 0;
+  border-left: 13px solid currentColor;
+  border-top: 18px solid transparent;
+  transform: rotate(-18deg);
+}
+
+.icon-cursor::after {
+  left: 9px;
+  top: 8px;
+  width: 0;
+  height: 0;
+  border-left: 5px solid #272b31;
+  border-top: 8px solid transparent;
+  transform: rotate(-18deg);
+}
+
+.tool-dock button.active .icon-cursor::after {
+  border-left-color: #fff;
+}
+
+.icon-target::before {
+  left: 7px;
+  top: 4px;
+  width: 10px;
+  height: 10px;
+  border: 3px solid currentColor;
+  border-radius: 50%;
+}
+
+.icon-target::after {
+  left: 10px;
+  top: 13px;
+  width: 4px;
+  height: 8px;
+  border-left: 3px solid currentColor;
+  border-bottom: 3px solid currentColor;
+  transform: rotate(-45deg);
+}
+
+.icon-image::before {
+  left: 4px;
+  top: 5px;
+  width: 16px;
+  height: 14px;
+  border: 2.6px solid currentColor;
+  border-radius: 4px;
+}
+
+.icon-image::after {
+  left: 7px;
+  top: 14px;
+  width: 12px;
+  height: 7px;
+  border-left: 2.6px solid currentColor;
+  border-top: 2.6px solid currentColor;
+  transform: rotate(-45deg);
+}
+
+.icon-hash::before {
+  left: 5px;
+  top: 2px;
+  width: 14px;
+  height: 20px;
+  border-left: 2.6px solid currentColor;
+  border-right: 2.6px solid currentColor;
+}
+
+.icon-hash::after {
+  left: 2px;
+  top: 7px;
+  width: 20px;
+  height: 10px;
+  border-top: 2.6px solid currentColor;
+  border-bottom: 2.6px solid currentColor;
+  transform: none;
+}
+
+.icon-frame::before {
+  inset: 5px;
+  border: 2.8px solid currentColor;
+  border-radius: 6px;
+}
+
+.icon-line::before {
+  left: 4px;
+  top: 12px;
+  width: 20px;
+  height: 3px;
+  background: currentColor;
+  transform: rotate(-45deg);
+  transform-origin: left center;
+}
+
+.icon-text::before {
+  left: 5px;
+  top: 3px;
+  width: 14px;
+  height: 3px;
+  background: currentColor;
+}
+
+.icon-text::after {
+  left: 11px;
+  top: 3px;
+  width: 3px;
+  height: 19px;
+  background: currentColor;
+}
+
+.icon-square::before {
+  inset: 5px;
+  border: 2.8px solid currentColor;
+  border-radius: 2px;
+}
+
+.icon-play::before {
+  left: 9px;
+  top: 7px;
+  width: 0;
+  height: 0;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-left: 9px solid currentColor;
+}
+
+.icon-text-plus::before {
+  left: 3px;
+  top: 3px;
+  width: 13px;
+  height: 3px;
+  background: currentColor;
+}
+
+.icon-text-plus::after {
+  left: 10px;
+  top: 3px;
+  width: 11px;
+  height: 18px;
+  border-left: 3px solid currentColor;
+  border-bottom: 3px solid currentColor;
+  box-shadow: 6px 12px 0 -4px currentColor;
+}
+
+.icon-chevron {
+  width: 14px;
+  height: 14px;
+}
+
+.icon-chevron::before {
+  left: 3px;
+  top: 4px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
+}
+
+.icon-reset::before {
+  inset: 4px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+}
+
+.icon-reset::after {
+  right: 4px;
+  top: 3px;
+  width: 6px;
+  height: 6px;
+  border-top: 2px solid currentColor;
+  border-right: 2px solid currentColor;
+  transform: rotate(21deg);
+}
+
+.icon-layers::before,
+.icon-layers::after {
+  left: 4px;
+  width: 12px;
+  height: 8px;
+  border: 2px solid currentColor;
+  border-radius: 2px;
+}
+
+.icon-layers::before {
+  top: 3px;
+}
+
+.icon-layers::after {
+  top: 8px;
+  opacity: 0.62;
+}
+
+.icon-search::before {
+  left: 4px;
+  top: 3px;
+  width: 9px;
+  height: 9px;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+}
+
+.icon-search::after {
+  left: 12px;
+  top: 12px;
+  width: 7px;
+  height: 2px;
+  background: currentColor;
+  transform: rotate(45deg);
+  transform-origin: left center;
+}
+
+.icon-download::before {
+  left: 9px;
+  top: 3px;
+  width: 2px;
+  height: 11px;
+  background: currentColor;
+}
+
+.icon-download::after {
+  left: 5px;
+  bottom: 4px;
+  width: 10px;
+  height: 10px;
+  border-left: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg);
+}
+
+.icon-plus-box::before {
+  inset: 3px;
+  border: 2px solid currentColor;
+  border-radius: 4px;
+}
+
+.icon-plus-box::after,
+.icon-plus::before,
+.icon-plus::after {
+  left: 5px;
+  top: 9px;
+  width: 10px;
+  height: 2px;
+  background: currentColor;
+}
+
+.icon-plus-box::after {
+  box-shadow: 0 0 0 currentColor;
+}
+
+.icon-plus-box {
+  background:
+    linear-gradient(currentColor, currentColor) center / 2px 10px no-repeat;
+}
+
+.icon-share::before {
+  left: 4px;
+  bottom: 4px;
+  width: 12px;
+  height: 9px;
+  border: 2px solid currentColor;
+  border-top: 0;
+  border-radius: 2px;
+}
+
+.icon-share::after {
+  left: 8px;
+  top: 2px;
+  width: 8px;
+  height: 8px;
+  border-top: 2px solid currentColor;
+  border-right: 2px solid currentColor;
+  transform: rotate(-45deg);
+}
+
+.icon-collapse::before {
+  left: 4px;
+  top: 4px;
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-radius: 3px;
+}
+
+.icon-collapse::after {
+  right: 5px;
+  top: 6px;
+  width: 2px;
+  height: 8px;
+  background: currentColor;
+}
+
+.icon-plus::after {
+  transform: rotate(90deg);
+}
+
+.icon-library::before {
+  inset: 4px;
+  border: 2px solid currentColor;
+  border-radius: 3px;
+}
+
+.icon-library::after {
+  left: 7px;
+  top: 4px;
+  width: 6px;
+  height: 12px;
+  border-left: 2px solid currentColor;
+  border-right: 2px solid currentColor;
+}
+
+.icon-send::before {
+  left: 5px;
+  top: 4px;
+  width: 0;
+  height: 0;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-left: 11px solid currentColor;
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 92px;
+  z-index: 50;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--text);
+  box-shadow: 0 12px 28px rgba(18, 21, 27, 0.14);
+  transform: translateX(-50%);
+}
+
+@media (max-width: 980px) {
+}

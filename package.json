@@ -1,0 +1,26 @@
+{
+  "name": "agent-canvas",
+  "version": "0.1.0",
+  "description": "Local infinite canvas plugin for Codex image workflows.",
+  "type": "module",
+  "bin": {
+    "agent-canvas": "./bin/agent-canvas.mjs"
+  },
+  "scripts": {
+    "start": "node ./bin/agent-canvas.mjs start",
+    "validate": "node ./bin/agent-canvas.mjs status --json"
+  },
+  "keywords": [
+    "codex",
+    "plugin",
+    "canvas",
+    "imagegen"
+  ],
+  "author": {
+    "name": "Agent-Canvas Contributors"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.18"
+  }
+}
