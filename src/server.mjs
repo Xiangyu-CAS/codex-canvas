@@ -4,7 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { collectRecentImages } from "./collector.mjs";
 import { assetsDirFor, publicDir, runtimePathFor } from "./paths.mjs";
-import { addImage, ensureProjectStore, readState, updateObject, updateProjectMeta, updateSelection, updateViewport } from "./store.mjs";
+import { addImage, addObject, deleteObject, ensureProjectStore, readState, updateObject, updateProjectMeta, updateSelection, updateViewport } from "./store.mjs";
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -96,6 +96,11 @@ async function handleRequest(request, response, context) {
     return sendJson(response, 201, await addImage(context.projectDir, body));
   }
 
+  if (request.method === "POST" && pathname === "/api/objects") {
+    const body = await readJson(request);
+    return sendJson(response, 201, await addObject(context.projectDir, body));
+  }
+
   if (request.method === "POST" && pathname === "/api/selection") {
     const body = await readJson(request);
     return sendJson(response, 200, { selection: await updateSelection(context.projectDir, body.selection || null) });
@@ -105,6 +110,10 @@ async function handleRequest(request, response, context) {
   if (request.method === "PATCH" && objectMatch) {
     const body = await readJson(request);
     return sendJson(response, 200, await updateObject(context.projectDir, objectMatch[1], body));
+  }
+
+  if (request.method === "DELETE" && objectMatch) {
+    return sendJson(response, 200, await deleteObject(context.projectDir, objectMatch[1]));
   }
 
   if (request.method === "GET" && pathname.startsWith("/assets/")) {

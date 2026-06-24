@@ -78,6 +78,26 @@ export async function addImage(projectDir, input) {
   return object;
 }
 
+export async function addObject(projectDir, input) {
+  await ensureProjectStore(projectDir);
+  const state = await readState(projectDir);
+  const type = typeof input.type === "string" ? input.type : "";
+  if (!["drawing", "text"].includes(type)) {
+    const error = new Error("add_object requires type to be drawing or text");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const object = normalizeObject(input);
+  const next = {
+    ...state,
+    objects: [...state.objects, object],
+    selection: object.id
+  };
+  await writeState(projectDir, next);
+  return object;
+}
+
 export async function updateSelection(projectDir, selection) {
   const state = await readState(projectDir);
   await writeState(projectDir, { ...state, selection });
@@ -121,6 +141,55 @@ export async function updateObject(projectDir, id, patch) {
 
   await writeState(projectDir, { ...state, objects });
   return updated;
+}
+
+export async function deleteObject(projectDir, id) {
+  const state = await readState(projectDir);
+  const objects = state.objects.filter((object) => object.id !== id);
+  if (objects.length === state.objects.length) {
+    const error = new Error(`Canvas object not found: ${id}`);
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const selection = state.selection === id ? null : state.selection;
+  await writeState(projectDir, { ...state, objects, selection });
+  return { id, deleted: true };
+}
+
+function normalizeObject(input) {
+  const type = input.type;
+  const base = {
+    id: `${type}_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
+    type,
+    name: input.name || (type === "text" ? "Text" : "Drawing"),
+    x: Number.isFinite(input.x) ? input.x : 120,
+    y: Number.isFinite(input.y) ? input.y : 120,
+    width: Number.isFinite(input.width) ? Math.max(1, Math.round(input.width)) : 220,
+    height: Number.isFinite(input.height) ? Math.max(1, Math.round(input.height)) : 80,
+    createdAt: new Date().toISOString()
+  };
+
+  if (type === "text") {
+    return {
+      ...base,
+      text: typeof input.text === "string" ? input.text.slice(0, 2000) : "Text",
+      fontSize: Number.isFinite(input.fontSize) ? input.fontSize : 28,
+      color: typeof input.color === "string" ? input.color : "#202124"
+    };
+  }
+
+  return {
+    ...base,
+    points: Array.isArray(input.points)
+      ? input.points
+        .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+        .map((point) => ({ x: Math.round(point.x), y: Math.round(point.y) }))
+        .slice(0, 4000)
+      : [],
+    stroke: typeof input.stroke === "string" ? input.stroke : "#202124",
+    strokeWidth: Number.isFinite(input.strokeWidth) ? input.strokeWidth : 4
+  };
 }
 
 async function persistImage(projectDir, input) {

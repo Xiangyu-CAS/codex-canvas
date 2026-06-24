@@ -1,6 +1,6 @@
 {
   "name": "agent-canvas",
-  "version": "0.1.0+codex.20260624090359",
+  "version": "0.1.0+codex.20260624102234",
   "description": "Local infinite canvas for Codex image generation and editing workflows.",
   "author": {
     "name": "Agent-Canvas Contributors"

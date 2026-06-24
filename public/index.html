@@ -19,6 +19,33 @@
             </button>
           </header>
 
+          <button id="settingsButton" class="settings-button" title="Settings" aria-label="Settings">
+            <svg class="settings-gear" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 15.25a3.25 3.25 0 1 0 0-6.5 3.25 3.25 0 0 0 0 6.5z"></path>
+              <path d="M19.4 13.5a7.9 7.9 0 0 0 .05-1.5 7.9 7.9 0 0 0-.05-1.5l2.02-1.54-1.9-3.28-2.37.98a8.45 8.45 0 0 0-2.58-1.5L14.25 2h-4.5l-.32 3.16a8.45 8.45 0 0 0-2.58 1.5l-2.37-.98-1.9 3.28L4.6 10.5a7.9 7.9 0 0 0-.05 1.5 7.9 7.9 0 0 0 .05 1.5l-2.02 1.54 1.9 3.28 2.37-.98a8.45 8.45 0 0 0 2.58 1.5l.32 3.16h4.5l.32-3.16a8.45 8.45 0 0 0 2.58-1.5l2.37.98 1.9-3.28-2.02-1.54z"></path>
+            </svg>
+          </button>
+          <div id="settingsMenu" class="settings-menu" hidden>
+            <div class="settings-menu-section">
+              <button class="settings-menu-row settings-menu-parent" data-settings-row="language">
+                <span class="settings-row-icon icon icon-globe" aria-hidden="true"></span>
+                <span data-i18n="language">Language</span>
+                <span class="settings-row-value" data-language-current>English</span>
+                <span class="icon icon-menu-chevron" aria-hidden="true"></span>
+              </button>
+            </div>
+            <div class="settings-submenu" data-settings-submenu="language">
+              <button data-language="en">
+                <span>English</span>
+                <span class="settings-check" aria-hidden="true"></span>
+              </button>
+              <button data-language="zh">
+                <span>简体中文</span>
+                <span class="settings-check" aria-hidden="true"></span>
+              </button>
+            </div>
+          </div>
+
           <div id="board" class="board" tabindex="0" aria-label="Agent canvas">
             <div id="emptyState" class="empty-state">
             </div>
