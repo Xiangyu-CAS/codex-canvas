@@ -139,11 +139,6 @@ function render() {
       element.append(meta);
     }
 
-    const label = document.createElement("div");
-    label.className = "object-label";
-    label.textContent = object.name || "Image";
-    element.append(label);
-
     element.addEventListener("pointerdown", (event) => startDrag(event, object));
     objectLayer.append(element);
   }

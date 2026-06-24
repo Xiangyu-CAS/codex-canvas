@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { addImage, readState } from "./store.mjs";
@@ -21,11 +22,13 @@ export async function collectRecentImages(projectDir, options = {}) {
       .filter(Boolean)
       .map((sourcePath) => path.resolve(sourcePath))
   );
+  const knownHashes = await knownImageHashes(state.objects);
 
   const candidates = [];
   for (const root of roots) {
     await walkImages(root, {
       candidates,
+      knownHashes,
       knownSources,
       projectDir,
       sinceMs
@@ -165,7 +168,7 @@ function displayHeight(candidate) {
 
 function normalizeRoots(projectDir, roots) {
   if (!roots || roots.length === 0) {
-    return [projectDir, path.join(os.homedir(), ".codex", "generated_images")];
+    return [path.join(os.homedir(), ".codex", "generated_images"), projectDir];
   }
   return roots.map((root) => path.resolve(projectDir, root));
 }
@@ -200,12 +203,31 @@ async function walkImages(currentPath, context) {
     }
     if (stat.mtimeMs < context.sinceMs) continue;
 
+    const buffer = await fs.readFile(absolutePath);
+    const hash = crypto.createHash("sha256").update(buffer).digest("hex");
+    if (context.knownHashes.has(hash)) continue;
+    context.knownHashes.add(hash);
+
     context.candidates.push({
       path: absolutePath,
       mtimeMs: stat.mtimeMs,
-      ...displaySizeFromDimensions(readImageDimensionsFromBuffer(await fs.readFile(absolutePath)))
+      ...displaySizeFromDimensions(readImageDimensionsFromBuffer(buffer))
     });
   }
+}
+
+async function knownImageHashes(objects) {
+  const hashes = new Set();
+  for (const object of objects) {
+    if (!object.assetPath) continue;
+    try {
+      const buffer = await fs.readFile(object.assetPath);
+      hashes.add(crypto.createHash("sha256").update(buffer).digest("hex"));
+    } catch {
+      // Missing local assets should not block collection of new images.
+    }
+  }
+  return hashes;
 }
 
 function displaySizeFromDimensions(dimensions) {

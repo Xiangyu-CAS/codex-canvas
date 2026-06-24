@@ -201,22 +201,6 @@ button {
   white-space: nowrap;
 }
 
-.object-label {
-  position: absolute;
-  left: 8px;
-  right: 8px;
-  bottom: 8px;
-  padding: 5px 7px;
-  border-radius: 7px;
-  background: rgba(255, 255, 255, 0.9);
-  color: #2a2d32;
-  font-size: 11px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .selection-toolbar {
   position: absolute;
   z-index: 30;

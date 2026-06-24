@@ -1,6 +1,6 @@
 {
   "name": "agent-canvas",
-  "version": "0.1.0+codex.20260624083606",
+  "version": "0.1.0+codex.20260624090359",
   "description": "Local infinite canvas for Codex image generation and editing workflows.",
   "author": {
     "name": "Agent-Canvas Contributors"
@@ -35,9 +35,9 @@
       "Generate an image and collect it on canvas",
       "Show the current canvas status"
     ],
-    "brandColor": "#16181D",
-    "composerIcon": "./assets/icon.svg",
-    "logo": "./assets/icon.svg",
+    "brandColor": "#14161B",
+    "composerIcon": "./assets/icon.png",
+    "logo": "./assets/icon.png",
     "screenshots": []
   }
 }

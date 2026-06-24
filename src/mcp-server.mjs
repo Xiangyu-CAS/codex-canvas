@@ -80,7 +80,7 @@ async function handle(method, params) {
         },
         {
           name: "collect_recent_images",
-          description: "Scan the project for recent image files and import them into Agent-Canvas. Use as a fallback after imagegen when exact output paths are not known.",
+          description: "Scan recent generated and project images and import them into Agent-Canvas. Use as a fallback after imagegen when exact output paths are not known.",
           inputSchema: {
             type: "object",
             properties: {
@@ -88,7 +88,7 @@ async function handle(method, params) {
               roots: {
                 type: "array",
                 items: { type: "string" },
-                description: "Optional project-relative directories to scan. Defaults to the full project, excluding canvas assets."
+                description: "Optional project-relative directories to scan. Defaults to ~/.codex/generated_images plus the current project, excluding canvas assets."
               },
               sourceObjectId: {
                 type: "string",
