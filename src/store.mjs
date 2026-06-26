@@ -14,6 +14,7 @@ const defaultState = {
 
 const defaultImageSize = { width: 360, height: 360 };
 const maxImageDisplaySize = 420;
+const derivedGap = 72;
 
 export async function ensureProjectStore(projectDir) {
   await fs.mkdir(assetsDirFor(projectDir), { recursive: true });
@@ -66,6 +67,7 @@ export async function addImage(projectDir, input) {
     height: displaySize.height,
     naturalWidth: asset.width || null,
     naturalHeight: asset.height || null,
+    hasAlpha: Boolean(asset.hasAlpha),
     createdAt: new Date().toISOString()
   };
 
@@ -95,6 +97,52 @@ export async function addObject(projectDir, input) {
     selection: object.id
   };
   await writeState(projectDir, next);
+  return object;
+}
+
+export async function addJobPlaceholder(projectDir, input) {
+  await ensureProjectStore(projectDir);
+  const state = await readState(projectDir);
+  const source = state.objects.find((object) => object.id === input.sourceObjectId);
+  if (!source) {
+    const error = new Error(`Source canvas object not found: ${input.sourceObjectId || "(missing)"}`);
+    error.statusCode = 404;
+    throw error;
+  }
+
+  const width = Number.isFinite(input.width) ? input.width : source.width;
+  const height = Number.isFinite(input.height) ? input.height : source.height;
+  const position = adjacentDerivedPosition(source);
+  const shift = width + derivedGap;
+  const object = {
+    id: input.id || `job_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
+    type: "job",
+    name: input.name || "Working",
+    action: input.action || "image-job",
+    status: input.status || "running",
+    sourceObjectId: source.id,
+    layoutMode: "canvas-row",
+    src: source.src || null,
+    assetPath: source.assetPath || null,
+    x: position.x,
+    y: position.y,
+    width,
+    height,
+    naturalWidth: source.naturalWidth || null,
+    naturalHeight: source.naturalHeight || null,
+    createdAt: new Date().toISOString()
+  };
+
+  const shiftedObjects = state.objects.map((item) => {
+    if (item.sourceObjectId !== source.id) return item;
+    if (item.x < position.x) return item;
+    return { ...item, x: item.x + shift };
+  });
+
+  await writeState(projectDir, {
+    ...state,
+    objects: [...shiftedObjects, object]
+  });
   return object;
 }
 
@@ -143,6 +191,33 @@ export async function updateObject(projectDir, id, patch) {
   return updated;
 }
 
+export async function markStaleJobPlaceholders(projectDir, { activePlaceholderIds = [], timeoutMs = 2 * 60_000 } = {}) {
+  const state = await readState(projectDir);
+  const active = new Set(activePlaceholderIds);
+  const now = Date.now();
+  let changed = false;
+  const objects = state.objects.map((object) => {
+    if (object.type !== "job") return object;
+    if (object.status === "failed") {
+      if (object.error) return object;
+      changed = true;
+      return { ...object, error: "The image job failed before reporting an error." };
+    }
+    if (active.has(object.id)) return object;
+    const createdAt = Date.parse(object.createdAt || "");
+    if (!Number.isFinite(createdAt) || now - createdAt < timeoutMs) return object;
+    changed = true;
+    return {
+      ...object,
+      status: "failed",
+      error: object.error || "The image job timed out or was interrupted."
+    };
+  });
+
+  if (!changed) return state;
+  return writeState(projectDir, { ...state, objects });
+}
+
 export async function deleteObject(projectDir, id) {
   const state = await readState(projectDir);
   const objects = state.objects.filter((object) => object.id !== id);
@@ -155,6 +230,13 @@ export async function deleteObject(projectDir, id) {
   const selection = state.selection === id ? null : state.selection;
   await writeState(projectDir, { ...state, objects, selection });
   return { id, deleted: true };
+}
+
+function adjacentDerivedPosition(source) {
+  return {
+    x: source.x + source.width + derivedGap,
+    y: source.y
+  };
 }
 
 function normalizeObject(input) {
@@ -282,7 +364,8 @@ function readPngDimensions(buffer) {
   if (buffer.length < 24 || buffer.toString("ascii", 1, 4) !== "PNG") return null;
   return {
     width: buffer.readUInt32BE(16),
-    height: buffer.readUInt32BE(20)
+    height: buffer.readUInt32BE(20),
+    hasAlpha: buffer[25] === 4 || buffer[25] === 6
   };
 }
 

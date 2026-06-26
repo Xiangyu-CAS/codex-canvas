@@ -20,6 +20,10 @@ export function assetsDirFor(projectDir) {
   return path.join(dataDirFor(projectDir), "assets");
 }
 
+export function jobsDirFor(projectDir) {
+  return path.join(dataDirFor(projectDir), "jobs");
+}
+
 export function runtimePathFor(projectDir) {
   return path.join(dataDirFor(projectDir), ".agent-canvas-runtime.json");
 }

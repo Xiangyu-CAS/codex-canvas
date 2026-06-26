@@ -43,6 +43,25 @@ Agent-Canvas 可以按四个模块设计：
 node ./bin/agent-canvas.mjs open --project .
 ```
 
+安装本地 OCR：
+
+```bash
+npm install
+```
+
+`npm install` 会在 `postinstall` 中自动尝试安装 `rapidocr_onnxruntime`，用于 `Edit Text` 的本地快速文字识别。安装失败不会阻塞 Agent-Canvas；此时会回退到 Codex 视觉识别。也可以手动运行：
+
+```bash
+npm run setup:ocr
+npm run doctor:ocr
+```
+
+如果需要跳过 OCR 安装，可以设置：
+
+```bash
+AGENT_CANVAS_SKIP_OCR_INSTALL=1 npm install
+```
+
 导入图片：
 
 ```bash

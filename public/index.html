@@ -28,10 +28,19 @@
           <div id="settingsMenu" class="settings-menu" hidden>
             <div class="settings-menu-section">
               <button class="settings-menu-row settings-menu-parent" data-settings-row="language">
-                <span class="settings-row-icon icon icon-globe" aria-hidden="true"></span>
+                <svg class="settings-row-icon settings-row-svg" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M9 6.371c0 4.418 -2.239 6.629 -5 6.629"></path>
+                  <path d="M4 6.371h7"></path>
+                  <path d="M5 9c0 2.144 2.252 3.908 6 4"></path>
+                  <path d="M12 20l4 -9l4 9"></path>
+                  <path d="M19.1 18h-6.2"></path>
+                  <path d="M6.694 3l.793 .582"></path>
+                </svg>
                 <span data-i18n="language">Language</span>
                 <span class="settings-row-value" data-language-current>English</span>
-                <span class="icon icon-menu-chevron" aria-hidden="true"></span>
+                <svg class="settings-menu-chevron" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M9 6l6 6l-6 6"></path>
+                </svg>
               </button>
             </div>
             <div class="settings-submenu" data-settings-submenu="language">
@@ -54,55 +63,112 @@
             </div>
             <div id="selectionToolbar" class="selection-toolbar" hidden>
               <button data-action="quick-edit" data-tooltip="Quick Edit" title="Quick Edit" aria-label="Quick Edit">
-                <span class="context-icon context-quick" aria-hidden="true"></span>
+                <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72" />
+                  <path d="m14 7 3 3" />
+                  <path d="M5 6v4" />
+                  <path d="M19 14v4" />
+                  <path d="M10 2v2" />
+                  <path d="M7 8H3" />
+                  <path d="M21 16h-4" />
+                  <path d="M11 3H9" />
+                </svg>
                 <span>Quick Edit</span>
-                <kbd>Tab</kbd>
-              </button>
-              <button data-action="upscale" data-tooltip="Upscale" title="Upscale" aria-label="Upscale">
-                <span class="context-icon context-upscale" aria-hidden="true"></span>
-                <span>Upscale</span>
               </button>
               <button data-action="remove-bg" data-tooltip="Remove BG" title="Remove BG" aria-label="Remove BG">
-                <span class="context-icon context-bg" aria-hidden="true"></span>
+                <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <line x1="2" x2="22" y1="2" y2="22" />
+                  <path d="M10.41 10.41a2 2 0 1 1-2.83-2.83" />
+                  <line x1="13.5" x2="6" y1="13.5" y2="21" />
+                  <line x1="18" x2="21" y1="12" y2="15" />
+                  <path d="M3.59 3.59A1.99 1.99 0 0 0 3 5v14a2 2 0 0 0 2 2h14c.55 0 1.052-.22 1.41-.59" />
+                  <path d="M21 15V5a2 2 0 0 0-2-2H9" />
+                </svg>
                 <span>Remove BG</span>
               </button>
-              <button data-action="eraser" data-tooltip="Eraser" title="Eraser" aria-label="Eraser">
-                <span class="context-icon context-eraser" aria-hidden="true"></span>
-                <span>Eraser</span>
-              </button>
               <button data-action="edit-elements" data-tooltip="Edit Elements" title="Edit Elements" aria-label="Edit Elements">
-                <span class="context-icon context-elements" aria-hidden="true"></span>
-                <span>Elements</span>
+                <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z" />
+                  <path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12" />
+                  <path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17" />
+                </svg>
+                <span>Edit Elements</span>
               </button>
               <button data-action="edit-text" data-tooltip="Edit Text" title="Edit Text" aria-label="Edit Text">
-                <span class="context-icon context-text" aria-hidden="true"></span>
-                <span>Text</span>
+                <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 4v16" />
+                  <path d="M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2" />
+                  <path d="M9 20h6" />
+                </svg>
+                <span>Edit Text</span>
               </button>
               <button class="overflow-action" data-action="multi-angles" data-tooltip="Multi-Angles" title="Multi-Angles" aria-label="Multi-Angles">
-                <span class="context-icon context-cube" aria-hidden="true"></span>
+                <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" />
+                  <path d="m3.3 7 8.7 5 8.7-5" />
+                  <path d="M12 22V12" />
+                </svg>
                 <span>Multi-Angles</span>
               </button>
               <button class="overflow-action" data-action="move-object" data-tooltip="Move Object" title="Move Object" aria-label="Move Object">
-                <span class="context-icon context-move" aria-hidden="true"></span>
+                <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 2v20" />
+                  <path d="m15 19-3 3-3-3" />
+                  <path d="m19 9 3 3-3 3" />
+                  <path d="M2 12h20" />
+                  <path d="m5 9-3 3 3 3" />
+                  <path d="m9 5 3-3 3 3" />
+                </svg>
                 <span>Move Object</span>
               </button>
               <button class="icon-only more-action" data-action="more" data-tooltip="More" title="More" aria-label="More">
-                <span class="context-icon context-more" aria-hidden="true"></span>
+                <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="12" cy="12" r="1" />
+                  <circle cx="19" cy="12" r="1" />
+                  <circle cx="5" cy="12" r="1" />
+                </svg>
               </button>
               <button class="icon-only" data-action="download" data-tooltip="Download" title="Download" aria-label="Download">
-                <span class="context-icon context-download" aria-hidden="true"></span>
+                <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 15V3" />
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <path d="m7 10 5 5 5-5" />
+                </svg>
               </button>
             </div>
             <div id="selectionMoreMenu" class="selection-more-menu" hidden>
               <button data-action="multi-angles">
-                <span class="context-icon context-cube" aria-hidden="true"></span>
+                <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" />
+                  <path d="m3.3 7 8.7 5 8.7-5" />
+                  <path d="M12 22V12" />
+                </svg>
                 <span>Multi-Angles</span>
               </button>
               <button data-action="move-object">
-                <span class="context-icon context-move" aria-hidden="true"></span>
+                <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 2v20" />
+                  <path d="m15 19-3 3-3-3" />
+                  <path d="m19 9 3 3-3 3" />
+                  <path d="M2 12h20" />
+                  <path d="m5 9-3 3 3 3" />
+                  <path d="m9 5 3-3 3 3" />
+                </svg>
                 <span>Move Object</span>
               </button>
             </div>
+            <form id="quickEditComposer" class="quick-edit-composer" hidden>
+              <div id="editTextPanel" class="edit-text-panel" hidden>
+                <div class="edit-text-title">Edit Text</div>
+                <div id="editTextList" class="edit-text-list"></div>
+                <div id="editTextStatus" class="edit-text-status"></div>
+              </div>
+              <textarea id="quickEditPrompt" rows="2" autocomplete="off" spellcheck="true" data-i18n-placeholder="quickEditPlaceholder" placeholder="Describe your edit here"></textarea>
+              <div class="quick-edit-actions">
+                <button type="button" id="quickEditCancel" class="secondary-action" data-i18n="cancel">Cancel</button>
+                <button type="submit" id="quickEditRun" data-i18n="run">Run</button>
+              </div>
+            </form>
           </div>
 
           <div class="canvas-controls" aria-label="Canvas view controls">
@@ -124,76 +190,42 @@
           <nav class="tool-dock" aria-label="Canvas tools">
             <button class="active" title="Select" aria-label="Select" data-tooltip="Select" data-tool="select">
               <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M5.5 4.5l6.8 15 1.6-5.6 5.6-1.6-14-7.8z"></path>
+                <path d="M7.904 17.563a1.2 1.2 0 0 0 2.228 .308l2.09 -3.093l4.907 4.907a1.067 1.067 0 0 0 1.509 0l1.047 -1.047a1.067 1.067 0 0 0 0 -1.509l-4.907 -4.907l3.113 -2.09a1.2 1.2 0 0 0 -.309 -2.228l-13.582 -3.904l3.904 13.563"></path>
               </svg>
             </button>
-            <button title="Reference" aria-label="Reference" data-tooltip="Reference" data-tool="reference">
+            <button title="Upload image" aria-label="Upload image" data-tooltip="Upload image" data-view-action="upload">
               <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true">
-                <circle cx="12" cy="10" r="5.6"></circle>
-                <circle cx="12" cy="10" r="1.8"></circle>
-                <path d="M12 15.8v4.2"></path>
-                <path d="M9.4 20h5.2"></path>
-              </svg>
-            </button>
-            <button title="Image" aria-label="Image" data-tooltip="Image" data-tool="image">
-              <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true">
-                <rect x="5" y="6" width="12" height="12" rx="2"></rect>
-                <path d="M7.5 15l2.7-2.7 2.2 2.2 1.6-1.6 2 2.3"></path>
-                <path d="M16.8 4.8v3.8"></path>
-                <path d="M14.9 6.7h3.8"></path>
-              </svg>
-            </button>
-            <button title="Layout" aria-label="Layout" data-tooltip="Layout" data-tool="grid">
-              <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M8 4v16"></path>
-                <path d="M16 4v16"></path>
-                <path d="M4 8h16"></path>
-                <path d="M4 16h16"></path>
-              </svg>
-            </button>
-            <button title="Frame" aria-label="Frame" data-tooltip="Frame" data-tool="frame">
-              <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true">
-                <rect x="6" y="6" width="12" height="12" rx="2"></rect>
+                <path d="M15 8h.01"></path>
+                <path d="M12.5 21h-6.5a3 3 0 0 1 -3 -3v-12a3 3 0 0 1 3 -3h12a3 3 0 0 1 3 3v6.5"></path>
+                <path d="M3 16l5 -5c.928 -.893 2.072 -.893 3 0l3.5 3.5"></path>
+                <path d="M14 14l1 -1c.679 -.653 1.473 -.829 2.214 -.526"></path>
+                <path d="M19 22v-6"></path>
+                <path d="M22 19l-3 -3l-3 3"></path>
               </svg>
             </button>
             <button title="Pencil" aria-label="Pencil" data-tooltip="Pencil" data-tool="pencil">
               <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M4 20l4.4-1.1L18.8 8.5a2.1 2.1 0 0 0-3-3L5.5 15.9 4 20z"></path>
-                <path d="M14.5 6.8l2.7 2.7"></path>
+                <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4"></path>
+                <path d="M13.5 6.5l4 4"></path>
               </svg>
             </button>
             <button title="Text" aria-label="Text" data-tooltip="Text" data-tool="text">
               <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M6 5h12"></path>
-                <path d="M12 5v14"></path>
+                <path d="M6 4l12 0"></path>
+                <path d="M12 4l0 16"></path>
               </svg>
             </button>
             <span class="dock-separator"></span>
-            <button title="Image generator" aria-label="Image generator" data-tooltip="Image generator" data-tool="image-generator">
+            <button title="Reset view" aria-label="Reset view" data-tooltip="Reset view" data-view-action="reset">
               <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true">
-                <rect x="5" y="6" width="13" height="12" rx="2"></rect>
-                <path d="M7.5 15l3-3 2.2 2.2 1.6-1.6 2.2 2.4"></path>
-                <path d="M18.5 4.5v4"></path>
-                <path d="M16.5 6.5h4"></path>
-              </svg>
-            </button>
-            <button title="Upload image" aria-label="Upload image" data-tooltip="Upload image" data-tool="upload-image">
-              <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true">
-                <rect x="6" y="6" width="12" height="12" rx="2"></rect>
-                <path d="M12 15V8"></path>
-                <path d="M9.2 10.8L12 8l2.8 2.8"></path>
-              </svg>
-            </button>
-            <button title="Text variant" aria-label="Text variant" data-tooltip="Text variant" data-action="edit-text">
-              <svg class="dock-icon dock-icon-notified" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M5 5h10"></path>
-                <path d="M10 5v14"></path>
-                <path d="M16 13v6"></path>
-                <path d="M13 16h6"></path>
-                <circle class="dock-notification" cx="19" cy="5" r="2.2"></circle>
+                <path d="M3.06 13a9 9 0 1 0 .49 -4.087"></path>
+                <path d="M3 4.001v5h5"></path>
+                <path d="M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0"></path>
               </svg>
             </button>
           </nav>
+          <input id="imageUploadInput" type="file" accept="image/*" multiple hidden />
+          <div id="colorPalette" class="color-palette" aria-label="Tool colors" hidden></div>
         </section>
       </main>
     </div>

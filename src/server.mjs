@@ -3,8 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { collectRecentImages } from "./collector.mjs";
+import { createImageJob, createTextRecognitionJob, getActivePlaceholderIds, getIgnoredGeneratedImagePaths, getImageJob, getTextRecognitionJob, hasRunningImageJobs, submitTextRecognitionEdit } from "./jobs.mjs";
 import { assetsDirFor, publicDir, runtimePathFor } from "./paths.mjs";
-import { addImage, addObject, deleteObject, ensureProjectStore, readState, updateObject, updateProjectMeta, updateSelection, updateViewport } from "./store.mjs";
+import { addImage, addObject, deleteObject, ensureProjectStore, markStaleJobPlaceholders, readState, updateObject, updateProjectMeta, updateSelection, updateViewport } from "./store.mjs";
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -60,10 +61,12 @@ export async function createServer({ projectDir, host = "127.0.0.1", port = 4321
   let collectorTimer = null;
   if (autoCollect) {
     collectorTimer = setInterval(() => {
+      if (hasRunningImageJobs()) return;
       collectRecentImages(projectDir, {
         sinceMs: collectSinceMs,
         limit: 10,
-        prompt: "Auto-collected while Agent-Canvas was open"
+        prompt: "Auto-collected while Agent-Canvas was open",
+        excludePaths: getIgnoredGeneratedImagePaths()
       }).catch((error) => {
         console.error(`Agent-Canvas auto-collect failed: ${error.message}`);
       });
@@ -80,7 +83,9 @@ async function handleRequest(request, response, context) {
   const pathname = decodeURIComponent(requestUrl.pathname);
 
   if (request.method === "GET" && pathname === "/api/state") {
-    return sendJson(response, 200, await readState(context.projectDir));
+    return sendJson(response, 200, await markStaleJobPlaceholders(context.projectDir, {
+      activePlaceholderIds: getActivePlaceholderIds()
+    }));
   }
 
   if (request.method === "POST" && pathname === "/api/state") {
@@ -104,6 +109,32 @@ async function handleRequest(request, response, context) {
   if (request.method === "POST" && pathname === "/api/selection") {
     const body = await readJson(request);
     return sendJson(response, 200, { selection: await updateSelection(context.projectDir, body.selection || null) });
+  }
+
+  if (request.method === "POST" && pathname === "/api/jobs") {
+    const body = await readJson(request);
+    return sendJson(response, 202, await createImageJob(context.projectDir, body));
+  }
+
+  if (request.method === "POST" && pathname === "/api/text-recognition") {
+    const body = await readJson(request);
+    return sendJson(response, 202, await createTextRecognitionJob(context.projectDir, body));
+  }
+
+  const jobMatch = /^\/api\/jobs\/([^/]+)$/.exec(pathname);
+  if (request.method === "GET" && jobMatch) {
+    return sendJson(response, 200, getImageJob(jobMatch[1]));
+  }
+
+  const textRecognitionMatch = /^\/api\/text-recognition\/([^/]+)$/.exec(pathname);
+  if (request.method === "GET" && textRecognitionMatch) {
+    return sendJson(response, 200, getTextRecognitionJob(textRecognitionMatch[1]));
+  }
+
+  const textRecognitionRunMatch = /^\/api\/text-recognition\/([^/]+)\/run$/.exec(pathname);
+  if (request.method === "POST" && textRecognitionRunMatch) {
+    const body = await readJson(request);
+    return sendJson(response, 202, await submitTextRecognitionEdit(context.projectDir, textRecognitionRunMatch[1], body));
   }
 
   const objectMatch = /^\/api\/objects\/([^/]+)$/.exec(pathname);

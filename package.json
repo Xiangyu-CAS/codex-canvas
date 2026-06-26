@@ -7,6 +7,9 @@
     "agent-canvas": "./bin/agent-canvas.mjs"
   },
   "scripts": {
+    "postinstall": "node ./bin/agent-canvas.mjs setup-ocr --optional",
+    "setup:ocr": "node ./bin/agent-canvas.mjs setup-ocr",
+    "doctor:ocr": "node ./bin/agent-canvas.mjs doctor-ocr --json",
     "start": "node ./bin/agent-canvas.mjs start",
     "validate": "node ./bin/agent-canvas.mjs status --json"
   },

@@ -8,12 +8,24 @@ const settingsButton = document.querySelector("#settingsButton");
 const settingsMenu = document.querySelector("#settingsMenu");
 const toolbar = document.querySelector("#selectionToolbar");
 const moreMenu = document.querySelector("#selectionMoreMenu");
+const quickEditComposer = document.querySelector("#quickEditComposer");
+const quickEditPrompt = document.querySelector("#quickEditPrompt");
+const editTextPanel = document.querySelector("#editTextPanel");
+const editTextList = document.querySelector("#editTextList");
+const editTextStatus = document.querySelector("#editTextStatus");
+const quickEditCancel = document.querySelector("#quickEditCancel");
+const quickEditRun = document.querySelector("#quickEditRun");
 const zoomLabel = document.querySelector("#zoomLabel");
 const toast = document.querySelector("#toast");
 const toolDock = document.querySelector(".tool-dock");
+const imageUploadInput = document.querySelector("#imageUploadInput");
+const colorPalette = document.querySelector("#colorPalette");
 const zoomWheelSensitivity = 0.0024;
 const maxWheelZoomDelta = 160;
+const uploadMaxDisplaySize = 420;
 const languageStorageKey = "agentCanvasLanguage";
+const toolColorStorageKey = "agentCanvasToolColor";
+const toolColors = ["#202124", "#d93025", "#f9ab00", "#188038", "#1a73e8", "#9334e6", "#ffffff"];
 
 const translations = {
   en: {
@@ -25,13 +37,29 @@ const translations = {
     projectOptions: "Project options",
     textPlaceholder: "Text",
     placeholderSuffix: "is a placeholder in this milestone.",
+    quickEditPlaceholder: "Describe your edit here",
+    quickEditEmpty: "Describe the edit first.",
+    editTextPlaceholder: "Describe the text change here",
+    editTextEmpty: "Describe the text change first.",
+    editTextTitle: "Edit Text",
+    editTextRecognizing: "Recognizing text...",
+    editTextNoText: "No editable text was recognized.",
+    editTextNoChanges: "Edit at least one recognized text item first.",
+    cancel: "Cancel",
+    run: "Run",
+    jobStarted: "started. This can take a few minutes.",
+    jobRunning: "Running...",
+    jobDone: "finished and was added to the canvas.",
+    jobFailed: "failed.",
+    uploadDone: "Image uploaded.",
+    uploadFailed: "Image upload failed.",
     actions: {
       "quick-edit": "Quick Edit",
       "upscale": "Upscale",
       "remove-bg": "Remove BG",
       "eraser": "Eraser",
-      "edit-elements": "Elements",
-      "edit-text": "Text",
+      "edit-elements": "Edit Elements",
+      "edit-text": "Edit Text",
       "multi-angles": "Multi-Angles",
       "move-object": "Move Object",
       "more": "More",
@@ -76,6 +104,22 @@ const translations = {
     projectOptions: "项目选项",
     textPlaceholder: "文字",
     placeholderSuffix: "在当前版本中还是占位功能。",
+    quickEditPlaceholder: "描述你想怎么改这张图",
+    quickEditEmpty: "先描述你想怎么改。",
+    editTextPlaceholder: "描述要替换或修改的文字",
+    editTextEmpty: "先描述你想改哪些字。",
+    editTextTitle: "编辑文字",
+    editTextRecognizing: "正在识别文字...",
+    editTextNoText: "没有识别到可编辑文字。",
+    editTextNoChanges: "先修改至少一项识别文字。",
+    cancel: "取消",
+    run: "运行",
+    jobStarted: "已开始，可能需要几分钟。",
+    jobRunning: "运行中...",
+    jobDone: "已完成并添加到画布。",
+    jobFailed: "失败。",
+    uploadDone: "图片已上传。",
+    uploadFailed: "图片上传失败。",
     actions: {
       "quick-edit": "快捷编辑",
       "upscale": "放大",
@@ -124,16 +168,24 @@ let state = null;
 let selectedId = null;
 let hasUserSelection = false;
 let activeTool = "select";
+let activeColor = loadToolColor();
 let editingTextId = null;
 let language = loadLanguage();
 let drag = null;
+let resize = null;
 let drawing = null;
 let viewport = { x: 0, y: 0, zoom: 0.72 };
 let pan = null;
 let viewportSaveTimer = null;
 let isMoreMenuOpen = false;
+let quickEditObjectId = null;
+let quickEditAction = null;
+let activeTextRecognitionId = null;
+let editTextItems = [];
+const runningJobs = new Map();
 
 applyLanguage();
+renderColorPalette();
 await loadState();
 setInterval(loadState, 2000);
 
@@ -179,10 +231,36 @@ settingsMenu.addEventListener("click", (event) => {
 });
 
 toolDock.addEventListener("click", (event) => {
+  const viewButton = event.target.closest("[data-view-action]");
+  if (viewButton?.dataset.viewAction === "reset") {
+    event.preventDefault();
+    resetViewport();
+    return;
+  }
+  if (viewButton?.dataset.viewAction === "upload") {
+    event.preventDefault();
+    imageUploadInput.click();
+    return;
+  }
+
   const button = event.target.closest("[data-tool]");
   if (!button) return;
   event.preventDefault();
   setActiveTool(button.dataset.tool);
+});
+
+imageUploadInput.addEventListener("change", () => {
+  const files = [...imageUploadInput.files].filter((file) => file.type.startsWith("image/"));
+  imageUploadInput.value = "";
+  if (!files.length) return;
+  uploadImageFiles(files);
+});
+
+colorPalette.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-color]");
+  if (!button) return;
+  event.preventDefault();
+  setActiveColor(button.dataset.color);
 });
 
 document.addEventListener("click", (event) => {
@@ -196,15 +274,33 @@ document.addEventListener("click", (event) => {
     }
     isMoreMenuOpen = false;
     updateSelectionUi();
+    if (action === "quick-edit" || action === "edit-text") {
+      openImageActionComposer(action);
+      return;
+    }
+    if (action === "remove-bg") {
+      startImageJob(action);
+      return;
+    }
     showToast(`${labelAction(action)} ${t("placeholderSuffix")}`);
   }
 });
 
 document.addEventListener("keydown", (event) => {
-  if (!["Backspace", "Delete"].includes(event.key)) return;
-  if (!selectedId || isEditableTarget(event.target)) return;
-  event.preventDefault();
-  deleteSelectedObject();
+  if (!selectedId) return;
+  if (["Backspace", "Delete"].includes(event.key)) {
+    if (isDeleteEditingTarget(event.target)) return;
+    event.preventDefault();
+    deleteSelectedObject();
+    return;
+  }
+  if (isShortcutEditingTarget(event.target)) return;
+  if (event.key === "Enter" || event.key === " ") {
+    const object = state.objects.find((item) => item.id === selectedId);
+    if (!object || (object.type || "image") !== "image") return;
+    event.preventDefault();
+    frameSelectedImageForViewing(object);
+  }
 });
 
 board.addEventListener("pointerdown", (event) => {
@@ -231,8 +327,26 @@ document.addEventListener("pointerdown", (event) => {
   }
   if (isSettingsEvent) return;
   if (!selectedId) return;
-  if (event.target.closest(".canvas-object, .selection-toolbar, .selection-more-menu")) return;
+  if (event.target.closest(".canvas-object, .selection-toolbar, .selection-more-menu, .quick-edit-composer, .color-palette")) return;
   selectObject(null);
+});
+
+quickEditComposer.addEventListener("submit", (event) => {
+  event.preventDefault();
+  submitQuickEdit();
+});
+
+quickEditCancel.addEventListener("click", () => closeQuickEdit());
+
+quickEditPrompt.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeQuickEdit();
+  }
+  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+    event.preventDefault();
+    submitQuickEdit();
+  }
 });
 
 board.addEventListener("wheel", (event) => {
@@ -255,7 +369,7 @@ board.addEventListener("wheel", (event) => {
 }, { passive: false });
 
 async function loadState() {
-  if (drag) return;
+  if (drag || resize || isComposerActive()) return;
   const response = await fetch("/api/state");
   state = await response.json();
   if (!hasUserSelection || !state.objects.some((object) => object.id === selectedId)) {
@@ -284,7 +398,8 @@ function render() {
 
   for (const object of state.objects) {
     const element = document.createElement("div");
-    element.className = `canvas-object ${object.type || "image"}-object${object.id === selectedId ? " selected" : ""}`;
+    const objectType = object.type || "image";
+    element.className = `canvas-object ${objectType}-object${object.hasAlpha ? " alpha-image-object" : ""}${object.id === selectedId ? " selected" : ""}`;
     element.style.left = `${object.x}px`;
     element.style.top = `${object.y}px`;
     element.style.width = `${object.width}px`;
@@ -295,6 +410,8 @@ function render() {
       element.append(renderDrawingObject(object));
     } else if (object.type === "text") {
       element.append(renderTextObject(object));
+    } else if (object.type === "job") {
+      element.append(renderJobObject(object));
     } else {
       const image = document.createElement("img");
       image.src = object.src;
@@ -318,10 +435,30 @@ function render() {
       meta.append(size);
 
       element.append(meta);
+      element.append(renderResizeHandles(object));
     }
 
     element.addEventListener("pointerdown", (event) => {
-      if (object.type === "text" && editingTextId === object.id && event.target.closest(".text-content")) return;
+      const textTarget = event.target.closest(".text-content");
+      if (object.type === "text" && editingTextId === object.id && textTarget) {
+        if (event.detail >= 2) return;
+        textTarget.blur();
+        editingTextId = null;
+      }
+      if ((object.type || "image") === "image" && event.detail >= 2) {
+        event.preventDefault();
+        event.stopPropagation();
+        selectedId = object.id;
+        hasUserSelection = true;
+        if (state) state.selection = object.id;
+        frameSelectedImageForViewing(object);
+        fetch("/api/selection", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ selection: object.id })
+        }).catch(() => {});
+        return;
+      }
       startDrag(event, object);
     });
     objectLayer.append(element);
@@ -379,6 +516,52 @@ function renderTextObject(object) {
     saveTextObject(object.id, text.textContent || "Text");
   });
   return text;
+}
+
+function renderJobObject(object) {
+  const shell = document.createElement("div");
+  const failed = object.status === "failed";
+  shell.className = `job-content ${failed ? "failed" : "running"}`;
+  if (failed) shell.title = object.error || "Image job failed.";
+
+  if (object.src) {
+    const image = document.createElement("img");
+    image.className = "job-preview-image";
+    image.src = object.src;
+    image.alt = "";
+    image.draggable = false;
+    shell.append(image);
+  }
+
+  if (failed) {
+    const badge = document.createElement("div");
+    badge.className = "job-failed-badge";
+    badge.textContent = "!";
+    shell.append(badge);
+  } else {
+    const ripple = document.createElement("div");
+    ripple.className = "job-ripple";
+    shell.append(ripple);
+
+    const sheen = document.createElement("div");
+    sheen.className = "job-sheen";
+    shell.append(sheen);
+  }
+  return shell;
+}
+
+function renderResizeHandles(object) {
+  const fragment = document.createDocumentFragment();
+  for (const direction of ["nw", "n", "ne", "e", "se", "s", "sw", "w"]) {
+    const handle = document.createElement("div");
+    handle.className = `resize-handle resize-${direction}`;
+    handle.dataset.resize = direction;
+    handle.title = "Resize image";
+    handle.setAttribute("aria-hidden", "true");
+    handle.addEventListener("pointerdown", (event) => startResize(event, object, direction));
+    fragment.append(handle);
+  }
+  return fragment;
 }
 
 function startDrag(event, object) {
@@ -454,6 +637,127 @@ async function endDrag(event) {
   }
 }
 
+function startResize(event, object, direction) {
+  event.preventDefault();
+  event.stopPropagation();
+  const element = event.currentTarget.closest(".canvas-object");
+  selectedId = object.id;
+  hasUserSelection = true;
+  if (state) state.selection = object.id;
+  element?.classList.add("resizing");
+  resize = {
+    id: object.id,
+    element,
+    direction,
+    startX: event.clientX,
+    startY: event.clientY,
+    objectX: object.x,
+    objectY: object.y,
+    objectWidth: object.width,
+    objectHeight: object.height,
+    aspectRatio: object.width / Math.max(1, object.height),
+    anchorX: direction.includes("w") ? object.x + object.width : object.x,
+    anchorY: direction.includes("n") ? object.y + object.height : object.y
+  };
+  fetch("/api/selection", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ selection: object.id })
+  }).catch(() => {});
+
+  window.addEventListener("pointermove", moveResize);
+  window.addEventListener("pointerup", endResize, { once: true });
+  window.addEventListener("pointercancel", endResize, { once: true });
+}
+
+function moveResize(event) {
+  if (!resize) return;
+  const object = state.objects.find((item) => item.id === resize.id);
+  if (!object) return;
+
+  const dx = (event.clientX - resize.startX) / viewport.zoom;
+  const dy = (event.clientY - resize.startY) / viewport.zoom;
+  const next = resizedImageRect(resize, dx, dy);
+  Object.assign(object, next);
+
+  if (resize.element) {
+    resize.element.style.left = `${object.x}px`;
+    resize.element.style.top = `${object.y}px`;
+    resize.element.style.width = `${object.width}px`;
+    resize.element.style.height = `${object.height}px`;
+  }
+  updateSelectionUi();
+}
+
+async function endResize() {
+  window.removeEventListener("pointermove", moveResize);
+  window.removeEventListener("pointerup", endResize);
+  window.removeEventListener("pointercancel", endResize);
+  if (!resize) return;
+  const object = state.objects.find((item) => item.id === resize.id);
+  resize.element?.classList.remove("resizing");
+  resize = null;
+  if (object) {
+    await fetch(`/api/objects/${object.id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ x: object.x, y: object.y, width: object.width, height: object.height })
+    }).catch(() => {});
+    render();
+  }
+}
+
+function resizedImageRect(start, dx, dy) {
+  const direction = start.direction;
+  const minSize = 48;
+  const ratio = Number.isFinite(start.aspectRatio) && start.aspectRatio > 0 ? start.aspectRatio : 1;
+  let width = start.objectWidth;
+  let height = start.objectHeight;
+
+  if (direction.includes("e")) width = start.objectWidth + dx;
+  if (direction.includes("w")) width = start.objectWidth - dx;
+  if (direction.includes("s")) height = start.objectHeight + dy;
+  if (direction.includes("n")) height = start.objectHeight - dy;
+
+  const widthFromHeight = height * ratio;
+  const heightFromWidth = width / ratio;
+  if (direction.length === 1 && (direction === "n" || direction === "s")) {
+    width = widthFromHeight;
+  } else if (direction.length === 1) {
+    height = heightFromWidth;
+  } else if (Math.abs(width - start.objectWidth) / Math.max(1, start.objectWidth) >= Math.abs(height - start.objectHeight) / Math.max(1, start.objectHeight)) {
+    height = heightFromWidth;
+  } else {
+    width = widthFromHeight;
+  }
+
+  width = Math.max(minSize, width);
+  height = width / ratio;
+  if (height < minSize) {
+    height = minSize;
+    width = height * ratio;
+  }
+  width = Math.round(width);
+  height = Math.round(height);
+
+  let x = start.objectX;
+  let y = start.objectY;
+  if (direction.includes("w")) x = start.anchorX - width;
+  else if (direction.includes("e")) x = start.anchorX;
+  else x = start.objectX + (start.objectWidth - width) / 2;
+
+  if (direction.includes("n")) y = start.anchorY - height;
+  else if (direction.includes("s")) y = start.anchorY;
+  else y = start.objectY + (start.objectHeight - height) / 2;
+
+  return {
+    x: Math.round(x),
+    y: Math.round(y),
+    width,
+    height
+  };
+}
+
 async function selectObject(id, { fromUser = false, renderNow = true } = {}) {
   selectedId = id;
   hasUserSelection = Boolean(id) && fromUser;
@@ -475,10 +779,11 @@ function updateSelectionUi() {
   if (!object || object.type !== "image" || !hasUserSelection) {
     toolbar.hidden = true;
     moreMenu.hidden = true;
+    closeQuickEdit({ keepPrompt: true });
     return;
   }
 
-  toolbar.hidden = false;
+  toolbar.hidden = Boolean(quickEditObjectId);
   const topLeft = worldToScreen(object.x, object.y);
   const bottomRight = worldToScreen(object.x + object.width, object.y + object.height);
   const toolbarRect = toolbar.getBoundingClientRect();
@@ -488,6 +793,7 @@ function updateSelectionUi() {
   const left = clamp(objectCenter - toolbarRect.width / 2, 16, boardRect.width - toolbarRect.width - 16);
   toolbar.style.transform = `translate(${left}px, ${top}px)`;
   updateMoreMenuPosition();
+  updateQuickEditPosition();
 }
 
 function startPan(event) {
@@ -516,7 +822,7 @@ function startDrawing(event) {
   preview.setAttribute("height", "1");
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
   path.setAttribute("fill", "none");
-  path.setAttribute("stroke", "#202124");
+  path.setAttribute("stroke", activeColor);
   path.setAttribute("stroke-width", "4");
   path.setAttribute("stroke-linecap", "round");
   path.setAttribute("stroke-linejoin", "round");
@@ -558,7 +864,7 @@ async function endDrawing() {
     width: bounds.width,
     height: bounds.height,
     points: points.map((point) => ({ x: point.x - bounds.x, y: point.y - bounds.y })),
-    stroke: "#202124",
+    stroke: activeColor,
     strokeWidth: 4
   });
   selectedId = object.id;
@@ -592,10 +898,11 @@ async function createTextObject(event) {
     width: 220,
     height: 54,
     fontSize: 28,
-    color: "#202124"
+    color: activeColor
   });
   selectedId = object.id;
   hasUserSelection = true;
+  editingTextId = object.id;
   state.selection = object.id;
   render();
   focusTextObject(object.id);
@@ -626,6 +933,398 @@ async function deleteSelectedObject() {
   await fetch(`/api/objects/${id}`, { method: "DELETE" }).catch(() => {});
 }
 
+async function uploadImageFiles(files) {
+  let nextX = null;
+  let lastObject = null;
+
+  try {
+    for (const file of files) {
+      const dataUrl = await readFileAsDataUrl(file);
+      const naturalSize = await readImageFileSize(dataUrl);
+      const displaySize = displaySizeForUpload(naturalSize);
+      const position = uploadPosition(displaySize, nextX);
+      nextX = position.x + displaySize.width + 72;
+
+      const response = await fetch("/api/images", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          dataUrl,
+          name: file.name,
+          prompt: "Uploaded from local file",
+          layoutMode: "manual",
+          x: position.x,
+          y: position.y,
+          width: displaySize.width,
+          height: displaySize.height
+        })
+      });
+      const object = await response.json();
+      if (!response.ok) throw new Error(object.error || t("uploadFailed"));
+      lastObject = object;
+    }
+
+    if (lastObject) {
+      selectedId = lastObject.id;
+      hasUserSelection = true;
+      await loadState();
+      showToast(t("uploadDone"));
+    }
+  } catch (error) {
+    showToast(error?.message || t("uploadFailed"));
+  }
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error(t("uploadFailed")));
+    reader.readAsDataURL(file);
+  });
+}
+
+function readImageFileSize(dataUrl) {
+  return new Promise((resolve) => {
+    const image = new Image();
+    image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight });
+    image.onerror = () => resolve(null);
+    image.src = dataUrl;
+  });
+}
+
+function displaySizeForUpload(size) {
+  if (!size || !Number.isFinite(size.width) || !Number.isFinite(size.height) || size.width <= 0 || size.height <= 0) {
+    return { width: 360, height: 360 };
+  }
+  const scale = Math.min(1, uploadMaxDisplaySize / Math.max(size.width, size.height));
+  return {
+    width: Math.max(1, Math.round(size.width * scale)),
+    height: Math.max(1, Math.round(size.height * scale))
+  };
+}
+
+function uploadPosition(size, nextX) {
+  const boardRect = board.getBoundingClientRect();
+  const center = screenToWorld(boardRect.width / 2, boardRect.height / 2);
+  return {
+    x: Math.round(Number.isFinite(nextX) ? nextX : center.x - size.width / 2),
+    y: Math.round(center.y - size.height / 2)
+  };
+}
+
+async function startImageJob(action, options = {}) {
+  const object = state.objects.find((item) => item.id === selectedId);
+  if (!object || (object.type || "image") !== "image") return;
+
+  showToast(`${labelAction(action)} ${t("jobStarted")}`);
+  try {
+    const response = await fetch("/api/jobs", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action,
+        objectId: object.id,
+        prompt: options.prompt || ""
+      })
+    });
+    const job = await response.json();
+    if (!response.ok) {
+      showToast(job.error || `${labelAction(action)} ${t("jobFailed")}`);
+      return;
+    }
+    await loadState();
+    frameJobPlacement(object.id, job.placeholder || null);
+    pollImageJob(job.id);
+  } catch (error) {
+    showToast(error?.message || `${labelAction(action)} ${t("jobFailed")}`);
+  }
+}
+
+function openImageActionComposer(action) {
+  const object = state.objects.find((item) => item.id === selectedId);
+  if (!object || (object.type || "image") !== "image" || !hasUserSelection) return;
+  quickEditAction = action;
+  quickEditObjectId = object.id;
+  quickEditPrompt.placeholder = composerPlaceholder(action);
+  isMoreMenuOpen = false;
+  configureComposerMode(action);
+  quickEditComposer.hidden = false;
+  frameObjectForQuickEdit(object, action);
+  updateSelectionUi();
+  updateQuickEditPosition();
+  if (action === "edit-text") {
+    startTextRecognition(object.id);
+  } else {
+    window.requestAnimationFrame(() => quickEditPrompt.focus());
+  }
+}
+
+function closeQuickEdit({ keepPrompt = false } = {}) {
+  quickEditComposer.hidden = true;
+  quickEditObjectId = null;
+  quickEditAction = null;
+  activeTextRecognitionId = null;
+  editTextItems = [];
+  editTextList.replaceChildren();
+  editTextStatus.textContent = "";
+  quickEditRun.disabled = false;
+  quickEditComposer.classList.remove("edit-text-mode", "quick-edit-mode");
+  if (!keepPrompt) quickEditPrompt.value = "";
+}
+
+async function submitQuickEdit() {
+  const action = quickEditAction || "quick-edit";
+  if (action === "edit-text") {
+    await submitEditText();
+    return;
+  }
+  const prompt = quickEditPrompt.value.trim();
+  if (!prompt) {
+    showToast(composerEmptyMessage(action));
+    quickEditPrompt.focus();
+    return;
+  }
+  const objectId = quickEditObjectId;
+  if (!objectId) return;
+  selectedId = objectId;
+  hasUserSelection = true;
+  closeQuickEdit();
+  await startImageJob(action, { prompt });
+}
+
+async function submitEditText() {
+  const objectId = quickEditObjectId;
+  const sessionId = activeTextRecognitionId;
+  if (!objectId || !sessionId) return;
+  const changes = editTextItems
+    .map((item, index) => ({
+      index: index + 1,
+      from: item.text,
+      to: String(item.editedText || "").trim(),
+      location: item.location,
+      style: item.style
+    }))
+    .filter((item) => item.to && item.to !== item.from);
+  if (!changes.length) {
+    showToast(t("editTextNoChanges"));
+    editTextList.querySelector("input")?.focus();
+    return;
+  }
+
+  const replacements = changes
+    .map((item) => `${item.index}. Replace "${item.from}" with "${item.to}"${item.location ? ` (${item.location})` : ""}.`)
+    .join("\n");
+  selectedId = objectId;
+  hasUserSelection = true;
+  quickEditRun.disabled = true;
+
+  const prompt = [
+    "Edit only the user-modified text fields in the attached image.",
+    "",
+    "Apply these exact text replacements:",
+    replacements,
+    "",
+    "Do not change any visible text that is not listed above.",
+    "Preserve the original layout, typography style, colors, image content, and aspect ratio."
+  ].join("\n");
+
+  try {
+    const response = await fetch(`/api/text-recognition/${sessionId}/run`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt, changes })
+    });
+    const job = await response.json();
+    if (!response.ok) throw new Error(job.error || `${labelAction("edit-text")} ${t("jobFailed")}`);
+    closeQuickEdit();
+    await loadState();
+    frameJobPlacement(objectId, job.placeholder || null);
+    pollEditTextSession(job.id);
+  } catch (error) {
+    quickEditRun.disabled = false;
+    showToast(error?.message || `${labelAction("edit-text")} ${t("jobFailed")}`);
+  }
+}
+
+function configureComposerMode(action) {
+  const isEditText = action === "edit-text";
+  quickEditComposer.classList.toggle("edit-text-mode", isEditText);
+  quickEditComposer.classList.toggle("quick-edit-mode", !isEditText);
+  editTextPanel.hidden = !isEditText;
+  quickEditPrompt.hidden = isEditText;
+  editTextPanel.querySelector(".edit-text-title").textContent = t("editTextTitle");
+  if (isEditText) {
+    quickEditPrompt.value = "";
+    editTextItems = [];
+    renderEditTextItems("loading");
+  } else {
+    activeTextRecognitionId = null;
+    editTextItems = [];
+    editTextList.replaceChildren();
+    editTextStatus.textContent = "";
+    quickEditRun.disabled = false;
+  }
+}
+
+async function startTextRecognition(objectId) {
+  const recognitionToken = `${objectId}:${Date.now()}`;
+  activeTextRecognitionId = recognitionToken;
+  quickEditRun.disabled = true;
+  renderEditTextItems("loading");
+
+  try {
+    const response = await fetch("/api/text-recognition", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ objectId })
+    });
+    const job = await response.json();
+    if (!response.ok) throw new Error(job.error || t("jobFailed"));
+    activeTextRecognitionId = job.id;
+    pollTextRecognitionJob(job.id);
+  } catch (error) {
+    if (activeTextRecognitionId !== recognitionToken) return;
+    editTextStatus.textContent = error?.message || t("jobFailed");
+    quickEditRun.disabled = true;
+  }
+}
+
+function pollTextRecognitionJob(jobId) {
+  const tick = async () => {
+    if (quickEditAction !== "edit-text" || activeTextRecognitionId !== jobId) return;
+    try {
+      const response = await fetch(`/api/text-recognition/${jobId}`);
+      const job = await response.json();
+      if (!response.ok) throw new Error(job.error || "Text recognition request failed.");
+      if (job.stage === "ready") {
+        editTextItems = (job.items || []).map((item) => ({
+          ...item,
+          editedText: item.text
+        }));
+        renderEditTextItems("done");
+        return;
+      }
+      if (job.status === "done") return;
+      if (job.status === "failed") {
+        editTextItems = [];
+        editTextStatus.textContent = `${labelAction("edit-text")} ${t("jobFailed")} ${job.error || ""}`.trim();
+        quickEditRun.disabled = true;
+        return;
+      }
+      window.setTimeout(tick, 1800);
+    } catch (error) {
+      editTextStatus.textContent = error?.message || t("jobFailed");
+      quickEditRun.disabled = true;
+    }
+  };
+  window.setTimeout(tick, 900);
+}
+
+function pollEditTextSession(jobId) {
+  const tick = async () => {
+    try {
+      const response = await fetch(`/api/text-recognition/${jobId}`);
+      const job = await response.json();
+      if (!response.ok) throw new Error(job.error || "Edit Text status request failed.");
+      if (job.status === "done") {
+        showToast(`${labelAction("edit-text")} ${t("jobDone")}`);
+        await loadState();
+        return;
+      }
+      if (job.status === "failed") {
+        showToast(`${labelAction("edit-text")} ${t("jobFailed")} ${job.error || ""}`.trim());
+        return;
+      }
+      window.setTimeout(tick, 2500);
+    } catch (error) {
+      showToast(error?.message || t("jobFailed"));
+    }
+  };
+  window.setTimeout(tick, 2500);
+}
+
+function renderEditTextItems(status) {
+  editTextList.replaceChildren();
+  editTextStatus.textContent = "";
+
+  if (status === "loading") {
+    editTextStatus.textContent = t("editTextRecognizing");
+    quickEditRun.disabled = true;
+    return;
+  }
+
+  if (!editTextItems.length) {
+    editTextStatus.textContent = t("editTextNoText");
+    quickEditRun.disabled = true;
+    return;
+  }
+
+  editTextItems.forEach((item, index) => {
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = item.editedText || item.text;
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    input.setAttribute("aria-label", `${t("editTextTitle")} ${index + 1}`);
+    input.addEventListener("input", () => {
+      editTextItems[index].editedText = input.value;
+      updateEditTextRunState();
+    });
+    editTextList.append(input);
+  });
+
+  updateEditTextRunState();
+  window.requestAnimationFrame(() => {
+    updateQuickEditPosition();
+    editTextList.querySelector("input")?.focus();
+  });
+}
+
+function updateEditTextRunState() {
+  if (quickEditAction !== "edit-text") return;
+  quickEditRun.disabled = !editTextItems.some((item) => String(item.editedText || "").trim() && String(item.editedText || "").trim() !== item.text);
+}
+
+function composerPlaceholder(action) {
+  return action === "edit-text" ? t("editTextPlaceholder") : t("quickEditPlaceholder");
+}
+
+function composerEmptyMessage(action) {
+  return action === "edit-text" ? t("editTextEmpty") : t("quickEditEmpty");
+}
+
+function isComposerActive() {
+  return Boolean(quickEditComposer && !quickEditComposer.hidden && quickEditComposer.contains(document.activeElement));
+}
+
+function pollImageJob(jobId) {
+  window.clearTimeout(runningJobs.get(jobId));
+  const tick = async () => {
+    try {
+      const response = await fetch(`/api/jobs/${jobId}`);
+      const job = await response.json();
+      if (!response.ok) throw new Error(job.error || "Job status request failed.");
+      if (job.status === "done") {
+        runningJobs.delete(jobId);
+        showToast(`${labelAction(job.action)} ${t("jobDone")}`);
+        await loadState();
+        return;
+      }
+      if (job.status === "failed") {
+        runningJobs.delete(jobId);
+        showToast(`${labelAction(job.action)} ${t("jobFailed")} ${job.error || ""}`.trim());
+        return;
+      }
+      runningJobs.set(jobId, window.setTimeout(tick, 2500));
+    } catch (error) {
+      runningJobs.delete(jobId);
+      showToast(error?.message || t("jobFailed"));
+    }
+  };
+  runningJobs.set(jobId, window.setTimeout(tick, 2500));
+}
+
 async function saveTextObject(id, text) {
   const object = state.objects.find((item) => item.id === id);
   if (!object) return;
@@ -652,6 +1351,32 @@ function focusTextObject(id) {
   });
 }
 
+function frameSelectedImageForViewing(object) {
+  if (!object || (object.type || "image") !== "image") return;
+  closeQuickEdit({ keepPrompt: true });
+  hasUserSelection = true;
+  selectedId = object.id;
+  if (state) state.selection = object.id;
+  frameWorldBounds(boundsForObjects([object]), {
+    paddingX: 88,
+    paddingTop: 104,
+    paddingBottom: 148,
+    minZoom: 0.18,
+    maxZoom: 1.28
+  });
+}
+
+function isShortcutEditingTarget(target) {
+  if (isEditableTarget(target)) return true;
+  return Boolean(target.closest("button, [role='button'], .selection-toolbar, .selection-more-menu, .quick-edit-composer, .settings-menu, .color-palette"));
+}
+
+function isDeleteEditingTarget(target) {
+  if (target.closest("input, textarea")) return true;
+  const editableText = target.closest(".text-content[contenteditable='true']");
+  return Boolean(editableText && editingTextId === selectedId);
+}
+
 function setActiveTool(tool) {
   activeTool = tool || "select";
   toolDock.querySelectorAll("[data-tool]").forEach((button) => {
@@ -659,6 +1384,60 @@ function setActiveTool(tool) {
   });
   board.classList.toggle("tool-pencil", activeTool === "pencil");
   board.classList.toggle("tool-text", activeTool === "text");
+  updateColorPalette();
+}
+
+function loadToolColor() {
+  const stored = localStorage.getItem(toolColorStorageKey);
+  return toolColors.includes(stored) ? stored : toolColors[0];
+}
+
+function renderColorPalette() {
+  colorPalette.replaceChildren();
+  for (const color of toolColors) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "color-swatch";
+    button.dataset.color = color;
+    button.style.setProperty("--swatch-color", color);
+    button.title = color;
+    button.setAttribute("aria-label", `Use color ${color}`);
+    colorPalette.append(button);
+  }
+  updateColorPalette();
+}
+
+function updateColorPalette() {
+  colorPalette.hidden = !(activeTool === "pencil" || activeTool === "text");
+  colorPalette.querySelectorAll("[data-color]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.color === activeColor);
+  });
+}
+
+async function setActiveColor(color) {
+  if (!toolColors.includes(color)) return;
+  activeColor = color;
+  localStorage.setItem(toolColorStorageKey, activeColor);
+  updateColorPalette();
+  const object = state?.objects.find((item) => item.id === selectedId);
+  if (!object) return;
+  if (object.type === "drawing") {
+    object.stroke = activeColor;
+    await patchObjectColor(object.id, { stroke: activeColor });
+    render();
+  } else if (object.type === "text") {
+    object.color = activeColor;
+    await patchObjectColor(object.id, { color: activeColor });
+    render();
+  }
+}
+
+async function patchObjectColor(id, patch) {
+  await fetch(`/api/objects/${id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(patch)
+  }).catch(() => {});
 }
 
 function loadLanguage() {
@@ -679,6 +1458,16 @@ function applyLanguage() {
   document.querySelectorAll("[data-i18n]").forEach((element) => {
     element.textContent = t(element.dataset.i18n);
   });
+  document.querySelectorAll("[data-i18n-placeholder]").forEach((element) => {
+    element.placeholder = t(element.dataset.i18nPlaceholder);
+  });
+  if (quickEditAction) {
+    quickEditPrompt.placeholder = composerPlaceholder(quickEditAction);
+    editTextPanel.querySelector(".edit-text-title").textContent = t("editTextTitle");
+    if (quickEditAction === "edit-text" && !editTextItems.length && editTextStatus.textContent) {
+      editTextStatus.textContent = activeTextRecognitionId ? t("editTextRecognizing") : t("editTextNoText");
+    }
+  }
 
   projectOptionsButton.title = t("projectOptions");
   projectOptionsButton.setAttribute("aria-label", t("projectOptions"));
@@ -713,6 +1502,13 @@ function applyLanguage() {
     button.setAttribute("aria-label", label);
   });
 
+  document.querySelectorAll("[data-view-action]").forEach((button) => {
+    const label = viewActionLabel(button.dataset.viewAction);
+    button.dataset.tooltip = label;
+    button.title = label;
+    button.setAttribute("aria-label", label);
+  });
+
   const controlMap = ["reset", "layers", "search", "export"];
   document.querySelectorAll(".canvas-controls button").forEach((button, index) => {
     const label = translations[language].controls[controlMap[index]];
@@ -732,6 +1528,12 @@ function actionLabel(action) {
 
 function toolLabel(tool) {
   return translations[language].tools[tool] || translations.en.tools[tool] || tool;
+}
+
+function viewActionLabel(action) {
+  if (action === "upload") return translations[language].tools["upload-image"];
+  if (action === "reset") return translations[language].controls.reset;
+  return action;
 }
 
 function pointerToWorld(event) {
@@ -805,6 +1607,13 @@ async function saveViewport() {
   }).catch(() => {});
 }
 
+function resetViewport() {
+  viewport = { x: 0, y: 0, zoom: 0.72 };
+  applyViewport();
+  updateSelectionUi();
+  saveViewport();
+}
+
 async function saveProjectTitle() {
   if (!state) return;
   const title = projectTitle.value.trim() || "Untitled";
@@ -819,7 +1628,100 @@ async function saveProjectTitle() {
 
 function applyViewport() {
   world.style.transform = `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`;
+  world.style.setProperty("--resize-handle-size", `${8 / viewport.zoom}px`);
+  world.style.setProperty("--resize-handle-offset", `${-4 / viewport.zoom}px`);
+  world.style.setProperty("--resize-handle-border", `${1.5 / viewport.zoom}px`);
+  world.style.setProperty("--resize-handle-radius", `${2 / viewport.zoom}px`);
   zoomLabel.textContent = `${Math.round(viewport.zoom * 100)}%`;
+}
+
+function frameObjectForQuickEdit(object, action = "quick-edit") {
+  const boardRect = board.getBoundingClientRect();
+  if (action === "edit-text") {
+    const panelWidth = Math.min(240, Math.max(180, boardRect.width - 48));
+    const sideGap = 16;
+    const sideMargins = 48;
+    const bottomReserve = 132;
+    const availableWidth = Math.max(120, boardRect.width - panelWidth - sideGap - sideMargins);
+    const availableHeight = Math.max(140, boardRect.height - 104 - bottomReserve);
+    const targetZoom = clamp(
+      Math.min(availableWidth / object.width, availableHeight / object.height),
+      0.18,
+      1.05
+    );
+    const objectScreenWidth = object.width * targetZoom;
+    const objectScreenHeight = object.height * targetZoom;
+    const objectLeft = Math.max(24, Math.round((boardRect.width - panelWidth - sideGap - objectScreenWidth) / 2));
+    const objectTop = Math.max(72, Math.round((boardRect.height - bottomReserve - objectScreenHeight) / 2));
+    viewport.zoom = targetZoom;
+    viewport.x = Math.round(objectLeft - object.x * targetZoom);
+    viewport.y = Math.round(objectTop - object.y * targetZoom);
+    applyViewport();
+    scheduleViewportSave();
+    return;
+  }
+
+  const targetZoom = clamp(
+    Math.min((boardRect.width - 96) / object.width, (boardRect.height - 240) / object.height),
+    0.18,
+    0.9
+  );
+  const objectCenterX = object.x + object.width / 2;
+  viewport.zoom = targetZoom;
+  viewport.x = Math.round(boardRect.width / 2 - objectCenterX * targetZoom);
+  viewport.y = Math.round(82 - object.y * targetZoom);
+  applyViewport();
+  scheduleViewportSave();
+}
+
+function frameJobPlacement(sourceId, placeholder) {
+  const source = state.objects.find((item) => item.id === sourceId);
+  const target = placeholder
+    ? state.objects.find((item) => item.id === placeholder.id) || placeholder
+    : null;
+  if (!source || !target) return;
+  frameWorldBounds(boundsForObjects([source, target]), {
+    paddingX: 96,
+    paddingTop: 92,
+    paddingBottom: 132,
+    maxZoom: 0.9
+  });
+}
+
+function frameWorldBounds(bounds, options = {}) {
+  const boardRect = board.getBoundingClientRect();
+  const paddingX = options.paddingX ?? 96;
+  const paddingTop = options.paddingTop ?? 96;
+  const paddingBottom = options.paddingBottom ?? 120;
+  const availableWidth = Math.max(120, boardRect.width - paddingX * 2);
+  const availableHeight = Math.max(120, boardRect.height - paddingTop - paddingBottom);
+  const targetZoom = clamp(
+    Math.min(availableWidth / bounds.width, availableHeight / bounds.height),
+    options.minZoom ?? 0.12,
+    options.maxZoom ?? 1
+  );
+  const contentCenterX = bounds.x + bounds.width / 2;
+  const contentCenterY = bounds.y + bounds.height / 2;
+  const screenCenterY = paddingTop + availableHeight / 2;
+  viewport.zoom = targetZoom;
+  viewport.x = Math.round(boardRect.width / 2 - contentCenterX * targetZoom);
+  viewport.y = Math.round(screenCenterY - contentCenterY * targetZoom);
+  applyViewport();
+  updateSelectionUi();
+  scheduleViewportSave();
+}
+
+function boundsForObjects(objects) {
+  const left = Math.min(...objects.map((object) => object.x));
+  const top = Math.min(...objects.map((object) => object.y));
+  const right = Math.max(...objects.map((object) => object.x + object.width));
+  const bottom = Math.max(...objects.map((object) => object.y + object.height));
+  return {
+    x: left,
+    y: top,
+    width: Math.max(1, right - left),
+    height: Math.max(1, bottom - top)
+  };
 }
 
 function worldToScreen(x, y) {
@@ -859,6 +1761,65 @@ function updateMoreMenuPosition() {
     boardRect.height - menuRect.height - 16
   );
   moreMenu.style.transform = `translate(${left}px, ${top}px)`;
+}
+
+function updateQuickEditPosition() {
+  if (quickEditComposer.hidden || !quickEditObjectId) return;
+  const object = state.objects.find((item) => item.id === quickEditObjectId);
+  if (!object) {
+    closeQuickEdit();
+    return;
+  }
+
+  const topLeft = worldToScreen(object.x, object.y);
+  const bottomRight = worldToScreen(object.x + object.width, object.y + object.height);
+  const boardRect = board.getBoundingClientRect();
+  const composerRect = quickEditComposer.getBoundingClientRect();
+  const objectCenter = (topLeft.x + bottomRight.x) / 2;
+
+  if (quickEditAction === "edit-text") {
+    const gap = 12;
+    const margin = 16;
+    const maxTop = Math.max(margin, boardRect.height - composerRect.height - 88);
+    const maxLeft = Math.max(margin, boardRect.width - composerRect.width - margin);
+    const objectBox = {
+      left: topLeft.x,
+      top: topLeft.y,
+      right: bottomRight.x,
+      bottom: bottomRight.y
+    };
+    const candidates = [
+      { left: bottomRight.x + gap, top: topLeft.y },
+      { left: bottomRight.x + gap, top: bottomRight.y - composerRect.height },
+      { left: topLeft.x - composerRect.width - gap, top: topLeft.y },
+      { left: topLeft.x - composerRect.width - gap, top: bottomRight.y - composerRect.height },
+      { left: objectCenter - composerRect.width / 2, top: bottomRight.y + gap },
+      { left: objectCenter - composerRect.width / 2, top: topLeft.y - composerRect.height - gap }
+    ].map((candidate, index) => {
+      const left = clamp(candidate.left, margin, maxLeft);
+      const top = clamp(candidate.top, margin, maxTop);
+      const rect = {
+        left,
+        top,
+        right: left + composerRect.width,
+        bottom: top + composerRect.height
+      };
+      return { left, top, index, overlap: rectOverlapArea(rect, objectBox) };
+    }).sort((a, b) => a.overlap - b.overlap || a.index - b.index);
+
+    quickEditComposer.style.transform = `translate(${candidates[0].left}px, ${candidates[0].top}px)`;
+    return;
+  }
+
+  const top = clamp(bottomRight.y + 10, 16, boardRect.height - composerRect.height - 88);
+  const left = clamp(objectCenter - composerRect.width / 2, 16, boardRect.width - composerRect.width - 16);
+  quickEditComposer.style.transform = `translate(${left}px, ${top}px)`;
+}
+
+function rectOverlapArea(a, b) {
+  const width = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
+  const height = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+  return width * height;
 }
 
 function imageSizeLabel(object) {

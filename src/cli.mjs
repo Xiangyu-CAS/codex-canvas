@@ -6,6 +6,7 @@ import { addImage, ensureProjectStore, readState } from "./store.mjs";
 import { createServer } from "./server.mjs";
 import { collectRecentImages } from "./collector.mjs";
 import { resolveProjectDir, runtimePathFor } from "./paths.mjs";
+import { checkRapidOcrAvailable, installRapidOcr } from "./ocr-setup.mjs";
 
 export async function main(args, context = {}) {
   const command = args[0] || "help";
@@ -111,6 +112,24 @@ export async function main(args, context = {}) {
     return;
   }
 
+  if (command === "setup-ocr") {
+    const result = await installRapidOcr({ optional: options.optional === true });
+    if (options.json) console.log(JSON.stringify(result, null, 2));
+    else console.log(result.message);
+    return;
+  }
+
+  if (command === "doctor-ocr") {
+    const result = await checkRapidOcrAvailable();
+    if (options.json) console.log(JSON.stringify(result, null, 2));
+    else {
+      console.log(result.available
+        ? `RapidOCR available: ${result.backend}${result.version ? ` ${result.version}` : ""}`
+        : `RapidOCR unavailable${result.error ? `: ${result.error}` : ""}`);
+    }
+    return;
+  }
+
   printHelp();
 }
 
@@ -178,6 +197,8 @@ Usage:
   agent-canvas import <image-path> [--project <dir>] [--prompt <text>] [--name <name>]
   agent-canvas collect [--project <dir>] [--from <dir,dir>] [--since-minutes 120] [--limit 20]
   agent-canvas status [--project <dir>] [--json]
+  agent-canvas setup-ocr [--optional] [--json]
+  agent-canvas doctor-ocr [--json]
 
 Commands:
   open      Start the local server in the background and print the canvas URL.
@@ -185,5 +206,7 @@ Commands:
   import    Copy an image into the project canvas and place it on the board.
   collect   Import recent image files from the project as a fallback auto-collector.
   status    Print current canvas runtime and object count.
+  setup-ocr Install RapidOCR for local Edit Text recognition.
+  doctor-ocr Check whether local RapidOCR is available.
 `.trim());
 }

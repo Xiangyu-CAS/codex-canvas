@@ -15,6 +15,7 @@ export async function collectRecentImages(projectDir, options = {}) {
   const roots = normalizeRoots(projectDir, options.roots);
   const sinceMs = Number.isFinite(options.sinceMs) ? options.sinceMs : Date.now() - 2 * 60 * 60 * 1000;
   const limit = Number.isFinite(options.limit) ? options.limit : 20;
+  const excludePaths = new Set((options.excludePaths || []).map((item) => path.resolve(item)));
   const state = await readState(projectDir);
   const knownSources = new Set(
     state.objects
@@ -30,6 +31,7 @@ export async function collectRecentImages(projectDir, options = {}) {
       candidates,
       knownHashes,
       knownSources,
+      excludePaths,
       projectDir,
       sinceMs
     });
@@ -193,6 +195,7 @@ async function walkImages(currentPath, context) {
     if (!imageExtensions.has(path.extname(entry.name).toLowerCase())) continue;
 
     const absolutePath = path.resolve(childPath);
+    if (context.excludePaths?.has(absolutePath)) continue;
     if (context.knownSources.has(absolutePath)) continue;
 
     let stat;
