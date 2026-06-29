@@ -236,7 +236,7 @@ function promptForAction({ action, outputDir, userPrompt }) {
   }
 
   return [
-    "Use the imagegen skill to edit the attached image.",
+    "Use the canvas-remove-bg skill and the imagegen skill to edit the attached image.",
     "Optimize for latency: do not inspect unrelated repository files, do not produce variants, and do not run broad filesystem searches before generation.",
     "",
     "Task: isolate the foreground subject for background removal.",

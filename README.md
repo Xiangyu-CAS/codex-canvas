@@ -30,12 +30,14 @@ Agent-Canvas 可以按四个模块设计：
 
 当前版本先实现最小可用闭环：
 
-- `agent-canvas open`：后台启动本地画布服务，并输出画布 URL。
+- `agent-canvas open`：后台启动或复用本地画布服务，并输出当前项目画布 URL。
 - `agent-canvas start`：前台启动本地画布服务，并默认开启项目图片自动收集。
 - `agent-canvas import <image-path>`：将本地图片复制到当前项目的 `canvas/assets/`，并插入画布。
 - `agent-canvas collect`：扫描项目内最近生成的图片并导入画布，作为 `imagegen` 输出路径不明确时的兜底收集器。
 - MCP 工具：提供 `open_canvas`、`add_image`、`collect_recent_images`、`canvas_status`，方便 Codex 在会话中打开画布和收录图片。
-- 画布 UI：提供 Lovart 风格的浅色无限画布、右侧聊天面板、底部浮动工具栏、图片选择态和浮动编辑工具栏。
+- 画布 UI：提供 Lovart 风格的浅色无限画布、底部浮动工具栏、图片选择态和浮动编辑工具栏。
+- 单端口多画布页：默认统一使用 `127.0.0.1:43217`。再次在新 Codex 会话或新项目中打开 `/canvas` 时，现有服务会注册新的项目画布，并返回带 `?project=<id>` 的 URL；左上角项目菜单可以在已注册画布页之间切换。
+- AI 图片操作：`Quick Edit`、`Remove BG`、`Edit Text` 通过稳定 action id 创建后台 job，由后端映射到对应 Agent-Canvas operation skill 和 Codex/ImageGen 执行，再把结果回填到源图右侧。`Edit Elements` 控件保留给后续实现。
 
 基础运行：
 
@@ -100,7 +102,7 @@ ln -sfn /Users/zhuxiangyu/workspace/agent-canvas ~/plugins/agent-canvas
 }
 ```
 
-安装后新建 Codex 会话，尝试输入 `/canvas`。当前本机已验证 `/canvas` 可以触发 `agent-canvas:canvas` skill，并在 Codex `in-app browser` 中打开 `http://127.0.0.1:43217/`。如果某些 Codex 版本没有把插件 skill 暴露为 slash command，可以使用 `$canvas` 或直接说“打开 Agent-Canvas 画布”。
+安装后新建 Codex 会话，尝试输入 `/canvas`。当前本机已验证 `/canvas` 可以触发 `agent-canvas:canvas` skill，并在 Codex `in-app browser` 中打开 `http://127.0.0.1:43217/?project=<id>`。如果某些 Codex 版本没有把插件 skill 暴露为 slash command，可以使用 `$canvas` 或直接说“打开 Agent-Canvas 画布”。
 
 ## 数据目录
 
@@ -110,8 +112,9 @@ ln -sfn /Users/zhuxiangyu/workspace/agent-canvas ~/plugins/agent-canvas
 canvas/
   agent-canvas.json
   assets/
+  jobs/
 ```
 
-`agent-canvas.json` 保存画布对象和选区状态，`assets/` 保存导入的图片文件。
+`agent-canvas.json` 保存画布对象和选区状态，`assets/` 保存导入的图片文件，`jobs/` 保存后台 AI 操作的日志、中间产物和输出。
 
 服务启动后会自动扫描项目内新产生的图片文件，并导入画布。自动扫描会忽略 `canvas/`、`node_modules/`、`.git/` 等目录；如果不希望自动收集，可以使用 `--no-auto-collect`。

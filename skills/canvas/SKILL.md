@@ -24,10 +24,10 @@ Use this skill to open the local Agent-Canvas board and keep generated images co
    - The collector scans both the active workspace and Codex's default generated image directory at `~/.codex/generated_images`.
    - Session-generated images are placed in a vertical column by generation batch. Multiple images from the same generation batch are aligned in one horizontal row.
    - Canvas-derived images, when collected with a `sourceObjectId`, are placed in a horizontal row to the right of the source image.
-4. `Quick Edit`, `Remove BG`, and `Edit Text` are implemented as background Agent-Canvas jobs. They create a canvas placeholder immediately, run Codex/ImageGen through the bundled Codex App CLI, and replace the placeholder with the collected output.
+4. `Quick Edit`, `Remove BG`, and `Edit Text` are implemented as background Agent-Canvas jobs. They create a canvas placeholder immediately, run Codex/ImageGen through the matching Agent-Canvas operation skill and bundled Codex App CLI, then replace the placeholder with the collected output.
 5. `Edit Text` is a two-step interaction: first run text recognition and show the formatted editable text list in the canvas UI; after the user changes one or more fields and clicks Run, call imagegen to produce the edited PNG.
    - Text recognition should try local RapidOCR first when available. If local OCR is unavailable, fails, or returns no text, fall back to Codex vision recognition.
-6. If the user asks for `Edit Elements`, `Multi-Angles`, `Move Object`, or other toolbar operations that do not yet have a job implementation, explain briefly that the control exists but the underlying image operation is not implemented yet.
+6. If the user asks for `Edit Elements`, explain briefly that the control exists but the underlying image operation is intentionally reserved for a later implementation.
 
 ## Notes
 

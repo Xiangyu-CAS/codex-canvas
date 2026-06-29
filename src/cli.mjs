@@ -27,30 +27,28 @@ export async function main(args, context = {}) {
 
   if (command === "open") {
     await ensureProjectStore(projectDir);
-    const runtime = await readRuntime(projectDir);
-    if (runtime && await isAlive(runtime.url)) {
-      console.log(runtime.url);
-      return;
-    }
-
     const port = Number(options.port || process.env.AGENT_CANVAS_PORT || 43217);
     const host = options.host || process.env.AGENT_CANVAS_HOST || "127.0.0.1";
     const defaultUrl = `http://${host}:${port}/`;
-    if (await isAlive(defaultUrl)) {
-      await writeRuntime(projectDir, {
-        url: defaultUrl,
-        pid: null,
-        projectDir,
-        startedAt: new Date().toISOString(),
-        reused: true
-      });
-      console.log(defaultUrl);
+    const autoCollect = options["no-auto-collect"] !== true;
+    const runtime = await readRuntime(projectDir);
+    if (runtime && await isAgentCanvasAlive(runtime.url)) {
+      const registered = await registerRemoteProject(runtime.url, projectDir, { autoCollect });
+      await writeRuntime(projectDir, registered.runtime);
+      console.log(registered.url);
+      return;
+    }
+
+    if (await isAgentCanvasAlive(defaultUrl)) {
+      const registered = await registerRemoteProject(defaultUrl, projectDir, { autoCollect });
+      await writeRuntime(projectDir, registered.runtime);
+      console.log(registered.url);
       return;
     }
 
     const entrypoint = context.entrypoint || fileURLToPath(import.meta.url);
     const startArgs = [entrypoint, "start", "--project", projectDir, "--host", host, "--port", String(port)];
-    if (options["no-auto-collect"] === true) startArgs.push("--no-auto-collect");
+    if (!autoCollect) startArgs.push("--no-auto-collect");
     const child = spawn(process.execPath, startArgs, {
       cwd: projectDir,
       detached: true,
@@ -172,19 +170,44 @@ async function waitForRuntime(projectDir, timeoutMs) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const runtime = await readRuntime(projectDir);
-    if (runtime?.url && await isAlive(runtime.url)) return runtime.url;
+    if (runtime?.url && await isAgentCanvasAlive(runtime.url)) return runtime.url;
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
   throw new Error("Agent-Canvas server did not start in time");
 }
 
-async function isAlive(url) {
+async function isAgentCanvasAlive(url) {
   try {
-    const response = await fetch(new URL("/api/state", url));
+    const response = await fetch(new URL("/api/projects", url));
     return response.ok;
   } catch {
     return false;
   }
+}
+
+async function registerRemoteProject(baseUrl, projectDir, { autoCollect = true } = {}) {
+  const response = await fetch(new URL("/api/projects", baseUrl), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ projectDir, autoCollect })
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || "Agent-Canvas server did not accept the project registration.");
+  }
+  const project = payload.project || {};
+  return {
+    url: payload.url,
+    runtime: {
+      url: payload.url,
+      pid: null,
+      projectDir,
+      projectId: project.id || null,
+      startedAt: new Date().toISOString(),
+      autoCollect,
+      reused: true
+    }
+  };
 }
 
 function printHelp() {

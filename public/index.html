@@ -18,6 +18,7 @@
               <span class="icon icon-chevron" aria-hidden="true"></span>
             </button>
           </header>
+          <div id="projectMenu" class="project-menu" hidden></div>
 
           <button id="settingsButton" class="settings-button" title="Settings" aria-label="Settings">
             <svg class="settings-gear" viewBox="0 0 24 24" aria-hidden="true">
@@ -102,32 +103,6 @@
                 </svg>
                 <span>Edit Text</span>
               </button>
-              <button class="overflow-action" data-action="multi-angles" data-tooltip="Multi-Angles" title="Multi-Angles" aria-label="Multi-Angles">
-                <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" />
-                  <path d="m3.3 7 8.7 5 8.7-5" />
-                  <path d="M12 22V12" />
-                </svg>
-                <span>Multi-Angles</span>
-              </button>
-              <button class="overflow-action" data-action="move-object" data-tooltip="Move Object" title="Move Object" aria-label="Move Object">
-                <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M12 2v20" />
-                  <path d="m15 19-3 3-3-3" />
-                  <path d="m19 9 3 3-3 3" />
-                  <path d="M2 12h20" />
-                  <path d="m5 9-3 3 3 3" />
-                  <path d="m9 5 3-3 3 3" />
-                </svg>
-                <span>Move Object</span>
-              </button>
-              <button class="icon-only more-action" data-action="more" data-tooltip="More" title="More" aria-label="More">
-                <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
-                  <circle cx="12" cy="12" r="1" />
-                  <circle cx="19" cy="12" r="1" />
-                  <circle cx="5" cy="12" r="1" />
-                </svg>
-              </button>
               <button class="icon-only" data-action="download" data-tooltip="Download" title="Download" aria-label="Download">
                 <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M12 15V3" />
@@ -136,27 +111,7 @@
                 </svg>
               </button>
             </div>
-            <div id="selectionMoreMenu" class="selection-more-menu" hidden>
-              <button data-action="multi-angles">
-                <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" />
-                  <path d="m3.3 7 8.7 5 8.7-5" />
-                  <path d="M12 22V12" />
-                </svg>
-                <span>Multi-Angles</span>
-              </button>
-              <button data-action="move-object">
-                <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M12 2v20" />
-                  <path d="m15 19-3 3-3-3" />
-                  <path d="m19 9 3 3-3 3" />
-                  <path d="M2 12h20" />
-                  <path d="m5 9-3 3 3 3" />
-                  <path d="m9 5 3-3 3 3" />
-                </svg>
-                <span>Move Object</span>
-              </button>
-            </div>
+            <div id="selectionMoreMenu" class="selection-more-menu" hidden></div>
             <form id="quickEditComposer" class="quick-edit-composer" hidden>
               <div id="editTextPanel" class="edit-text-panel" hidden>
                 <div class="edit-text-title">Edit Text</div>

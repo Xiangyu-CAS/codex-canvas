@@ -4,6 +4,7 @@ const objectLayer = document.querySelector("#objects");
 const emptyState = document.querySelector("#emptyState");
 const projectTitle = document.querySelector("#projectTitle");
 const projectOptionsButton = document.querySelector(".project-header button");
+const projectMenu = document.querySelector("#projectMenu");
 const settingsButton = document.querySelector("#settingsButton");
 const settingsMenu = document.querySelector("#settingsMenu");
 const toolbar = document.querySelector("#selectionToolbar");
@@ -26,6 +27,8 @@ const uploadMaxDisplaySize = 420;
 const languageStorageKey = "agentCanvasLanguage";
 const toolColorStorageKey = "agentCanvasToolColor";
 const toolColors = ["#202124", "#d93025", "#f9ab00", "#188038", "#1a73e8", "#9334e6", "#ffffff"];
+let currentProjectId = new URLSearchParams(window.location.search).get("project") || "";
+let registeredProjects = [];
 
 const translations = {
   en: {
@@ -35,6 +38,8 @@ const translations = {
     settings: "Settings",
     language: "Language",
     projectOptions: "Project options",
+    switchCanvas: "Switch canvas",
+    currentCanvas: "Current",
     textPlaceholder: "Text",
     placeholderSuffix: "is a placeholder in this milestone.",
     quickEditPlaceholder: "Describe your edit here",
@@ -60,9 +65,6 @@ const translations = {
       "eraser": "Eraser",
       "edit-elements": "Edit Elements",
       "edit-text": "Edit Text",
-      "multi-angles": "Multi-Angles",
-      "move-object": "Move Object",
-      "more": "More",
       "download": "Download"
     },
     actionNames: {
@@ -72,9 +74,6 @@ const translations = {
       "eraser": "Eraser",
       "edit-elements": "Edit Elements",
       "edit-text": "Edit Text",
-      "multi-angles": "Multi-Angles",
-      "move-object": "Move Object",
-      "more": "More",
       "download": "Download"
     },
     tools: {
@@ -102,6 +101,8 @@ const translations = {
     settings: "设置",
     language: "语言",
     projectOptions: "项目选项",
+    switchCanvas: "切换画布",
+    currentCanvas: "当前",
     textPlaceholder: "文字",
     placeholderSuffix: "在当前版本中还是占位功能。",
     quickEditPlaceholder: "描述你想怎么改这张图",
@@ -127,9 +128,6 @@ const translations = {
       "eraser": "橡皮工具",
       "edit-elements": "编辑元素",
       "edit-text": "编辑文字",
-      "multi-angles": "多角度",
-      "move-object": "移动对象",
-      "more": "更多",
       "download": "下载"
     },
     actionNames: {
@@ -139,9 +137,6 @@ const translations = {
       "eraser": "橡皮工具",
       "edit-elements": "编辑元素",
       "edit-text": "编辑文字",
-      "multi-angles": "多角度",
-      "move-object": "移动对象",
-      "more": "更多",
       "download": "下载"
     },
     tools: {
@@ -186,6 +181,7 @@ const runningJobs = new Map();
 
 applyLanguage();
 renderColorPalette();
+await loadProjects();
 await loadState();
 setInterval(loadState, 2000);
 
@@ -204,7 +200,7 @@ projectTitle.addEventListener("blur", saveProjectTitle);
 
 projectOptionsButton?.addEventListener("click", (event) => {
   event.stopPropagation();
-  showToast(`${t("projectOptions")} ${t("placeholderSuffix")}`);
+  toggleProjectMenu();
 });
 
 settingsButton.addEventListener("click", (event) => {
@@ -282,6 +278,10 @@ document.addEventListener("click", (event) => {
       startImageJob(action);
       return;
     }
+    if (action === "download") {
+      downloadSelectedImage();
+      return;
+    }
     showToast(`${labelAction(action)} ${t("placeholderSuffix")}`);
   }
 });
@@ -324,6 +324,9 @@ document.addEventListener("pointerdown", (event) => {
     settingsMenu.hidden = true;
     settingsMenu.classList.remove("language-open");
     settingsMenu.querySelector("[data-settings-row='language']")?.classList.remove("active");
+  }
+  if (!event.target.closest("#projectMenu, .project-header button")) {
+    projectMenu.hidden = true;
   }
   if (isSettingsEvent) return;
   if (!selectedId) return;
@@ -370,7 +373,7 @@ board.addEventListener("wheel", (event) => {
 
 async function loadState() {
   if (drag || resize || isComposerActive()) return;
-  const response = await fetch("/api/state");
+  const response = await fetch(apiPath("/api/state"));
   state = await response.json();
   if (!hasUserSelection || !state.objects.some((object) => object.id === selectedId)) {
     selectedId = null;
@@ -378,6 +381,69 @@ async function loadState() {
   }
   state.selection = selectedId;
   render();
+}
+
+async function loadProjects() {
+  const response = await fetch("/api/projects");
+  const payload = await response.json();
+  registeredProjects = Array.isArray(payload.projects) ? payload.projects : [];
+  if (!currentProjectId && registeredProjects.length > 0) {
+    currentProjectId = registeredProjects[0].id;
+    const url = new URL(window.location.href);
+    url.searchParams.set("project", currentProjectId);
+    window.history.replaceState(null, "", `${url.pathname}${url.search}`);
+  }
+  renderProjectMenu();
+}
+
+async function toggleProjectMenu() {
+  if (!projectMenu) return;
+  if (projectMenu.hidden) {
+    await loadProjects().catch(() => {});
+    projectMenu.hidden = false;
+  } else {
+    projectMenu.hidden = true;
+  }
+}
+
+function renderProjectMenu() {
+  if (!projectMenu) return;
+  projectMenu.replaceChildren();
+
+  const title = document.createElement("div");
+  title.className = "project-menu-title";
+  title.textContent = t("switchCanvas");
+  projectMenu.append(title);
+
+  for (const project of registeredProjects) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.projectId = project.id;
+    button.className = project.id === currentProjectId ? "active" : "";
+
+    const name = document.createElement("span");
+    name.className = "project-menu-name";
+    name.textContent = project.title || basename(project.projectDir) || project.id;
+    button.append(name);
+
+    const pathLabel = document.createElement("span");
+    pathLabel.className = "project-menu-path";
+    pathLabel.textContent = project.id === currentProjectId ? t("currentCanvas") : project.projectDir;
+    button.append(pathLabel);
+
+    button.addEventListener("click", () => switchProject(project.id));
+    projectMenu.append(button);
+  }
+}
+
+function switchProject(projectId) {
+  if (!projectId || projectId === currentProjectId) {
+    projectMenu.hidden = true;
+    return;
+  }
+  const url = new URL(window.location.href);
+  url.searchParams.set("project", projectId);
+  window.location.href = `${url.pathname}${url.search}`;
 }
 
 function render() {
@@ -414,7 +480,7 @@ function render() {
       element.append(renderJobObject(object));
     } else {
       const image = document.createElement("img");
-      image.src = object.src;
+      image.src = assetUrl(object.src);
       image.alt = object.name || "Canvas image";
       image.draggable = false;
       element.append(image);
@@ -452,7 +518,7 @@ function render() {
         hasUserSelection = true;
         if (state) state.selection = object.id;
         frameSelectedImageForViewing(object);
-        fetch("/api/selection", {
+        fetch(apiPath("/api/selection"), {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ selection: object.id })
@@ -527,7 +593,7 @@ function renderJobObject(object) {
   if (object.src) {
     const image = document.createElement("img");
     image.className = "job-preview-image";
-    image.src = object.src;
+    image.src = assetUrl(object.src);
     image.alt = "";
     image.draggable = false;
     shell.append(image);
@@ -589,7 +655,7 @@ function startDrag(event, object) {
     objectY: object.y
   };
   updateSelectionUi();
-  fetch("/api/selection", {
+  fetch(apiPath("/api/selection"), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ selection: object.id })
@@ -628,7 +694,7 @@ async function endDrag(event) {
   }
   drag = null;
   if (object) {
-    await fetch(`/api/objects/${object.id}`, {
+    await fetch(apiPath(`/api/objects/${object.id}`), {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ x: object.x, y: object.y })
@@ -659,7 +725,7 @@ function startResize(event, object, direction) {
     anchorX: direction.includes("w") ? object.x + object.width : object.x,
     anchorY: direction.includes("n") ? object.y + object.height : object.y
   };
-  fetch("/api/selection", {
+  fetch(apiPath("/api/selection"), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ selection: object.id })
@@ -698,7 +764,7 @@ async function endResize() {
   resize.element?.classList.remove("resizing");
   resize = null;
   if (object) {
-    await fetch(`/api/objects/${object.id}`, {
+    await fetch(apiPath(`/api/objects/${object.id}`), {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ x: object.x, y: object.y, width: object.width, height: object.height })
@@ -766,7 +832,7 @@ async function selectObject(id, { fromUser = false, renderNow = true } = {}) {
   if (state) state.selection = id;
   if (renderNow) render();
   else updateSelectionUi();
-  await fetch("/api/selection", {
+  await fetch(apiPath("/api/selection"), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ selection: id })
@@ -910,7 +976,7 @@ async function createTextObject(event) {
 }
 
 async function createObject(payload) {
-  const response = await fetch("/api/objects", {
+  const response = await fetch(apiPath("/api/objects"), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload)
@@ -930,7 +996,7 @@ async function deleteSelectedObject() {
   state.objects = state.objects.filter((object) => object.id !== id);
   state.selection = null;
   render();
-  await fetch(`/api/objects/${id}`, { method: "DELETE" }).catch(() => {});
+  await fetch(apiPath(`/api/objects/${id}`), { method: "DELETE" }).catch(() => {});
 }
 
 async function uploadImageFiles(files) {
@@ -945,7 +1011,7 @@ async function uploadImageFiles(files) {
       const position = uploadPosition(displaySize, nextX);
       nextX = position.x + displaySize.width + 72;
 
-      const response = await fetch("/api/images", {
+      const response = await fetch(apiPath("/api/images"), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -1019,7 +1085,7 @@ async function startImageJob(action, options = {}) {
 
   showToast(`${labelAction(action)} ${t("jobStarted")}`);
   try {
-    const response = await fetch("/api/jobs", {
+    const response = await fetch(apiPath("/api/jobs"), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -1130,7 +1196,7 @@ async function submitEditText() {
   ].join("\n");
 
   try {
-    const response = await fetch(`/api/text-recognition/${sessionId}/run`, {
+    const response = await fetch(apiPath(`/api/text-recognition/${sessionId}/run`), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ prompt, changes })
@@ -1174,7 +1240,7 @@ async function startTextRecognition(objectId) {
   renderEditTextItems("loading");
 
   try {
-    const response = await fetch("/api/text-recognition", {
+    const response = await fetch(apiPath("/api/text-recognition"), {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ objectId })
@@ -1194,7 +1260,7 @@ function pollTextRecognitionJob(jobId) {
   const tick = async () => {
     if (quickEditAction !== "edit-text" || activeTextRecognitionId !== jobId) return;
     try {
-      const response = await fetch(`/api/text-recognition/${jobId}`);
+      const response = await fetch(apiPath(`/api/text-recognition/${jobId}`));
       const job = await response.json();
       if (!response.ok) throw new Error(job.error || "Text recognition request failed.");
       if (job.stage === "ready") {
@@ -1224,7 +1290,7 @@ function pollTextRecognitionJob(jobId) {
 function pollEditTextSession(jobId) {
   const tick = async () => {
     try {
-      const response = await fetch(`/api/text-recognition/${jobId}`);
+      const response = await fetch(apiPath(`/api/text-recognition/${jobId}`));
       const job = await response.json();
       if (!response.ok) throw new Error(job.error || "Edit Text status request failed.");
       if (job.status === "done") {
@@ -1302,7 +1368,7 @@ function pollImageJob(jobId) {
   window.clearTimeout(runningJobs.get(jobId));
   const tick = async () => {
     try {
-      const response = await fetch(`/api/jobs/${jobId}`);
+      const response = await fetch(apiPath(`/api/jobs/${jobId}`));
       const job = await response.json();
       if (!response.ok) throw new Error(job.error || "Job status request failed.");
       if (job.status === "done") {
@@ -1330,7 +1396,7 @@ async function saveTextObject(id, text) {
   if (!object) return;
   const nextText = text.trim() || t("textPlaceholder");
   object.text = nextText;
-  await fetch(`/api/objects/${id}`, {
+  await fetch(apiPath(`/api/objects/${id}`), {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ text: nextText })
@@ -1433,7 +1499,7 @@ async function setActiveColor(color) {
 }
 
 async function patchObjectColor(id, patch) {
-  await fetch(`/api/objects/${id}`, {
+  await fetch(apiPath(`/api/objects/${id}`), {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(patch)
@@ -1479,6 +1545,7 @@ function applyLanguage() {
   settingsMenu.querySelector("[data-settings-row='language']")?.setAttribute("aria-label", t("language"));
   const currentLanguage = settingsMenu.querySelector("[data-language-current]");
   if (currentLanguage) currentLanguage.textContent = language === "zh" ? "简体中文" : "English";
+  renderProjectMenu();
 
   settingsMenu.querySelectorAll("[data-language]").forEach((button) => {
     const isSelected = button.dataset.language === language;
@@ -1600,7 +1667,7 @@ function scheduleViewportSave() {
 async function saveViewport() {
   if (!state) return;
   state.viewport = viewport;
-  await fetch("/api/state", {
+  await fetch(apiPath("/api/state"), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ viewport })
@@ -1619,7 +1686,7 @@ async function saveProjectTitle() {
   const title = projectTitle.value.trim() || "Untitled";
   projectTitle.value = title;
   state.title = title;
-  await fetch("/api/state", {
+  await fetch(apiPath("/api/state"), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ title })
@@ -1740,6 +1807,47 @@ function screenToWorld(x, y) {
 
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
+}
+
+function apiPath(pathname) {
+  const url = new URL(pathname, window.location.origin);
+  if (currentProjectId) url.searchParams.set("project", currentProjectId);
+  return `${url.pathname}${url.search}`;
+}
+
+function assetUrl(src) {
+  if (!src) return "";
+  try {
+    const url = new URL(src, window.location.origin);
+    if (url.origin === window.location.origin && url.pathname.startsWith("/assets/") && currentProjectId) {
+      url.searchParams.set("project", currentProjectId);
+      return `${url.pathname}${url.search}`;
+    }
+  } catch {
+    return src;
+  }
+  return src;
+}
+
+function basename(filePath) {
+  return String(filePath || "").split(/[\\/]/).filter(Boolean).at(-1) || "";
+}
+
+function downloadSelectedImage() {
+  const object = state.objects.find((item) => item.id === selectedId);
+  if (!object || (object.type || "image") !== "image" || !object.src) return;
+  const link = document.createElement("a");
+  link.href = assetUrl(object.src);
+  link.download = downloadName(object);
+  document.body.append(link);
+  link.click();
+  link.remove();
+}
+
+function downloadName(object) {
+  const name = String(object.name || "canvas-image").trim() || "canvas-image";
+  const hasExt = /\.[a-z0-9]{2,5}$/i.test(name);
+  return hasExt ? name : `${name}.png`;
 }
 
 function updateMoreMenuPosition() {
