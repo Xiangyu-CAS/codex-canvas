@@ -29,6 +29,7 @@
     "start": "node ./bin/agent-canvas.mjs start",
     "validate": "node ./bin/agent-canvas.mjs status --json",
     "smoke": "node ./scripts/smoke.mjs",
+    "smoke:visual": "node ./scripts/visual-smoke.mjs",
     "test": "npm run smoke"
   },
   "keywords": [

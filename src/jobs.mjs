@@ -1164,6 +1164,13 @@ async function placeImportedElementLayers(projectDir, job) {
   await reorderLayerGroupObjects(projectDir, storeOptions, groupId);
 }
 
+export async function placeImportedElementLayersForTest(projectDir, job) {
+  if (process.env.AGENT_CANVAS_TEST_HELPERS !== "1") {
+    throw new Error("Edit Elements test helpers are disabled.");
+  }
+  return placeImportedElementLayers(projectDir, job);
+}
+
 async function readElementManifest(job) {
   try {
     return JSON.parse(await fs.readFile(path.join(job.outputDir, "elements", "elements-manifest.json"), "utf8"));

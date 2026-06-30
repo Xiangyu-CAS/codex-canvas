@@ -71,7 +71,8 @@ async function handleRequest(request, response, context) {
 
   if (request.method === "POST" && pathname === "/api/projects") {
     const body = await readJson(request, context.registry);
-    const project = await registerProject(context.registry, body.projectDir, {
+    const projectDir = requireHttpProjectDir(body.projectDir);
+    const project = await registerProject(context.registry, projectDir, {
       autoCollect: body.autoCollect !== false,
       chatThreadId: body.chatThreadId || body.threadId || null
     });
@@ -267,6 +268,15 @@ function formatBytes(bytes) {
   if (bytes >= 1024 * 1024) return `${Math.round(bytes / (1024 * 1024))} MiB`;
   if (bytes >= 1024) return `${Math.round(bytes / 1024)} KiB`;
   return `${bytes} bytes`;
+}
+
+function requireHttpProjectDir(projectDir) {
+  if (typeof projectDir !== "string" || projectDir.length === 0 || !path.isAbsolute(projectDir)) {
+    const error = new Error("POST /api/projects requires projectDir to be a non-empty absolute path.");
+    error.statusCode = 400;
+    throw error;
+  }
+  return projectDir;
 }
 
 async function registerProject(registry, projectDir, { autoCollect = true, chatThreadId = null } = {}) {

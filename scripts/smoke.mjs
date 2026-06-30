@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { sendImageToBoundChat } from "../src/codex-chat.mjs";
+import { placeImportedElementLayersForTest } from "../src/jobs.mjs";
 import { checkImageProcessingDepsAvailable } from "../src/ocr-setup.mjs";
 import { assetsDirFor } from "../src/paths.mjs";
 import { createServer } from "../src/server.mjs";
@@ -20,6 +21,7 @@ async function main() {
     ["object patch sanitization", testObjectPatchSanitization],
     ["http object patch sanitization", testHttpObjectPatchSanitization],
     ["http json boundaries", testHttpJsonBoundaries],
+    ["http project registration boundaries", testHttpProjectRegistrationBoundaries],
     ["frontend action contract", testFrontendActionContract],
     ["thread migration asset paths", testThreadMigrationAssetPaths],
     ["mcp canvas status", testMcpCanvasStatus],
@@ -143,6 +145,36 @@ async function testHttpJsonBoundaries() {
     if (!String(tooLargeBody.error || "").includes("limit")) {
       throw new Error("oversized JSON should describe the body limit.");
     }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+async function testHttpProjectRegistrationBoundaries() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-http-projects-"));
+  const { server, url } = await createServer({
+    projectDir,
+    port: 0,
+    autoCollect: false
+  });
+  const base = url.replace(/\?.*/, "");
+  try {
+    const missing = await postJson(`${base}api/projects`, {});
+    assertEqual(missing.status, 400, "HTTP project registration should reject missing projectDir");
+
+    const empty = await postJson(`${base}api/projects`, { projectDir: "" });
+    assertEqual(empty.status, 400, "HTTP project registration should reject empty projectDir");
+
+    const relative = await postJson(`${base}api/projects`, { projectDir: "relative-project" });
+    assertEqual(relative.status, 400, "HTTP project registration should reject relative projectDir");
+
+    const registeredDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-http-projects-registered-"));
+    const registered = await postJson(`${base}api/projects`, {
+      projectDir: registeredDir,
+      autoCollect: false
+    });
+    assertEqual(registered.status, 201, "HTTP project registration should accept absolute projectDir");
+    assertEqual(registered.body.project?.projectDir, registeredDir, "HTTP project registration should keep the supplied absolute projectDir");
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
@@ -446,15 +478,19 @@ async function testEditElementsScripts() {
     "from PIL import Image, ImageDraw",
     "import sys",
     "root = Path(sys.argv[1])",
-    "source = Image.new('RGBA', (32, 32), (255, 255, 255, 255))",
+    "source = Image.new('RGBA', (48, 32), (255, 255, 255, 255))",
     "draw = ImageDraw.Draw(source)",
-    "draw.rectangle((8, 8, 18, 18), fill=(255, 0, 0, 255))",
+    "draw.rectangle((6, 6, 18, 20), fill=(255, 0, 0, 255))",
+    "draw.rectangle((28, 8, 40, 22), fill=(0, 92, 255, 255))",
+    "source.putpixel((0, 0), (255, 255, 255, 0))",
     "source.save(root / 'source.png')",
-    "seg = Image.new('RGB', (32, 32), (0, 0, 0))",
+    "seg = Image.new('RGB', (48, 32), (0, 0, 0))",
     "draw = ImageDraw.Draw(seg)",
-    "draw.rectangle((8, 8, 18, 18), fill=(255, 0, 102))",
+    "draw.rectangle((6, 6, 12, 20), fill=(255, 0, 102))",
+    "draw.rectangle((13, 6, 18, 20), fill=(250, 0, 110))",
+    "draw.rectangle((28, 8, 40, 22), fill=(0, 96, 255))",
     "seg.save(root / 'seg.png')",
-    "completed = Image.new('RGBA', (32, 32), (240, 240, 240, 255))",
+    "completed = Image.new('RGBA', (24, 16), (20, 80, 140, 160))",
     "completed.save(root / 'completed.png')"
   ].join("\n"));
 
@@ -466,6 +502,10 @@ async function testEditElementsScripts() {
     "--out-dir", path.join(tmp, "layers"),
     "--max-layers", "8",
     "--palette-size", "8",
+    "--min-area-px", "20",
+    "--pad", "0",
+    "--edge-feather", "0",
+    "--write-reconstruction",
     "--force"
   ]);
   await runPython([
@@ -477,8 +517,169 @@ async function testEditElementsScripts() {
   ]);
 
   const manifest = JSON.parse(await fs.readFile(path.join(tmp, "layers", "elements-manifest.json"), "utf8"));
-  assertEqual(manifest.layers.length, 2, "split_elements should export foreground and background layers");
-  await fs.access(path.join(tmp, "background.png"));
+  assertEqual(manifest.sourceSize.width, 48, "split_elements manifest should preserve source width");
+  assertEqual(manifest.sourceSize.height, 32, "split_elements manifest should preserve source height");
+  assertEqual(manifest.layers.length, 3, "split_elements should export two foreground layers plus residual background");
+  assertEqual(manifest.exportedLayers, 3, "split_elements exported layer count should match manifest layers");
+  assertEqual(manifest.backgroundLayer, true, "split_elements should record that a residual background layer was exported");
+  const backgroundLayer = manifest.layers.find((layer) => layer.kind === "background");
+  if (!backgroundLayer) throw new Error("split_elements should include a residual background layer.");
+  assertEqual(backgroundLayer.bbox.join(","), "0,0,48,32", "residual background should keep full-frame bounds when uncovered pixels span the canvas");
+  const objectLayers = manifest.layers.filter((layer) => layer.kind !== "background");
+  const redLayer = objectLayers.find((layer) => layer.bbox.join(",") === "6,6,19,21");
+  if (!redLayer) throw new Error("split_elements should merge nearby red segmentation colors into one object layer.");
+  const blueLayer = objectLayers.find((layer) => layer.bbox.join(",") === "28,8,41,23");
+  if (!blueLayer) throw new Error("split_elements should preserve the independent blue object layer.");
+  for (const layer of manifest.layers) {
+    await fs.access(layer.path);
+  }
+  if (!manifest.reconstruction?.reconstructionPath || manifest.reconstruction.coverageRatio < 0.99) {
+    throw new Error("split_elements reconstruction output should cover the source image.");
+  }
+
+  const preparedBackground = await inspectPreparedBackground(tmp);
+  assertEqual(preparedBackground.size, "48x32", "prepare_completed_background should resize completed backgrounds to source size");
+  assertEqual(preparedBackground.transparentAlpha, 0, "prepare_completed_background should preserve transparent source alpha");
+  assertEqual(preparedBackground.opaqueAlpha, 255, "prepare_completed_background should preserve opaque source alpha");
+  if (preparedBackground.opaqueRed <= 20 || preparedBackground.opaqueRed >= 255) {
+    throw new Error("prepare_completed_background should flatten translucent generated pixels against white.");
+  }
+
+  await assertRejects(
+    () => runPython([
+      path.join(process.cwd(), "scripts", "split_elements.py"),
+      "--source", path.join(tmp, "source.png"),
+      "--segmentation", path.join(tmp, "missing-segmentation.png"),
+      "--out-dir", path.join(tmp, "missing-layers")
+    ]),
+    "Python smoke step failed",
+    "split_elements should fail deterministically when the segmentation map is missing"
+  );
+
+  await testEditElementsLayerPlacement(tmp);
+}
+
+async function inspectPreparedBackground(tmp) {
+  const inspect = path.join(tmp, "inspect-background.py");
+  await fs.writeFile(inspect, [
+    "from pathlib import Path",
+    "from PIL import Image",
+    "import json, sys",
+    "root = Path(sys.argv[1])",
+    "image = Image.open(root / 'background.png').convert('RGBA')",
+    "transparent = image.getpixel((0, 0))",
+    "opaque = image.getpixel((10, 10))",
+    "payload = {",
+    "  'size': f'{image.width}x{image.height}',",
+    "  'transparentAlpha': transparent[3],",
+    "  'opaqueAlpha': opaque[3],",
+    "  'opaqueRed': opaque[0]",
+    "}",
+    "(root / 'inspect-background.json').write_text(json.dumps(payload), encoding='utf-8')"
+  ].join("\n"));
+  await runPython([inspect, tmp]);
+  return JSON.parse(await fs.readFile(path.join(tmp, "inspect-background.json"), "utf8"));
+}
+
+async function testEditElementsLayerPlacement(tmp) {
+  const previous = process.env.AGENT_CANVAS_TEST_HELPERS;
+  process.env.AGENT_CANVAS_TEST_HELPERS = "1";
+  try {
+    const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-elements-place-"));
+    const outputDir = path.join(projectDir, "job-output");
+    const elementsDir = path.join(outputDir, "elements");
+    await fs.mkdir(elementsDir, { recursive: true });
+
+    const backgroundPath = path.join(elementsDir, "element-01-background.png");
+    const objectPath = path.join(elementsDir, "element-02-object.png");
+    await fs.copyFile(path.join(tmp, "background.png"), backgroundPath);
+    await fs.writeFile(objectPath, Buffer.from(pngOne, "base64"));
+
+    const source = await addImage(projectDir, {
+      path: path.join(tmp, "source.png"),
+      name: "source.png",
+      x: 20,
+      y: 30,
+      width: 96,
+      height: 64
+    });
+    const placeholder = await addImage(projectDir, {
+      path: path.join(tmp, "source.png"),
+      name: "placeholder.png",
+      x: 300,
+      y: 200,
+      width: 192,
+      height: 128
+    });
+    const topLayer = await addImage(projectDir, {
+      path: objectPath,
+      name: "element-02-object.png"
+    });
+    const bottomLayer = await addImage(projectDir, {
+      path: backgroundPath,
+      name: "element-01-background.png"
+    });
+
+    await fs.writeFile(path.join(elementsDir, "elements-manifest.json"), `${JSON.stringify({
+      sourceSize: { width: 96, height: 64 },
+      backgroundCompleted: true,
+      layers: [
+        {
+          index: 0,
+          kind: "background",
+          path: backgroundPath,
+          bbox: [0, 0, 96, 64],
+          areaPixels: 6144
+        },
+        {
+          index: 2,
+          kind: "object",
+          path: objectPath,
+          bbox: [10, 5, 30, 25],
+          areaPixels: 400
+        }
+      ]
+    }, null, 2)}\n`);
+
+    await placeImportedElementLayersForTest(projectDir, {
+      id: "placement-contract",
+      canvasId: null,
+      outputDir,
+      sourceObjectId: source.id,
+      placeholder,
+      placeholderId: placeholder.id,
+      imported: [topLayer, bottomLayer]
+    });
+
+    const state = await readState(projectDir);
+    if (state.objects.some((object) => object.id === placeholder.id)) {
+      throw new Error("Edit Elements placement should delete the job placeholder.");
+    }
+    const groupMembers = state.objects.filter((object) => object.layerGroupId === "layer_group_placement-contract");
+    assertEqual(groupMembers.length, 2, "Edit Elements placement should assign every imported layer to one group");
+    assertEqual(groupMembers[0].layerGroupKind, "background", "Edit Elements layer stack should place the background first");
+    assertEqual(groupMembers[1].layerGroupKind, "object", "Edit Elements layer stack should place object layers above the background");
+    assertEqual(state.selection, groupMembers[1].id, "Edit Elements placement should select the topmost group layer");
+    assertEqual(groupMembers[0].x, 300, "background layer should align to placeholder x");
+    assertEqual(groupMembers[0].y, 200, "background layer should align to placeholder y");
+    assertEqual(groupMembers[0].width, 192, "background layer should scale to placeholder width");
+    assertEqual(groupMembers[0].height, 128, "background layer should scale to placeholder height");
+    assertEqual(groupMembers[1].x, 320, "object layer x should scale from manifest bbox");
+    assertEqual(groupMembers[1].y, 210, "object layer y should scale from manifest bbox");
+    assertEqual(groupMembers[1].width, 40, "object layer width should scale from manifest bbox");
+    assertEqual(groupMembers[1].height, 40, "object layer height should scale from manifest bbox");
+    for (const member of groupMembers) {
+      assertEqual(member.layerGroupLocked, true, "Edit Elements grouped layers should start locked");
+      assertEqual(member.layerGroupSourceObjectId, source.id, "Edit Elements group metadata should retain source object id");
+      assertEqual(member.layerGroupOriginalX, 300, "Edit Elements group metadata should retain original placeholder x");
+      assertEqual(member.layerGroupOriginalY, 200, "Edit Elements group metadata should retain original placeholder y");
+      assertEqual(member.layerGroupOriginalWidth, 192, "Edit Elements group metadata should retain original placeholder width");
+      assertEqual(member.layerGroupOriginalHeight, 128, "Edit Elements group metadata should retain original placeholder height");
+    }
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_CANVAS_TEST_HELPERS;
+    else process.env.AGENT_CANVAS_TEST_HELPERS = previous;
+  }
 }
 
 async function postJson(url, body) {
