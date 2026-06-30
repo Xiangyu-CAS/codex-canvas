@@ -344,6 +344,10 @@ async function testHttpImageInputBoundaries() {
   const base = url.replace(/\?.*/, "");
   const search = new URL(url).search;
   try {
+    const noSource = await postJson(`${base}api/images${search}`, {});
+    assertEqual(noSource.status, 400, "HTTP image import should reject missing image sources");
+    assertEqual(noSource.body.error, "POST /api/images requires exactly one image input: path, url, or dataUrl.", "missing image sources should return a useful error");
+
     const missing = await postJson(`${base}api/images${search}`, {
       path: path.join(projectDir, "missing.png")
     });
@@ -361,6 +365,13 @@ async function testHttpImageInputBoundaries() {
     });
     assertEqual(invalidDataUrl.status, 400, "HTTP image import should reject malformed base64 data URLs");
     assertEqual(invalidDataUrl.body.error, "dataUrl must contain valid base64 image data", "malformed data URLs should return a useful error");
+
+    const ambiguous = await postJson(`${base}api/images${search}`, {
+      url: "https://example.invalid/image.png",
+      dataUrl: `data:image/png;base64,${pngOne}`
+    });
+    assertEqual(ambiguous.status, 400, "HTTP image import should reject ambiguous image sources");
+    assertEqual(ambiguous.body.error, "POST /api/images requires exactly one image input: path, url, or dataUrl.", "ambiguous image sources should return a useful error");
 
     const stateResponse = await fetch(`${base}api/state${search}`);
     const state = await stateResponse.json();
@@ -1596,6 +1607,18 @@ async function testChatTurnActionContract() {
       objectId: image.body.id
     });
     assertEqual(missingAction.status, 400, "chat turn should require stable send-to-chat action");
+
+    const remoteImage = await postJson(`${base}api/images${search}`, {
+      url: "https://example.invalid/chat.png",
+      name: "remote-chat.png"
+    });
+    assertEqual(remoteImage.status, 201, "remote image should be added before chat turn boundary check");
+    const remoteSent = await postJson(`${base}api/chat-turn${search}`, {
+      action: "send-to-chat",
+      objectId: remoteImage.body.id
+    });
+    assertEqual(remoteSent.status, 400, "chat turn should reject remote-only images before starting Codex");
+    assertEqual(remoteSent.body.error, "The selected image must be a local canvas asset before sending to chat.", "remote-only chat turn should return a useful error");
 
     const sent = await postJson(`${base}api/chat-turn${search}`, {
       action: "send-to-chat",

@@ -135,6 +135,7 @@ async function handleRequest(request, response, context) {
 
   if (request.method === "POST" && pathname === "/api/images") {
     const body = await readJson(request, context.registry);
+    requireSingleImageInput(body);
     return sendJson(response, 201, await addImage(projectDir, body, storeOptionsFor(project)));
   }
 
@@ -334,6 +335,14 @@ function requireHttpProjectDir(projectDir) {
     throw error;
   }
   return projectDir;
+}
+
+function requireSingleImageInput(body = {}) {
+  const present = ["path", "url", "dataUrl"].filter((field) => typeof body[field] === "string" && body[field].trim());
+  if (present.length === 1) return;
+  const error = new Error("POST /api/images requires exactly one image input: path, url, or dataUrl.");
+  error.statusCode = 400;
+  throw error;
 }
 
 async function registerProject(registry, projectDir, { autoCollect = true, chatThreadId = null, canvasId: explicitCanvasId = null, registeredAt = null } = {}) {
