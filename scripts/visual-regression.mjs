@@ -8,6 +8,7 @@ import { addImage } from "../src/store.mjs";
 import { createServer as createAgentCanvasServer } from "../src/server.mjs";
 
 const pngOne = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+const pngTwo = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFUlEQVR4nGO8Y6D6n4GBgYEJRIAwACHvAjSDKprFAAAAAElFTkSuQmCC";
 const baselineDir = path.join(process.cwd(), "scripts", "reference-screenshots");
 const updateBaselines = process.argv.includes("--update");
 const pixelThreshold = 0.012;
@@ -71,7 +72,7 @@ async function captureReferenceViewport(browser, viewport, screenshotCase) {
     height: viewport.name === "mobile" ? 180 : 240
   });
   await addImage(projectDir, {
-    dataUrl: `data:image/png;base64,${pngOne}`,
+    dataUrl: `data:image/png;base64,${pngTwo}`,
     name: "reference-version.png",
     prompt: "Reference product variant",
     sourceObjectId: source.id,
@@ -137,6 +138,7 @@ async function captureReferenceViewport(browser, viewport, screenshotCase) {
       await waitForHidden(page, ".prompt-history-panel", "discovery panel should close after annotation");
       await waitForSelectedCount(page, 2, "annotation should select the grouped versions");
       await waitForVisible(page, ".version-diff-overlay", "version annotation overlay should be visible");
+      await waitForVersionDiffHeatmap(page);
     } else {
       await page.locator(".prompt-history-button").click();
       await waitForVisible(page, ".prompt-history-panel:not([hidden])", "discovery panel should be visible");
@@ -387,6 +389,15 @@ async function waitForSelectedCount(page, count, message) {
     return document.querySelectorAll(".canvas-object.selected").length === count;
   }, count, { timeout: 5000 }).catch((error) => {
     throw new Error(`${message}: ${error.message}`);
+  });
+}
+
+async function waitForVersionDiffHeatmap(page) {
+  await page.waitForFunction(() => {
+    return [...document.querySelectorAll(".version-diff-heatmap")]
+      .some((canvas) => !canvas.hidden && Number(canvas.dataset.changedPixels || 0) > 0);
+  }, null, { timeout: 5000 }).catch((error) => {
+    throw new Error(`version pixel-diff heatmap should render changed pixels: ${error.message}`);
   });
 }
 

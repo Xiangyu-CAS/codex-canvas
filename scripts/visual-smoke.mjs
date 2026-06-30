@@ -8,6 +8,7 @@ import { addImage, updateObject } from "../src/store.mjs";
 import { createServer as createAgentCanvasServer } from "../src/server.mjs";
 
 const pngOne = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+const pngTwo = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFUlEQVR4nGO8Y6D6n4GBgYEJRIAwACHvAjSDKprFAAAAAElFTkSuQmCC";
 const expectedSingleImageActions = [
   "quick-edit",
   "remove-bg",
@@ -168,7 +169,7 @@ async function runViewportSmoke(browser, viewport) {
     height: viewport.name === "mobile" ? 140 : 160
   });
   const nextVersion = await addImage(projectDir, {
-    dataUrl: `data:image/png;base64,${pngOne}`,
+    dataUrl: `data:image/png;base64,${pngTwo}`,
     name: `${viewport.name}-visual-version-b.png`,
     prompt: `${viewport.name} product variant B`,
     sourceObjectId: image.id,
@@ -228,6 +229,7 @@ async function assertDiscoveryVersionBrowser(page, versionIds) {
   await page.locator(".version-group-overlay").first().click();
   await waitForHidden(page, ".prompt-history-panel", "discovery panel should close after annotating a version group");
   await waitForVisible(page, ".version-diff-overlay", "version annotation overlay should render");
+  await waitForVersionDiffHeatmap(page);
   await assertVersionDiffOverlay(page, versionIds);
   await assertVersionDiffOverlayFollowsDrag(page, versionIds);
   await clearVersionDiffOverlay(page);
@@ -248,6 +250,7 @@ async function assertVersionDiffOverlay(page, versionIds) {
   const snapshot = await page.evaluate((ids) => {
     const overlay = document.querySelector(".version-diff-overlay");
     const boxes = [...document.querySelectorAll(".version-diff-box")];
+    const heatmaps = [...document.querySelectorAll(".version-diff-heatmap")];
     const lines = [...document.querySelectorAll(".version-diff-connector line")];
     const selected = ids.map((id) => document.querySelector(`.canvas-object[data-id="${id}"]`)?.classList.contains("selected") || false);
     const rectSnapshot = (element) => {
@@ -263,6 +266,8 @@ async function assertVersionDiffOverlay(page, versionIds) {
     return {
       overlayRect: rectSnapshot(overlay),
       boxRects: boxes.map(rectSnapshot),
+      heatmapCount: heatmaps.length,
+      visibleHeatmapCount: heatmaps.filter((canvas) => !canvas.hidden && Number(canvas.dataset.changedPixels || 0) > 0).length,
       connectorLineCount: lines.length,
       overlayIds: (overlay?.dataset.versionDiffIds || "").split(",").filter(Boolean),
       labelText: overlay?.querySelector(".version-diff-label")?.textContent || "",
@@ -273,12 +278,23 @@ async function assertVersionDiffOverlay(page, versionIds) {
   assertRectVisible(snapshot.overlayRect, "version annotation overlay");
   assertDeepEqual([...snapshot.overlayIds].sort(), [...versionIds].sort(), "version annotation overlay should track the compared version ids");
   assert(snapshot.boxRects.length === versionIds.length, "version annotation overlay should draw one box for each compared version");
+  assert(snapshot.heatmapCount === versionIds.length - 1, "version annotation overlay should create a heatmap for each target version");
+  assert(snapshot.visibleHeatmapCount >= 1, "version annotation overlay should render at least one visible pixel-diff heatmap");
   assert(snapshot.connectorLineCount === versionIds.length - 1, "version annotation overlay should connect adjacent compared versions");
   for (const rect of snapshot.boxRects) {
     assertRectVisible(rect, "version annotation box");
   }
-  assert(snapshot.labelText.includes("Version review"), "version annotation overlay should include a review label");
+  assert(snapshot.labelText.includes("Pixel diff"), "version annotation overlay should include a pixel diff label");
   assert(snapshot.selected.every(Boolean), "version annotation overlay should keep all compared versions selected");
+}
+
+async function waitForVersionDiffHeatmap(page) {
+  await page.waitForFunction(() => {
+    return [...document.querySelectorAll(".version-diff-heatmap")]
+      .some((canvas) => !canvas.hidden && Number(canvas.dataset.changedPixels || 0) > 0);
+  }, null, { timeout: 5000 }).catch((error) => {
+    throw new Error(`version pixel-diff heatmap should render changed pixels: ${error.message}`);
+  });
 }
 
 async function assertVersionDiffOverlayFollowsDrag(page, versionIds) {
@@ -292,6 +308,7 @@ async function assertVersionDiffOverlayFollowsDrag(page, versionIds) {
     const rect = overlay.getBoundingClientRect();
     return Math.abs(rect.left - before.x) > 8 || Math.abs(rect.top - before.y) > 8;
   }, before, { timeout: 5000 });
+  await waitForVersionDiffHeatmap(page);
   await assertVersionDiffOverlay(page, versionIds);
 }
 

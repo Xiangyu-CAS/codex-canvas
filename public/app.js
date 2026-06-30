@@ -63,8 +63,8 @@ const translations = {
     versionGroupPrompt: "Prompt",
     versionGroupCount: "objects",
     versionGroupCompare: "Compare",
-    versionGroupAnnotate: "Annotate",
-    versionDiffLabel: "Version review",
+    versionGroupAnnotate: "Diff",
+    versionDiffLabel: "Pixel diff",
     textPlaceholder: "Text",
     quickEditPlaceholder: "Describe your edit here",
     quickEditEmpty: "Describe the edit first.",
@@ -156,8 +156,8 @@ const translations = {
     versionGroupPrompt: "提示词",
     versionGroupCount: "个对象",
     versionGroupCompare: "比较",
-    versionGroupAnnotate: "标注",
-    versionDiffLabel: "版本复核",
+    versionGroupAnnotate: "差异",
+    versionDiffLabel: "像素差异",
     textPlaceholder: "文字",
     quickEditPlaceholder: "描述你想怎么改这张图",
     quickEditEmpty: "先描述你想怎么改。",
@@ -252,6 +252,7 @@ let promptHistorySearchTimer = null;
 let promptHistoryMode = "prompts";
 let versionBrowserGroups = [];
 let versionDiffOverlay = null;
+let versionDiffHeatmapToken = 0;
 
 initPromptHistoryUi();
 applyLanguage();
@@ -1348,6 +1349,7 @@ function renderVersionDiffOverlay() {
   element.style.top = `${bounds.y}px`;
   element.style.width = `${bounds.width}px`;
   element.style.height = `${bounds.height}px`;
+  const overlayIds = objects.map((object) => object.id);
 
   const connector = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   connector.classList.add("version-diff-connector");
@@ -1380,6 +1382,14 @@ function renderVersionDiffOverlay() {
     box.style.width = `${object.width}px`;
     box.style.height = `${object.height}px`;
 
+    if (index > 0 && (object.type || "image") === "image") {
+      const heatmap = document.createElement("canvas");
+      heatmap.className = "version-diff-heatmap";
+      heatmap.dataset.versionDiffSourceId = objects[0].id;
+      heatmap.dataset.versionDiffTargetId = object.id;
+      heatmap.setAttribute("aria-hidden", "true");
+      box.append(heatmap);
+    }
     const badge = document.createElement("span");
     badge.className = "version-diff-index";
     badge.textContent = String(index + 1);
@@ -1387,7 +1397,85 @@ function renderVersionDiffOverlay() {
     element.append(box);
   });
 
+  scheduleVersionDiffHeatmaps(overlayIds);
   return element;
+}
+
+function scheduleVersionDiffHeatmaps(ids) {
+  const token = ++versionDiffHeatmapToken;
+  window.requestAnimationFrame(() => {
+    populateVersionDiffHeatmaps(ids, token).catch(() => {});
+  });
+}
+
+async function populateVersionDiffHeatmaps(ids, token) {
+  if (!versionDiffOverlay || !sameIdSet(ids, versionDiffOverlay.ids || []) || token !== versionDiffHeatmapToken) return;
+  const source = state.objects.find((object) => object.id === ids[0]);
+  if (!source || (source.type || "image") !== "image") return;
+  const sourceImage = await loadDiffImage(source);
+  if (token !== versionDiffHeatmapToken) return;
+
+  const canvases = [...objectLayer.querySelectorAll(".version-diff-heatmap")];
+  for (const canvas of canvases) {
+    const target = state.objects.find((object) => object.id === canvas.dataset.versionDiffTargetId);
+    if (!target || (target.type || "image") !== "image") continue;
+    try {
+      const targetImage = await loadDiffImage(target);
+      if (token !== versionDiffHeatmapToken) return;
+      drawVersionDiffHeatmap(canvas, sourceImage, targetImage);
+    } catch {
+      canvas.hidden = true;
+    }
+  }
+}
+
+function loadDiffImage(object) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.decoding = "async";
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = assetUrl(object.src);
+    if (image.complete && image.naturalWidth > 0) resolve(image);
+  });
+}
+
+function drawVersionDiffHeatmap(canvas, sourceImage, targetImage) {
+  const width = Math.max(1, Math.min(192, targetImage.naturalWidth || sourceImage.naturalWidth || 1));
+  const height = Math.max(1, Math.min(192, targetImage.naturalHeight || sourceImage.naturalHeight || 1));
+  const sourceCanvas = document.createElement("canvas");
+  const targetCanvas = document.createElement("canvas");
+  sourceCanvas.width = targetCanvas.width = canvas.width = width;
+  sourceCanvas.height = targetCanvas.height = canvas.height = height;
+
+  const sourceContext = sourceCanvas.getContext("2d", { willReadFrequently: true });
+  const targetContext = targetCanvas.getContext("2d", { willReadFrequently: true });
+  const heatmapContext = canvas.getContext("2d");
+  sourceContext.drawImage(sourceImage, 0, 0, width, height);
+  targetContext.drawImage(targetImage, 0, 0, width, height);
+
+  const sourcePixels = sourceContext.getImageData(0, 0, width, height);
+  const targetPixels = targetContext.getImageData(0, 0, width, height);
+  const heatmapPixels = heatmapContext.createImageData(width, height);
+  let changedPixels = 0;
+  for (let index = 0; index < sourcePixels.data.length; index += 4) {
+    const delta = Math.abs(sourcePixels.data[index] - targetPixels.data[index])
+      + Math.abs(sourcePixels.data[index + 1] - targetPixels.data[index + 1])
+      + Math.abs(sourcePixels.data[index + 2] - targetPixels.data[index + 2])
+      + Math.abs(sourcePixels.data[index + 3] - targetPixels.data[index + 3]);
+    if (delta <= 28) continue;
+    changedPixels += 1;
+    const strength = Math.min(255, 88 + Math.round(delta / 3));
+    heatmapPixels.data[index] = 217;
+    heatmapPixels.data[index + 1] = delta > 240 ? 48 : 132;
+    heatmapPixels.data[index + 2] = 37;
+    heatmapPixels.data[index + 3] = strength;
+  }
+  heatmapContext.clearRect(0, 0, width, height);
+  heatmapContext.putImageData(heatmapPixels, 0, 0);
+  canvas.hidden = changedPixels === 0;
+  canvas.dataset.changedPixels = String(changedPixels);
+  canvas.dataset.changedRatio = String(changedPixels / Math.max(1, width * height));
 }
 
 function renderLayerGroupSelection(groupId) {
@@ -1606,6 +1694,7 @@ function moveDrag(event) {
 function updateVersionDiffOverlayElement() {
   const element = objectLayer.querySelector(".version-diff-overlay");
   if (!element) return;
+  versionDiffHeatmapToken += 1;
   const nextElement = renderVersionDiffOverlay();
   if (nextElement) element.replaceWith(nextElement);
   else element.remove();

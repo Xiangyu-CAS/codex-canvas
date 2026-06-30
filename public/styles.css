@@ -592,11 +592,23 @@ button {
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.86), 0 10px 26px rgba(26, 115, 232, 0.2);
 }
 
+.version-diff-heatmap {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  mix-blend-mode: multiply;
+  opacity: 0.78;
+  z-index: 0;
+}
+
 .version-diff-index {
   position: absolute;
   left: -9px;
   top: -9px;
   display: grid;
+  z-index: 1;
   width: 20px;
   height: 20px;
   place-items: center;
