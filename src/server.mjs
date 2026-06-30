@@ -27,7 +27,7 @@ const contentTypes = {
 const defaultMaxJsonBodyBytes = 32 * 1024 * 1024;
 
 export async function createServer({ projectDir, host = "127.0.0.1", port = 43217, autoCollect = true, chatThreadId = null, autoCollectIntervalMs = 5000, autoCollectWatchDebounceMs = 250, maxJsonBodyBytes = defaultMaxJsonBodyBytes, persistentRegistryPath = projectRegistryPath() } = {}) {
-  const registry = createProjectRegistry({ host, port, autoCollectIntervalMs, autoCollectWatchDebounceMs, maxJsonBodyBytes, persistentRegistryPath });
+  const registry = createProjectRegistry({ host, port, autoCollect, autoCollectIntervalMs, autoCollectWatchDebounceMs, maxJsonBodyBytes, persistentRegistryPath });
   const initialProject = await registerProject(registry, projectDir, { autoCollect, chatThreadId });
   await restorePersistedProjects(registry);
 
@@ -283,10 +283,11 @@ function sendJson(response, status, body) {
   response.end(JSON.stringify(body));
 }
 
-function createProjectRegistry({ host, port, autoCollectIntervalMs, autoCollectWatchDebounceMs, maxJsonBodyBytes, persistentRegistryPath }) {
+function createProjectRegistry({ host, port, autoCollect, autoCollectIntervalMs, autoCollectWatchDebounceMs, maxJsonBodyBytes, persistentRegistryPath }) {
   return {
     host,
     port,
+    autoCollect,
     autoCollectIntervalMs,
     autoCollectWatchDebounceMs,
     maxJsonBodyBytes,
@@ -369,7 +370,7 @@ async function restorePersistedProjects(registry) {
     if (typeof entry.projectDir !== "string" || !path.isAbsolute(entry.projectDir)) continue;
     if (!await directoryExists(entry.projectDir)) continue;
     await registerProject(registry, entry.projectDir, {
-      autoCollect: false,
+      autoCollect: registry.autoCollect && entry.autoCollect !== false,
       chatThreadId: entry.chatThreadId || null,
       canvasId: entry.canvasId || null,
       registeredAt: typeof entry.registeredAt === "string" ? entry.registeredAt : null
@@ -398,6 +399,7 @@ async function persistProjectRegistry(registry) {
       projectDir: project.projectDir,
       canvasId: project.canvasId || null,
       chatThreadId: project.chatThreadId || null,
+      autoCollect: project.autoCollect,
       registeredAt: project.registeredAt
     }))
     .sort((a, b) => a.projectDir.localeCompare(b.projectDir) || String(a.canvasId || "").localeCompare(String(b.canvasId || "")));
@@ -430,6 +432,7 @@ async function directoryExists(directoryPath) {
 }
 
 function startAutoCollector(project, registry) {
+  if (project.collectorTimer) return;
   const intervalMs = registry.autoCollectIntervalMs || 5000;
   project.collectorTimer = setInterval(() => {
     runAutoCollectorPass(project).catch((error) => {

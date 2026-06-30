@@ -30,6 +30,7 @@ async function main() {
     ["frontend action contract", testFrontendActionContract],
     ["thread migration asset paths", testThreadMigrationAssetPaths],
     ["persistent project registry", testPersistentProjectRegistry],
+    ["persistent project registry restored auto collector", testPersistentProjectRegistryRestoredAutoCollector],
     ["mcp canvas status", testMcpCanvasStatus],
     ["auto collector watcher watermark", testAutoCollectorWatermark],
     ["package optional dependency scripts", testPackageOptionalDependencyScripts],
@@ -478,10 +479,66 @@ async function testPersistentProjectRegistry() {
     assertEqual(restored.projectDir, secondProjectDir, "Restored project should keep its projectDir");
     assertEqual(restored.chatThreadId, "thread-persisted-registry", "Restored project should keep its chat binding");
     assertEqual(restored.chatBound, true, "Restored project should report chat binding");
-    assertEqual(restored.autoCollect, false, "Restored projects should not resume auto-collection implicitly");
+    assertEqual(restored.autoCollect, false, "Restored projects with explicit auto-collection opt-out should stay disabled");
 
     const stateResponse = await fetch(`${secondBase}api/state?project=${encodeURIComponent(restoredProjectId)}`);
     assertEqual(stateResponse.status, 200, "Restored project id should route to its canvas state after restart");
+  } finally {
+    await new Promise((resolve) => second.server.close(resolve));
+  }
+}
+
+async function testPersistentProjectRegistryRestoredAutoCollector() {
+  const firstProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-registry-auto-first-"));
+  const restoredProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-registry-auto-restored-"));
+  const registryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-registry-auto-file-"));
+  const persistentRegistryPath = path.join(registryRoot, "projects.json");
+  const first = await createServer({
+    projectDir: firstProjectDir,
+    port: 0,
+    autoCollect: true,
+    persistentRegistryPath,
+    autoCollectIntervalMs: 100,
+    autoCollectWatchDebounceMs: 25
+  });
+  const firstBase = first.url.replace(/\?.*/, "");
+  let restoredProjectId;
+  try {
+    const registered = await postJson(`${firstBase}api/projects`, {
+      projectDir: restoredProjectDir
+    });
+    assertEqual(registered.status, 201, "HTTP project registration should persist an auto-collecting project");
+    assertEqual(registered.body.project?.autoCollect, true, "newly registered projects should auto-collect by default");
+    restoredProjectId = new URL(registered.body.url).searchParams.get("project");
+  } finally {
+    await new Promise((resolve) => first.server.close(resolve));
+  }
+
+  const second = await createServer({
+    projectDir: firstProjectDir,
+    port: 0,
+    autoCollect: true,
+    persistentRegistryPath,
+    autoCollectIntervalMs: 100,
+    autoCollectWatchDebounceMs: 25
+  });
+  const secondBase = second.url.replace(/\?.*/, "");
+  try {
+    const projectsResponse = await fetch(`${secondBase}api/projects`);
+    const projectsBody = await projectsResponse.json();
+    const restored = projectsBody.projects?.find((project) => project.id === restoredProjectId);
+    if (!restored) throw new Error("Restarted Agent-Canvas server should restore the auto-collecting project.");
+    assertEqual(restored.projectDir, restoredProjectDir, "Restored auto-collecting project should keep its projectDir");
+    assertEqual(restored.autoCollect, true, "Restored auto-collecting project should resume auto-collection when the service enables it");
+
+    const imagePath = path.join(restoredProjectDir, `restored-auto-${Date.now()}.png`);
+    await fs.writeFile(imagePath, Buffer.from(pngOne, "base64"));
+    const imported = await waitForStateObject(
+      `${secondBase}api/state?project=${encodeURIComponent(restoredProjectId)}`,
+      (object) => path.resolve(object.sourcePath || "") === path.resolve(imagePath),
+      "restored project auto collector should import a new image after server restart"
+    );
+    assertEqual(imported.name, path.basename(imagePath), "restored project auto collector should import the new project image");
   } finally {
     await new Promise((resolve) => second.server.close(resolve));
   }
@@ -1117,6 +1174,18 @@ async function waitForObjectCount(url, expected, message) {
     const response = await fetch(url);
     const state = await response.json();
     if (state.objects?.length === expected) return state;
+    await delay(100);
+  }
+  throw new Error(message);
+}
+
+async function waitForStateObject(url, predicate, message) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 4000) {
+    const response = await fetch(url);
+    const state = await response.json();
+    const object = state.objects?.find(predicate);
+    if (object) return object;
     await delay(100);
   }
   throw new Error(message);
