@@ -14,6 +14,13 @@ const defaultState = {
 
 const defaultImageSize = { width: 360, height: 360 };
 const maxImageDisplaySize = 420;
+const maxObjectCoordinate = 1_000_000;
+const maxObjectDimension = 6000;
+const minFontSize = 6;
+const maxFontSize = 160;
+const minStrokeWidth = 1;
+const maxStrokeWidth = 80;
+const maxDurationMs = 24 * 60 * 60 * 1000;
 const minViewportZoom = 0.12;
 const maxViewportZoom = 2.2;
 const derivedGap = 72;
@@ -381,7 +388,9 @@ async function writeStateFile(projectDir, state, options = {}) {
 
 function normalizeState(state = {}) {
   const objects = Array.isArray(state.objects)
-    ? state.objects.filter((object) => object && typeof object === "object")
+    ? state.objects
+      .map(normalizePersistedObject)
+      .filter(Boolean)
     : [];
   const selection = typeof state.selection === "string" && objects.some((object) => object.id === state.selection)
     ? state.selection
@@ -442,16 +451,16 @@ export async function addImage(projectDir, input, options = {}) {
     const object = {
       id: `img_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
       type: "image",
-      name: input.name || asset.name,
+      name: sanitizeString(input.name, asset.name || "Image"),
       src: asset.src,
       assetPath: asset.assetPath,
       sourcePath: asset.sourcePath || null,
-      prompt: input.prompt || "",
-      sourceObjectId: input.sourceObjectId || null,
-      batchId: input.batchId || null,
-      layoutMode: input.layoutMode || "manual",
-      x: Number.isFinite(input.x) ? input.x : 120 + (count % 5) * 56,
-      y: Number.isFinite(input.y) ? input.y : 120 + (count % 7) * 44,
+      prompt: sanitizeString(input.prompt, "", 4000),
+      sourceObjectId: typeof input.sourceObjectId === "string" ? input.sourceObjectId.slice(0, 300) : null,
+      batchId: typeof input.batchId === "string" ? input.batchId.slice(0, 300) : null,
+      layoutMode: sanitizeString(input.layoutMode, "manual", 80),
+      x: Number.isFinite(input.x) ? sanitizeCoordinate(input.x) : 120 + (count % 5) * 56,
+      y: Number.isFinite(input.y) ? sanitizeCoordinate(input.y) : 120 + (count % 7) * 44,
       width: displaySize.width,
       height: displaySize.height,
       naturalWidth: asset.width || null,
@@ -499,16 +508,16 @@ export async function addJobPlaceholder(projectDir, input, options = {}) {
       throw error;
     }
 
-    const width = Number.isFinite(input.width) ? input.width : source.width;
-    const height = Number.isFinite(input.height) ? input.height : source.height;
+    const width = sanitizeDimension(Number.isFinite(input.width) ? input.width : source.width);
+    const height = sanitizeDimension(Number.isFinite(input.height) ? input.height : source.height);
     const position = adjacentDerivedPosition(source);
     const shift = width + derivedGap;
     const object = {
       id: input.id || `job_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
       type: "job",
-      name: input.name || "Working",
-      action: input.action || "image-job",
-      status: input.status || "running",
+      name: sanitizeString(input.name, "Working"),
+      action: sanitizeString(input.action, "image-job", 80),
+      status: sanitizeString(input.status, "running", 80),
       sourceObjectId: source.id,
       layoutMode: "canvas-row",
       src: source.src || null,
@@ -568,6 +577,87 @@ function clampViewportZoom(zoom) {
   return Math.min(maxViewportZoom, Math.max(minViewportZoom, zoom));
 }
 
+function clampNumber(value, min, max, fallback) {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, value));
+}
+
+function sanitizeCoordinate(value, fallback = 0) {
+  return Math.round(clampNumber(value, -maxObjectCoordinate, maxObjectCoordinate, fallback));
+}
+
+function sanitizeDimension(value, fallback = 1) {
+  return Math.round(clampNumber(value, 1, maxObjectDimension, fallback));
+}
+
+function sanitizeFontSize(value, fallback = 28) {
+  return Math.round(clampNumber(value, minFontSize, maxFontSize, fallback));
+}
+
+function sanitizeStrokeWidth(value, fallback = 4) {
+  return Math.round(clampNumber(value, minStrokeWidth, maxStrokeWidth, fallback));
+}
+
+function sanitizeDurationMs(value, fallback = 0) {
+  return Math.round(clampNumber(value, 0, maxDurationMs, fallback));
+}
+
+function sanitizeString(value, fallback = "", limit = 300, trim = true) {
+  if (typeof value !== "string") return fallback;
+  const normalized = trim ? value.trim() : value;
+  return (normalized || fallback).slice(0, limit);
+}
+
+function normalizePersistedObject(object) {
+  if (!object || typeof object !== "object") return null;
+  const id = sanitizeString(object.id, "", 200);
+  if (!id) return null;
+  const type = sanitizeString(object.type, "image", 40);
+  const normalized = {
+    ...object,
+    id,
+    type,
+    name: sanitizeString(object.name, type === "text" ? "Text" : type === "drawing" ? "Drawing" : "Image"),
+    x: sanitizeCoordinate(object.x),
+    y: sanitizeCoordinate(object.y),
+    width: sanitizeDimension(object.width, type === "text" ? 220 : 1),
+    height: sanitizeDimension(object.height, type === "text" ? 80 : 1)
+  };
+  if (typeof object.createdAt !== "string") normalized.createdAt = new Date().toISOString();
+  if (Number.isFinite(object.durationMs)) normalized.durationMs = sanitizeDurationMs(object.durationMs);
+  if (type === "text") {
+    normalized.text = sanitizeString(object.text, "Text", 2000, false);
+    normalized.fontSize = sanitizeFontSize(object.fontSize);
+    normalized.color = sanitizeString(object.color, "#202124", 80);
+  }
+  if (type === "drawing") {
+    normalized.points = sanitizePoints(object.points);
+    normalized.stroke = sanitizeString(object.stroke, "#202124", 80);
+    normalized.strokeWidth = sanitizeStrokeWidth(object.strokeWidth);
+  }
+  if (object.crop && typeof object.crop === "object") {
+    const crop = sanitizeCrop(object.crop);
+    if (crop) normalized.crop = crop;
+    else delete normalized.crop;
+  }
+  for (const key of [
+    "layerGroupIndex",
+    "layerGroupOriginalX",
+    "layerGroupOriginalY",
+    "layerGroupOriginalWidth",
+    "layerGroupOriginalHeight",
+    "layerGroupRelativeX",
+    "layerGroupRelativeY",
+    "layerGroupOriginalLayerWidth",
+    "layerGroupOriginalLayerHeight"
+  ]) {
+    if (Number.isFinite(object[key])) normalized[key] = key.endsWith("Width") || key.endsWith("Height")
+      ? sanitizeDimension(object[key])
+      : sanitizeCoordinate(object[key]);
+  }
+  return normalized;
+}
+
 export async function updateProjectMeta(projectDir, patch, options = {}) {
   return mutateState(projectDir, options, (state) => {
     const title = typeof patch.title === "string" && patch.title.trim()
@@ -613,23 +703,25 @@ export async function updateObject(projectDir, id, patch, options = {}) {
 
 function sanitizeObjectPatch(patch = {}) {
   const next = {};
-  for (const key of ["x", "y", "width", "height", "fontSize", "strokeWidth", "durationMs"]) {
-    if (Number.isFinite(patch[key])) next[key] = key === "width" || key === "height"
-      ? Math.max(1, Math.round(patch[key]))
-      : Math.round(patch[key]);
+  for (const key of ["x", "y"]) {
+    if (Number.isFinite(patch[key])) next[key] = sanitizeCoordinate(patch[key]);
+  }
+  for (const key of ["width", "height"]) {
+    if (Number.isFinite(patch[key])) next[key] = sanitizeDimension(patch[key]);
+  }
+  if (Number.isFinite(patch.fontSize)) next.fontSize = sanitizeFontSize(patch.fontSize);
+  if (Number.isFinite(patch.strokeWidth)) next.strokeWidth = sanitizeStrokeWidth(patch.strokeWidth);
+  if (Number.isFinite(patch.durationMs)) next.durationMs = sanitizeDurationMs(patch.durationMs);
+  for (const key of ["layerGroupIndex", "layerGroupOriginalX", "layerGroupOriginalY", "layerGroupRelativeX", "layerGroupRelativeY"]) {
+    if (Number.isFinite(patch[key])) next[key] = sanitizeCoordinate(patch[key]);
   }
   for (const key of [
-    "layerGroupIndex",
-    "layerGroupOriginalX",
-    "layerGroupOriginalY",
     "layerGroupOriginalWidth",
     "layerGroupOriginalHeight",
-    "layerGroupRelativeX",
-    "layerGroupRelativeY",
     "layerGroupOriginalLayerWidth",
     "layerGroupOriginalLayerHeight"
   ]) {
-    if (Number.isFinite(patch[key])) next[key] = Math.round(patch[key]);
+    if (Number.isFinite(patch[key])) next[key] = sanitizeDimension(patch[key]);
   }
   for (const key of ["name", "text", "color", "stroke", "status", "error", "layoutMode", "sourceObjectId", "layerGroupId", "layerGroupName", "layerGroupSourceObjectId", "layerGroupKind"]) {
     if (typeof patch[key] === "string") next[key] = patch[key].slice(0, key === "text" ? 2000 : 300);
@@ -640,12 +732,18 @@ function sanitizeObjectPatch(patch = {}) {
     if (crop) next.crop = crop;
   }
   if (Array.isArray(patch.points)) {
-    next.points = patch.points
-      .filter((point) => Number.isFinite(point?.x) && Number.isFinite(point?.y))
-      .map((point) => ({ x: Math.round(point.x), y: Math.round(point.y) }))
-      .slice(0, 4000);
+    next.points = sanitizePoints(patch.points);
   }
   return next;
+}
+
+function sanitizePoints(points) {
+  return Array.isArray(points)
+    ? points
+      .filter((point) => Number.isFinite(point?.x) && Number.isFinite(point?.y))
+      .map((point) => ({ x: sanitizeCoordinate(point.x), y: sanitizeCoordinate(point.y) }))
+      .slice(0, 4000)
+    : [];
 }
 
 function sanitizeCrop(crop) {
@@ -749,33 +847,28 @@ function normalizeObject(input) {
   const base = {
     id: `${type}_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
     type,
-    name: input.name || (type === "text" ? "Text" : "Drawing"),
-    x: Number.isFinite(input.x) ? input.x : 120,
-    y: Number.isFinite(input.y) ? input.y : 120,
-    width: Number.isFinite(input.width) ? Math.max(1, Math.round(input.width)) : 220,
-    height: Number.isFinite(input.height) ? Math.max(1, Math.round(input.height)) : 80,
+    name: sanitizeString(input.name, type === "text" ? "Text" : "Drawing"),
+    x: Number.isFinite(input.x) ? sanitizeCoordinate(input.x) : 120,
+    y: Number.isFinite(input.y) ? sanitizeCoordinate(input.y) : 120,
+    width: Number.isFinite(input.width) ? sanitizeDimension(input.width, 220) : 220,
+    height: Number.isFinite(input.height) ? sanitizeDimension(input.height, 80) : 80,
     createdAt: new Date().toISOString()
   };
 
   if (type === "text") {
     return {
       ...base,
-      text: typeof input.text === "string" ? input.text.slice(0, 2000) : "Text",
-      fontSize: Number.isFinite(input.fontSize) ? input.fontSize : 28,
-      color: typeof input.color === "string" ? input.color : "#202124"
+      text: sanitizeString(input.text, "Text", 2000, false),
+      fontSize: Number.isFinite(input.fontSize) ? sanitizeFontSize(input.fontSize) : 28,
+      color: sanitizeString(input.color, "#202124", 80)
     };
   }
 
   return {
     ...base,
-    points: Array.isArray(input.points)
-      ? input.points
-        .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
-        .map((point) => ({ x: Math.round(point.x), y: Math.round(point.y) }))
-        .slice(0, 4000)
-      : [],
-    stroke: typeof input.stroke === "string" ? input.stroke : "#202124",
-    strokeWidth: Number.isFinite(input.strokeWidth) ? input.strokeWidth : 4
+    points: sanitizePoints(input.points),
+    stroke: sanitizeString(input.stroke, "#202124", 80),
+    strokeWidth: Number.isFinite(input.strokeWidth) ? sanitizeStrokeWidth(input.strokeWidth) : 4
   };
 }
 
@@ -887,7 +980,10 @@ function decodeBase64ImagePayload(payload) {
 
 function imageDisplaySize(asset, input) {
   if (Number.isFinite(input.width) && Number.isFinite(input.height)) {
-    return { width: input.width, height: input.height };
+    return {
+      width: sanitizeDimension(input.width, defaultImageSize.width),
+      height: sanitizeDimension(input.height, defaultImageSize.height)
+    };
   }
 
   if (!Number.isFinite(asset.width) || !Number.isFinite(asset.height) || asset.width <= 0 || asset.height <= 0) {
@@ -896,8 +992,8 @@ function imageDisplaySize(asset, input) {
 
   const scale = Math.min(1, maxImageDisplaySize / Math.max(asset.width, asset.height));
   return {
-    width: Math.max(1, Math.round(asset.width * scale)),
-    height: Math.max(1, Math.round(asset.height * scale))
+    width: sanitizeDimension(asset.width * scale, defaultImageSize.width),
+    height: sanitizeDimension(asset.height * scale, defaultImageSize.height)
   };
 }
 

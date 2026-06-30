@@ -23,6 +23,7 @@ async function main() {
   for (const [name, test] of [
     ["store concurrency", testStoreConcurrency],
     ["object patch sanitization", testObjectPatchSanitization],
+    ["object input sanitization", testObjectInputSanitization],
     ["selection sanitization", testSelectionSanitization],
     ["viewport sanitization", testViewportSanitization],
     ["canvas id path isolation", testCanvasIdPathIsolation],
@@ -105,6 +106,87 @@ async function testObjectPatchSanitization() {
   assertEqual(updated.sourcePath, image.sourcePath || null, "updateObject should not allow sourcePath mutation");
   assertEqual(updated.type, "image", "updateObject should not allow type mutation");
   assertEqual(updated.createdAt, image.createdAt, "updateObject should not allow createdAt mutation");
+}
+
+async function testObjectInputSanitization() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-object-input-"));
+  const image = await addImage(projectDir, {
+    dataUrl: `data:image/png;base64,${pngOne}`,
+    name: "oversized-image.png",
+    x: Number.MAX_VALUE,
+    y: -Number.MAX_VALUE,
+    width: 999999,
+    height: -2
+  });
+  assertEqual(image.x, 1000000, "addImage should cap oversized image x coordinates");
+  assertEqual(image.y, -1000000, "addImage should cap oversized image y coordinates");
+  assertEqual(image.width, 6000, "addImage should cap explicit image display width");
+  assertEqual(image.height, 1, "addImage should clamp explicit image display height to a visible minimum");
+
+  const text = await addObject(projectDir, {
+    type: "text",
+    name: "Review Text",
+    text: "Needs bounds",
+    x: Number.MAX_VALUE,
+    y: -Number.MAX_VALUE,
+    width: 999999,
+    height: 0,
+    fontSize: -20
+  });
+  assertEqual(text.x, 1000000, "addObject should cap oversized text x coordinates");
+  assertEqual(text.y, -1000000, "addObject should cap oversized text y coordinates");
+  assertEqual(text.width, 6000, "addObject should cap oversized text width");
+  assertEqual(text.height, 1, "addObject should clamp text height to a visible minimum");
+  assertEqual(text.fontSize, 6, "addObject should clamp text font size to a visible minimum");
+
+  const patched = await updateObject(projectDir, text.id, {
+    width: 999999,
+    height: -12,
+    fontSize: 999,
+    durationMs: -5
+  });
+  assertEqual(patched.width, 6000, "updateObject should cap oversized object width");
+  assertEqual(patched.height, 1, "updateObject should clamp patched object height to a visible minimum");
+  assertEqual(patched.fontSize, 160, "updateObject should cap oversized font size");
+  assertEqual(patched.durationMs, 0, "updateObject should clamp negative job durations");
+
+  const drawing = await addObject(projectDir, {
+    type: "drawing",
+    strokeWidth: 0,
+    points: [
+      { x: Number.MAX_VALUE, y: -Number.MAX_VALUE },
+      { x: "bad", y: 12 }
+    ]
+  });
+  assertEqual(drawing.strokeWidth, 1, "addObject should clamp drawing stroke width to a visible minimum");
+  assertEqual(drawing.points.length, 1, "addObject should drop malformed drawing points");
+  assertEqual(drawing.points[0].x, 1000000, "addObject should cap drawing point x coordinates");
+  assertEqual(drawing.points[0].y, -1000000, "addObject should cap drawing point y coordinates");
+
+  const corruptProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-object-state-"));
+  await fs.mkdir(path.dirname(statePathFor(corruptProjectDir)), { recursive: true });
+  await fs.writeFile(statePathFor(corruptProjectDir), `${JSON.stringify({
+    version: 1,
+    title: "Corrupt Objects",
+    viewport: { x: 0, y: 0, zoom: 0.72 },
+    objects: [
+      { id: "", type: "text", text: "drop me", width: 10, height: 10 },
+      { id: "legacy-text", type: "text", text: "legacy", x: 1e12, y: -1e12, width: -10, height: 999999, fontSize: 999 },
+      { id: "legacy-drawing", type: "drawing", strokeWidth: -4, points: [{ x: 1e12, y: 2 }, { x: null, y: 2 }] }
+    ],
+    selection: "legacy-text"
+  }, null, 2)}\n`);
+  const corruptState = await readState(corruptProjectDir);
+  assertEqual(corruptState.objects.length, 2, "readState should drop persisted objects without stable ids");
+  const legacyText = corruptState.objects.find((object) => object.id === "legacy-text");
+  assertEqual(legacyText.x, 1000000, "readState should cap persisted object coordinates");
+  assertEqual(legacyText.width, 1, "readState should clamp persisted object dimensions to a visible minimum");
+  assertEqual(legacyText.height, 6000, "readState should cap persisted object dimensions");
+  assertEqual(legacyText.fontSize, 160, "readState should cap persisted text font size");
+  const legacyDrawing = corruptState.objects.find((object) => object.id === "legacy-drawing");
+  assertEqual(legacyDrawing.strokeWidth, 1, "readState should clamp persisted drawing stroke width");
+  assertEqual(legacyDrawing.points.length, 1, "readState should drop malformed persisted drawing points");
+  assertEqual(corruptState.selection, "legacy-text", "readState should preserve selections that still point at sanitized objects");
 }
 
 async function testSelectionSanitization() {
