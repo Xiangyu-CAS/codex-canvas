@@ -14,6 +14,8 @@ const defaultState = {
 
 const defaultImageSize = { width: 360, height: 360 };
 const maxImageDisplaySize = 420;
+const minViewportZoom = 0.12;
+const maxViewportZoom = 2.2;
 const derivedGap = 72;
 const stateLocks = new Map();
 const versionGroupFields = new Set(["sourceObjectId", "batchId", "layoutMode", "prompt"]);
@@ -520,13 +522,17 @@ export async function updateViewport(projectDir, viewport, options = {}) {
     const nextViewport = {
       x: Number.isFinite(viewport.x) ? viewport.x : state.viewport.x,
       y: Number.isFinite(viewport.y) ? viewport.y : state.viewport.y,
-      zoom: Number.isFinite(viewport.zoom) ? viewport.zoom : state.viewport.zoom
+      zoom: Number.isFinite(viewport.zoom) ? clampViewportZoom(viewport.zoom) : state.viewport.zoom
     };
     return {
       state: { ...state, viewport: nextViewport },
       value: nextViewport
     };
   });
+}
+
+function clampViewportZoom(zoom) {
+  return Math.min(maxViewportZoom, Math.max(minViewportZoom, zoom));
 }
 
 export async function updateProjectMeta(projectDir, patch, options = {}) {

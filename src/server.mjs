@@ -25,6 +25,7 @@ const contentTypes = {
   ".svg": "image/svg+xml"
 };
 const defaultMaxJsonBodyBytes = 32 * 1024 * 1024;
+const maxQueryLimit = 100;
 
 export async function createServer({ projectDir, host = "127.0.0.1", port = 43217, autoCollect = true, chatThreadId = null, autoCollectIntervalMs = 5000, autoCollectWatchDebounceMs = 250, maxJsonBodyBytes = defaultMaxJsonBodyBytes, persistentRegistryPath = projectRegistryPath() } = {}) {
   const registry = createProjectRegistry({ host, port, autoCollect, autoCollectIntervalMs, autoCollectWatchDebounceMs, maxJsonBodyBytes, persistentRegistryPath });
@@ -102,7 +103,7 @@ async function handleRequest(request, response, context) {
     return sendJson(response, 200, await searchObjects(projectDir, {
       query: requestUrl.searchParams.get("q") || requestUrl.searchParams.get("query") || "",
       type: requestUrl.searchParams.get("type") || null,
-      limit: Number(requestUrl.searchParams.get("limit") || 20),
+      limit: parsePositiveIntegerQueryParam(requestUrl.searchParams, "limit", 20),
       canvasId: project.canvasId
     }));
   }
@@ -110,7 +111,7 @@ async function handleRequest(request, response, context) {
   if (request.method === "GET" && pathname === "/api/prompts") {
     return sendJson(response, 200, await promptHistory(projectDir, {
       query: requestUrl.searchParams.get("q") || requestUrl.searchParams.get("query") || "",
-      limit: Number(requestUrl.searchParams.get("limit") || 20),
+      limit: parsePositiveIntegerQueryParam(requestUrl.searchParams, "limit", 20),
       canvasId: project.canvasId
     }));
   }
@@ -119,8 +120,8 @@ async function handleRequest(request, response, context) {
     return sendJson(response, 200, await versionGroups(projectDir, {
       query: requestUrl.searchParams.get("q") || requestUrl.searchParams.get("query") || "",
       groupBy: requestUrl.searchParams.get("groupBy") || requestUrl.searchParams.get("group_by") || "sourceObjectId",
-      limit: Number(requestUrl.searchParams.get("limit") || 20),
-      objectLimit: Number(requestUrl.searchParams.get("objectLimit") || requestUrl.searchParams.get("object_limit") || 20),
+      limit: parsePositiveIntegerQueryParam(requestUrl.searchParams, "limit", 20),
+      objectLimit: parsePositiveIntegerQueryParam(requestUrl.searchParams, "objectLimit", 20, "object_limit"),
       canvasId: project.canvasId
     }));
   }
@@ -281,6 +282,14 @@ async function sendFile(response, filePath) {
 function sendJson(response, status, body) {
   response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
   response.end(JSON.stringify(body));
+}
+
+function parsePositiveIntegerQueryParam(searchParams, name, defaultValue, fallbackName = null) {
+  const rawValue = searchParams.get(name) ?? (fallbackName ? searchParams.get(fallbackName) : null);
+  if (rawValue === null || rawValue === "") return defaultValue;
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed) || parsed <= 0) return defaultValue;
+  return Math.min(maxQueryLimit, Math.max(1, Math.round(parsed)));
 }
 
 function createProjectRegistry({ host, port, autoCollect, autoCollectIntervalMs, autoCollectWatchDebounceMs, maxJsonBodyBytes, persistentRegistryPath }) {

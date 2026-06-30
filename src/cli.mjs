@@ -7,6 +7,10 @@ import { resolveProjectDir } from "./paths.mjs";
 import { checkImageProcessingDepsAvailable, checkOptionalPythonDepsAvailable, checkRapidOcrAvailable, installImageProcessingDeps, installOptionalPythonDeps, installRapidOcr } from "./ocr-setup.mjs";
 import { canvasIdForThread, readRuntime, writeRuntime, normalizeThreadId } from "./runtime.mjs";
 
+const defaultLimit = 20;
+const maxLimit = 100;
+const defaultSinceMinutes = 120;
+
 export async function main(args, context = {}) {
   const command = args[0] || "help";
   const options = parseOptions(args.slice(1));
@@ -80,8 +84,8 @@ export async function main(args, context = {}) {
 
   if (command === "collect") {
     const canvas = await resolveCanvasOptions(projectDir, options);
-    const sinceMinutes = Number(options["since-minutes"] || options.since || 120);
-    const limit = Number(options.limit || 20);
+    const sinceMinutes = normalizeNonNegativeNumber(options["since-minutes"] ?? options.since, defaultSinceMinutes);
+    const limit = normalizePositiveInteger(options.limit, defaultLimit, maxLimit);
     const roots = parseList(options.from || options.roots);
     const result = await collectRecentImages(projectDir, {
       roots,
@@ -101,7 +105,7 @@ export async function main(args, context = {}) {
     const result = await searchObjects(projectDir, {
       query,
       type: options.type || null,
-      limit: Number(options.limit || 20),
+      limit: normalizePositiveInteger(options.limit, defaultLimit, maxLimit),
       canvasId: canvas.canvasId
     });
     if (options.json) {
@@ -122,7 +126,7 @@ export async function main(args, context = {}) {
     const query = options.query || args[1] || "";
     const result = await promptHistory(projectDir, {
       query,
-      limit: Number(options.limit || 20),
+      limit: normalizePositiveInteger(options.limit, defaultLimit, maxLimit),
       canvasId: canvas.canvasId
     });
     if (options.json) {
@@ -142,8 +146,8 @@ export async function main(args, context = {}) {
     const result = await versionGroups(projectDir, {
       query,
       groupBy: options["group-by"] || options.groupBy || "sourceObjectId",
-      limit: Number(options.limit || 20),
-      objectLimit: Number(options["object-limit"] || options.objectLimit || 20),
+      limit: normalizePositiveInteger(options.limit, defaultLimit, maxLimit),
+      objectLimit: normalizePositiveInteger(options["object-limit"] ?? options.objectLimit, defaultLimit, maxLimit),
       canvasId: canvas.canvasId
     });
     if (options.json) {
@@ -257,6 +261,22 @@ function parseOptions(args) {
 function parseList(value) {
   if (!value) return [];
   return String(value).split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function normalizePositiveInteger(value, fallback, max) {
+  if (value === undefined || value === null || value === true) return fallback;
+  if (typeof value === "string" && value.trim() === "") return fallback;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return fallback;
+  return Math.min(max, Math.max(1, Math.round(number)));
+}
+
+function normalizeNonNegativeNumber(value, fallback) {
+  if (value === undefined || value === null || value === true) return fallback;
+  if (typeof value === "string" && value.trim() === "") return fallback;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0 || !Number.isFinite(number * 60 * 1000)) return fallback;
+  return number;
 }
 
 async function waitForRuntime(projectDir, timeoutMs) {

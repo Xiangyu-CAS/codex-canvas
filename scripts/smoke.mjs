@@ -8,7 +8,7 @@ import { placeImportedElementLayersForTest } from "../src/jobs.mjs";
 import { checkImageProcessingDepsAvailable } from "../src/ocr-setup.mjs";
 import { assetsDirFor } from "../src/paths.mjs";
 import { createServer as createAgentCanvasServer } from "../src/server.mjs";
-import { addImage, addObject, deleteObjects, promptHistory, readState, searchObjects, transformState, updateObject, updateSelection, versionGroups } from "../src/store.mjs";
+import { addImage, addObject, deleteObjects, promptHistory, readState, searchObjects, transformState, updateObject, updateSelection, updateViewport, versionGroups } from "../src/store.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -21,11 +21,14 @@ async function main() {
     ["store concurrency", testStoreConcurrency],
     ["object patch sanitization", testObjectPatchSanitization],
     ["selection sanitization", testSelectionSanitization],
+    ["viewport sanitization", testViewportSanitization],
     ["http object patch sanitization", testHttpObjectPatchSanitization],
     ["http image input boundaries", testHttpImageInputBoundaries],
     ["canvas object search", testCanvasObjectSearch],
     ["canvas prompt history", testCanvasPromptHistory],
     ["canvas version groups", testCanvasVersionGroups],
+    ["cli numeric boundaries", testCliNumericBoundaries],
+    ["http query numeric boundaries", testHttpQueryNumericBoundaries],
     ["http json boundaries", testHttpJsonBoundaries],
     ["http project registration boundaries", testHttpProjectRegistrationBoundaries],
     ["frontend action contract", testFrontendActionContract],
@@ -33,6 +36,7 @@ async function main() {
     ["persistent project registry", testPersistentProjectRegistry],
     ["persistent project registry restored auto collector", testPersistentProjectRegistryRestoredAutoCollector],
     ["mcp canvas status", testMcpCanvasStatus],
+    ["mcp numeric boundaries", testMcpNumericBoundaries],
     ["auto collector watcher watermark", testAutoCollectorWatermark],
     ["package optional dependency scripts", testPackageOptionalDependencyScripts],
     ["personal plugin installer", testPersonalPluginInstaller],
@@ -109,6 +113,18 @@ async function testSelectionSanitization() {
   assertEqual(cleared, null, "updateSelection should clear unknown object ids");
   const state = await readState(projectDir);
   assertEqual(state.selection, null, "selection state should not persist orphan object ids");
+}
+
+async function testViewportSanitization() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-viewport-"));
+  const minZoom = await updateViewport(projectDir, { x: 10, y: 20, zoom: -4 });
+  assertEqual(minZoom.x, 10, "updateViewport should keep finite x");
+  assertEqual(minZoom.y, 20, "updateViewport should keep finite y");
+  assertEqual(minZoom.zoom, 0.12, "updateViewport should clamp zoom to the frontend minimum");
+  const maxZoom = await updateViewport(projectDir, { zoom: 20 });
+  assertEqual(maxZoom.zoom, 2.2, "updateViewport should clamp zoom to the frontend maximum");
+  const unchanged = await updateViewport(projectDir, { zoom: "bad" });
+  assertEqual(unchanged.zoom, 2.2, "updateViewport should ignore non-numeric zoom values");
 }
 
 async function testHttpObjectPatchSanitization() {
@@ -347,6 +363,51 @@ async function testCanvasVersionGroups() {
   assertEqual(cli.body.groups[0].value, first.prompt, "CLI versions should return matching prompt version groups");
 }
 
+async function testCliNumericBoundaries() {
+  const projectDir = await createLimitFixtureProject("cli-limit");
+  const invalid = await runCliJson(["search", "cli-limit", "--project", projectDir, "--limit", "-5", "--json"]);
+  assertEqual(invalid.status, 0, "CLI search should accept invalid numeric limits without failing");
+  assertEqual(invalid.body.total, 20, "CLI search should fall back to the default limit for invalid numeric input");
+
+  const rounded = await runCliJson(["search", "cli-limit", "--project", projectDir, "--limit", "2.6", "--json"]);
+  assertEqual(rounded.body.total, 3, "CLI search should round finite decimal limits consistently with store limits");
+
+  const capped = await runCliJson(["search", "cli-limit", "--project", projectDir, "--limit", "1000", "--json"]);
+  assertEqual(capped.body.total, 100, "CLI search should cap oversized limits");
+
+  const versions = await runCliJson(["versions", "cli-limit", "--project", projectDir, "--group-by", "prompt", "--object-limit", "1000", "--json"]);
+  assertEqual(versions.body.groups?.[0]?.count, 105, "CLI versions should keep full group counts when objectLimit is capped");
+  assertEqual(versions.body.groups?.[0]?.objects?.length, 100, "CLI versions should cap oversized object limits");
+}
+
+async function testHttpQueryNumericBoundaries() {
+  const projectDir = await createLimitFixtureProject("http-limit");
+  const { server, url } = await createServer({ projectDir, port: 0, autoCollect: false });
+  const base = url.replace(/\?.*/, "");
+  const search = new URL(url).search;
+  try {
+    const invalid = await fetch(`${base}api/search${search}&q=http-limit&limit=-5`);
+    const invalidBody = await invalid.json();
+    assertEqual(invalid.status, 200, "HTTP search should accept invalid numeric limits without failing");
+    assertEqual(invalidBody.total, 20, "HTTP search should fall back to the default limit for invalid numeric input");
+
+    const rounded = await fetch(`${base}api/search${search}&q=http-limit&limit=2.6`);
+    const roundedBody = await rounded.json();
+    assertEqual(roundedBody.total, 3, "HTTP search should round finite decimal limits consistently with store limits");
+
+    const capped = await fetch(`${base}api/search${search}&q=http-limit&limit=1000`);
+    const cappedBody = await capped.json();
+    assertEqual(cappedBody.total, 100, "HTTP search should cap oversized limits");
+
+    const versions = await fetch(`${base}api/versions${search}&groupBy=prompt&q=http-limit&object_limit=1000`);
+    const versionsBody = await versions.json();
+    assertEqual(versionsBody.groups?.[0]?.count, 105, "HTTP versions should keep full group counts when objectLimit is capped");
+    assertEqual(versionsBody.groups?.[0]?.objects?.length, 100, "HTTP versions should cap oversized object_limit values");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
 async function testHttpJsonBoundaries() {
   const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-http-json-"));
   const { server, url } = await createServer({
@@ -385,6 +446,24 @@ async function testHttpJsonBoundaries() {
     assertEqual(tooLarge.status, 413, "oversized JSON should return payload too large");
     if (!String(tooLargeBody.error || "").includes("limit")) {
       throw new Error("oversized JSON should describe the body limit.");
+    }
+
+    const viewportProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-http-viewport-"));
+    const viewportServer = await createServer({ projectDir: viewportProjectDir, port: 0, autoCollect: false });
+    const viewportBase = viewportServer.url.replace(/\?.*/, "");
+    const viewportSearch = new URL(viewportServer.url).search;
+    try {
+      const negativeZoom = await postJson(`${viewportBase}api/state${viewportSearch}`, {
+        viewport: { x: 5, y: 6, zoom: -1 }
+      });
+      assertEqual(negativeZoom.status, 200, "HTTP viewport update should accept numeric viewport payloads");
+      assertEqual(negativeZoom.body.zoom, 0.12, "HTTP viewport update should clamp zoom to the frontend minimum");
+      const hugeZoom = await postJson(`${viewportBase}api/state${viewportSearch}`, {
+        viewport: { zoom: 100 }
+      });
+      assertEqual(hugeZoom.body.zoom, 2.2, "HTTP viewport update should clamp zoom to the frontend maximum");
+    } finally {
+      await new Promise((resolve) => viewportServer.server.close(resolve));
     }
 
     const badPath = await fetch(`${base}%E0%A4%A${search}`);
@@ -731,6 +810,40 @@ async function testMcpCanvasStatus() {
       "MCP tool call requires an absolute projectDir.",
       "MCP canvas_status should reject relative projectDir instead of resolving against server cwd"
     );
+  } finally {
+    await client.stop();
+  }
+}
+
+async function testMcpNumericBoundaries() {
+  const projectDir = await createLimitFixtureProject("mcp-limit");
+  const client = await startMcpServer();
+  try {
+    await client.request("initialize", {});
+    const invalid = await client.request("tools/call", {
+      name: "search_canvas",
+      arguments: { projectDir, query: "mcp-limit", limit: -5 }
+    });
+    assertEqual(invalid.structuredContent?.total, 20, "MCP search should fall back to the default limit for invalid numeric input");
+
+    const rounded = await client.request("tools/call", {
+      name: "search_canvas",
+      arguments: { projectDir, query: "mcp-limit", limit: 2.6 }
+    });
+    assertEqual(rounded.structuredContent?.total, 3, "MCP search should round finite decimal limits consistently with store limits");
+
+    const capped = await client.request("tools/call", {
+      name: "search_canvas",
+      arguments: { projectDir, query: "mcp-limit", limit: 1000 }
+    });
+    assertEqual(capped.structuredContent?.total, 100, "MCP search should cap oversized limits");
+
+    const versions = await client.request("tools/call", {
+      name: "version_groups",
+      arguments: { projectDir, query: "mcp-limit", groupBy: "prompt", objectLimit: 1000 }
+    });
+    assertEqual(versions.structuredContent?.groups?.[0]?.count, 105, "MCP versions should keep full group counts when objectLimit is capped");
+    assertEqual(versions.structuredContent?.groups?.[0]?.objects?.length, 100, "MCP versions should cap oversized object limits");
   } finally {
     await client.stop();
   }
@@ -1270,6 +1383,18 @@ async function runCliJson(args, options = {}) {
     throw new Error(`CLI did not print JSON for ${args.join(" ")}. stdout=${result.stdout.trim()} stderr=${result.stderr.trim()}`);
   }
   return { status: result.status, body };
+}
+
+async function createLimitFixtureProject(label) {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), `agent-canvas-${label}-`));
+  for (let index = 0; index < 105; index += 1) {
+    await addImage(projectDir, {
+      dataUrl: `data:image/png;base64,${pngOne}`,
+      name: `${label}-${index}.png`,
+      prompt: `${label} shared prompt`
+    });
+  }
+  return projectDir;
 }
 
 function withoutPathEnv(env) {

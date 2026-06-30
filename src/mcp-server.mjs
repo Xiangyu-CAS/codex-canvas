@@ -14,6 +14,11 @@ const rl = readline.createInterface({
   terminal: false
 });
 
+const defaultToolLimit = 20;
+const maxToolLimit = 100;
+const defaultSinceMinutes = 120;
+const millisecondsPerMinute = 60_000;
+
 rl.on("line", async (line) => {
   if (!line.trim()) return;
   let message;
@@ -248,7 +253,7 @@ async function handle(method, params) {
       const result = await searchObjects(projectDir, {
         query: args.query || "",
         type: args.type || null,
-        limit: Number(args.limit || 20),
+        limit: normalizeToolLimit(args.limit),
         canvasId: canvas.canvasId
       });
       return textResult(`Found ${result.total} Agent-Canvas object(s).`, result);
@@ -259,7 +264,7 @@ async function handle(method, params) {
       const canvas = await resolveCanvasOptions(projectDir, args);
       const result = await promptHistory(projectDir, {
         query: args.query || "",
-        limit: Number(args.limit || 20),
+        limit: normalizeToolLimit(args.limit),
         canvasId: canvas.canvasId
       });
       return textResult(`Found ${result.total} Agent-Canvas prompt(s).`, result);
@@ -271,8 +276,8 @@ async function handle(method, params) {
       const result = await versionGroups(projectDir, {
         query: args.query || "",
         groupBy: args.groupBy || "sourceObjectId",
-        limit: Number(args.limit || 20),
-        objectLimit: Number(args.objectLimit || 20),
+        limit: normalizeToolLimit(args.limit),
+        objectLimit: normalizeToolLimit(args.objectLimit),
         canvasId: canvas.canvasId
       });
       return textResult(`Found ${result.total} Agent-Canvas version group(s).`, result);
@@ -281,11 +286,10 @@ async function handle(method, params) {
     if (params.name === "collect_recent_images") {
       const projectDir = requireProjectDir(args);
       const canvas = await resolveCanvasOptions(projectDir, args);
-      const sinceMinutes = Number(args.sinceMinutes || 120);
       const result = await collectRecentImages(projectDir, {
         roots: Array.isArray(args.roots) ? args.roots : [],
-        sinceMs: Date.now() - sinceMinutes * 60 * 1000,
-        limit: Number(args.limit || 20),
+        sinceMs: sinceMsFromMinutes(args.sinceMinutes),
+        limit: normalizeToolLimit(args.limit),
         prompt: args.prompt || "Collected after image generation",
         sourceObjectId: args.sourceObjectId || null,
         canvasId: canvas.canvasId
@@ -357,6 +361,31 @@ function textResult(text, data) {
     content: [{ type: "text", text }],
     structuredContent: data
   };
+}
+
+function normalizeToolLimit(value) {
+  if (value === undefined || value === null || value === "") return defaultToolLimit;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return defaultToolLimit;
+  return Math.min(maxToolLimit, Math.max(1, Math.round(number)));
+}
+
+function sinceMsFromMinutes(value) {
+  const minutes = normalizeSinceMinutes(value);
+  const now = Date.now();
+  const deltaMs = minutes * millisecondsPerMinute;
+  const sinceMs = now - deltaMs;
+  if (!Number.isFinite(deltaMs) || !Number.isFinite(sinceMs)) {
+    return now - defaultSinceMinutes * millisecondsPerMinute;
+  }
+  return sinceMs;
+}
+
+function normalizeSinceMinutes(value) {
+  if (value === undefined || value === null || value === "") return defaultSinceMinutes;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return defaultSinceMinutes;
+  return number;
 }
 
 function respond(id, result) {
