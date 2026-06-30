@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { addImage, ensureProjectStore, readState } from "./store.mjs";
+import { addImage, ensureProjectStore, readState, searchObjects } from "./store.mjs";
 import { createServer } from "./server.mjs";
 import { collectRecentImages } from "./collector.mjs";
 import { resolveProjectDir } from "./paths.mjs";
@@ -92,6 +92,28 @@ export async function main(args, context = {}) {
       canvasId: canvas.canvasId
     });
     console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  if (command === "search") {
+    const canvas = await resolveCanvasOptions(projectDir, options);
+    const query = options.query || args[1] || "";
+    const result = await searchObjects(projectDir, {
+      query,
+      type: options.type || null,
+      limit: Number(options.limit || 20),
+      canvasId: canvas.canvasId
+    });
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(`Found ${result.total} canvas object(s)${query ? ` for "${query}"` : ""}.`);
+      for (const object of result.results) {
+        const label = object.name || object.text || object.id;
+        const fields = object.matchFields.length ? ` [${object.matchFields.join(", ")}]` : "";
+        console.log(`- ${object.id} ${object.type} ${label}${fields}`);
+      }
+    }
     return;
   }
 
@@ -329,6 +351,7 @@ Usage:
   agent-canvas start [--project <dir>] [--host 127.0.0.1] [--port 43217] [--thread-id <codex-thread-id>] [--no-auto-collect]
   agent-canvas import <image-path> [--project <dir>] [--prompt <text>] [--name <name>]
   agent-canvas collect [--project <dir>] [--from <dir,dir>] [--since-minutes 120] [--limit 20]
+  agent-canvas search [query] [--project <dir>] [--type image|text|drawing|job] [--limit 20] [--json]
   agent-canvas status [--project <dir>] [--json]
   agent-canvas setup-deps [--json]
   agent-canvas setup-ocr [--optional] [--json]
@@ -342,6 +365,7 @@ Commands:
   start     Run the local canvas server in the foreground with auto-collection enabled.
   import    Copy an image into the project canvas and place it on the board.
   collect   Import recent image files from ~/.codex/generated_images and the project.
+  search    Search canvas objects by name, prompt, text, source path, or grouping metadata.
   status    Print current canvas runtime and object count.
   setup-ocr Explicitly install RapidOCR for local Edit Text recognition.
   setup-image-deps Explicitly install Pillow and numpy for Edit Elements local layer processing.

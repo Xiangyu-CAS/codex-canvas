@@ -21,6 +21,69 @@ function canvasIdFrom(options = {}) {
   return typeof options.canvasId === "string" && options.canvasId.trim() ? options.canvasId.trim() : null;
 }
 
+function normalizeSearchText(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function clampSearchLimit(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 20;
+  return Math.min(100, Math.max(1, Math.round(number)));
+}
+
+function matchedObjectFields(object, query) {
+  const fields = searchFieldsForObject(object);
+  if (!query) return [];
+  return fields
+    .filter((field) => field.value.includes(query))
+    .map((field) => field.name);
+}
+
+function searchFieldsForObject(object) {
+  const entries = {
+    id: object.id,
+    type: object.type || "image",
+    name: object.name,
+    prompt: object.prompt,
+    text: object.text,
+    batchId: object.batchId,
+    sourceObjectId: object.sourceObjectId,
+    layerGroupId: object.layerGroupId,
+    layerGroupName: object.layerGroupName,
+    layerGroupKind: object.layerGroupKind,
+    assetPath: object.assetPath,
+    sourcePath: object.sourcePath,
+    src: object.src
+  };
+  return Object.entries(entries)
+    .filter(([, value]) => typeof value === "string" && value.trim())
+    .map(([name, value]) => ({ name, value: value.toLowerCase() }));
+}
+
+function summarizeSearchObject(object, matchFields) {
+  return {
+    id: object.id,
+    type: object.type || "image",
+    name: object.name || "",
+    prompt: object.prompt || "",
+    text: object.text || "",
+    src: object.src || "",
+    assetPath: object.assetPath || null,
+    sourcePath: object.sourcePath || null,
+    batchId: object.batchId || null,
+    sourceObjectId: object.sourceObjectId || null,
+    layerGroupId: object.layerGroupId || null,
+    layerGroupName: object.layerGroupName || null,
+    layerGroupKind: object.layerGroupKind || null,
+    x: Number.isFinite(object.x) ? object.x : null,
+    y: Number.isFinite(object.y) ? object.y : null,
+    width: Number.isFinite(object.width) ? object.width : null,
+    height: Number.isFinite(object.height) ? object.height : null,
+    createdAt: object.createdAt || null,
+    matchFields
+  };
+}
+
 export async function ensureProjectStore(projectDir, options = {}) {
   const canvasId = canvasIdFrom(options);
   if (canvasId) await migrateLegacyCanvasIfNeeded(projectDir, canvasId);
@@ -94,6 +157,32 @@ export async function readState(projectDir, options = {}) {
   const canvasId = canvasIdFrom(options);
   await ensureProjectStore(projectDir, options);
   return readStateFile(projectDir, { canvasId });
+}
+
+export async function searchObjects(projectDir, { query = "", limit = 20, type = null, canvasId = null } = {}) {
+  const state = await readState(projectDir, { canvasId });
+  const normalizedQuery = normalizeSearchText(query);
+  const normalizedType = typeof type === "string" && type.trim() ? type.trim().toLowerCase() : null;
+  const maxResults = clampSearchLimit(limit);
+  const results = [];
+
+  for (const object of state.objects) {
+    const objectType = (object.type || "image").toLowerCase();
+    if (normalizedType && objectType !== normalizedType) continue;
+
+    const matchFields = matchedObjectFields(object, normalizedQuery);
+    if (normalizedQuery && matchFields.length === 0) continue;
+
+    results.push(summarizeSearchObject(object, matchFields));
+    if (results.length >= maxResults) break;
+  }
+
+  return {
+    query: query || "",
+    canvasId: canvasId || null,
+    total: results.length,
+    results
+  };
 }
 
 export async function writeState(projectDir, state, options = {}) {

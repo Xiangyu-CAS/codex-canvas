@@ -8,7 +8,7 @@ import { placeImportedElementLayersForTest } from "../src/jobs.mjs";
 import { checkImageProcessingDepsAvailable } from "../src/ocr-setup.mjs";
 import { assetsDirFor } from "../src/paths.mjs";
 import { createServer as createAgentCanvasServer } from "../src/server.mjs";
-import { addImage, addObject, deleteObjects, readState, transformState, updateObject } from "../src/store.mjs";
+import { addImage, addObject, deleteObjects, readState, searchObjects, transformState, updateObject } from "../src/store.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -22,6 +22,7 @@ async function main() {
     ["object patch sanitization", testObjectPatchSanitization],
     ["http object patch sanitization", testHttpObjectPatchSanitization],
     ["http image input boundaries", testHttpImageInputBoundaries],
+    ["canvas object search", testCanvasObjectSearch],
     ["http json boundaries", testHttpJsonBoundaries],
     ["http project registration boundaries", testHttpProjectRegistrationBoundaries],
     ["frontend action contract", testFrontendActionContract],
@@ -145,6 +146,48 @@ async function testHttpImageInputBoundaries() {
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
+}
+
+async function testCanvasObjectSearch() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-search-"));
+  const image = await addImage(projectDir, {
+    dataUrl: `data:image/png;base64,${pngOne}`,
+    name: "Sunset concept.png",
+    prompt: "Warm city skyline with orange clouds",
+    x: 12,
+    y: 24
+  });
+  const text = await addObject(projectDir, {
+    type: "text",
+    text: "Client approval note",
+    name: "Review Note"
+  });
+  const direct = await searchObjects(projectDir, { query: "skyline" });
+  assertEqual(direct.total, 1, "store search should find objects by prompt");
+  assertEqual(direct.results[0].id, image.id, "store search should return matching image object summaries");
+  if (!direct.results[0].matchFields.includes("prompt")) throw new Error("store search should report matched prompt fields.");
+
+  const typed = await searchObjects(projectDir, { query: "note", type: "text" });
+  assertEqual(typed.total, 1, "store search should support type filters");
+  assertEqual(typed.results[0].id, text.id, "store search type filter should return the text object");
+
+  const { server, url } = await createServer({ projectDir, port: 0, autoCollect: false });
+  const base = url.replace(/\?.*/, "");
+  const search = new URL(url).search;
+  try {
+    const response = await fetch(`${base}api/search${search}&q=${encodeURIComponent("sunset")}&limit=5`);
+    const body = await response.json();
+    assertEqual(response.status, 200, "HTTP search should succeed");
+    assertEqual(body.total, 1, "HTTP search should return matching objects");
+    assertEqual(body.results[0].id, image.id, "HTTP search should return the matching image");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+
+  const cli = await runCliJson(["search", "approval", "--project", projectDir, "--json"]);
+  assertEqual(cli.status, 0, "CLI search should succeed");
+  assertEqual(cli.body.total, 1, "CLI search should return matching objects");
+  assertEqual(cli.body.results[0].id, text.id, "CLI search should return the matching text object");
 }
 
 async function testHttpJsonBoundaries() {
@@ -350,7 +393,7 @@ async function testAutoCollectorWatermark() {
 
 async function testMcpCanvasStatus() {
   const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-mcp-"));
-  await addObject(projectDir, { type: "text", text: "mcp", x: 10, y: 10 });
+  await addObject(projectDir, { type: "text", text: "mcp searchable note", name: "MCP Note", x: 10, y: 10 });
   const client = await startMcpServer();
   try {
     const initialized = await client.request("initialize", {});
@@ -366,6 +409,12 @@ async function testMcpCanvasStatus() {
     });
     assertEqual(status.structuredContent?.objects, 1, "MCP canvas_status should read default canvas state");
     assertEqual(status.structuredContent?.chatBound, false, "MCP canvas_status should not infer chat binding without threadId");
+    const search = await client.request("tools/call", {
+      name: "search_canvas",
+      arguments: { projectDir, query: "searchable" }
+    });
+    assertEqual(search.structuredContent?.total, 1, "MCP search_canvas should search canvas object text");
+    assertEqual(search.structuredContent?.results?.[0]?.matchFields?.includes("text"), true, "MCP search_canvas should report matched fields");
     await assertRejects(
       () => client.request("tools/call", {
         name: "canvas_status",
@@ -389,7 +438,7 @@ async function testMcpCanvasStatus() {
 
 function assertMcpToolSchema(tools = []) {
   const byName = new Map(tools.map((tool) => [tool.name, tool]));
-  for (const name of ["open_canvas", "canvas_status", "collect_recent_images"]) {
+  for (const name of ["open_canvas", "canvas_status", "search_canvas", "collect_recent_images"]) {
     const required = byName.get(name)?.inputSchema?.required || [];
     if (!required.includes("projectDir")) {
       throw new Error(`MCP ${name} should require projectDir.`);
@@ -497,8 +546,14 @@ async function testCliCollectHelp() {
   if (!stdout.includes("agent-canvas collect [--project <dir>] [--from <dir,dir>] [--since-minutes 120] [--limit 20]")) {
     throw new Error("CLI help should document collect flags.");
   }
+  if (!stdout.includes("agent-canvas search [query] [--project <dir>] [--type image|text|drawing|job] [--limit 20] [--json]")) {
+    throw new Error("CLI help should document search flags.");
+  }
   if (!stdout.includes("Import recent image files from ~/.codex/generated_images and the project.")) {
     throw new Error("CLI help should document collect default roots.");
+  }
+  if (!stdout.includes("Search canvas objects by name, prompt, text, source path, or grouping metadata.")) {
+    throw new Error("CLI help should document search behavior.");
   }
 }
 

@@ -4,7 +4,7 @@ import { main as cliMain } from "./cli.mjs";
 import { collectRecentImages } from "./collector.mjs";
 import { sendImageToBoundChat } from "./codex-chat.mjs";
 import { createImageJob } from "./jobs.mjs";
-import { addImage, readState } from "./store.mjs";
+import { addImage, readState, searchObjects } from "./store.mjs";
 import { pluginRoot, resolveProjectDir } from "./paths.mjs";
 import { canvasIdForThread, normalizeThreadId } from "./runtime.mjs";
 
@@ -89,6 +89,21 @@ async function handle(method, params) {
             properties: {
               projectDir: { type: "string", description: "Absolute path to the active Codex project." },
               threadId: { type: "string", description: "Codex thread id whose canvas status should be read. Pass this explicitly for thread-scoped canvases; omitted means the default project canvas." }
+            }
+          }
+        },
+        {
+          name: "search_canvas",
+          description: "Search Agent-Canvas objects by name, prompt, text, source path, or layer metadata.",
+          inputSchema: {
+            type: "object",
+            required: ["projectDir"],
+            properties: {
+              projectDir: { type: "string", description: "Absolute path to the active Codex project." },
+              query: { type: "string", description: "Search text. Empty query returns the first matching objects." },
+              type: { type: "string", enum: ["image", "text", "drawing", "job"], description: "Optional canvas object type filter." },
+              limit: { type: "number", description: "Maximum number of results. Defaults to 20, capped at 100." },
+              threadId: { type: "string", description: "Codex thread id whose canvas should be searched. Pass explicitly for thread-scoped canvases; omitted means the default project canvas." }
             }
           }
         },
@@ -187,6 +202,18 @@ async function handle(method, params) {
         chatBound: Boolean(canvas.threadId),
         updatedAt: state.updatedAt
       });
+    }
+
+    if (params.name === "search_canvas") {
+      const projectDir = requireProjectDir(args);
+      const canvas = await resolveCanvasOptions(projectDir, args);
+      const result = await searchObjects(projectDir, {
+        query: args.query || "",
+        type: args.type || null,
+        limit: Number(args.limit || 20),
+        canvasId: canvas.canvasId
+      });
+      return textResult(`Found ${result.total} Agent-Canvas object(s).`, result);
     }
 
     if (params.name === "collect_recent_images") {

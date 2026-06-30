@@ -7,7 +7,7 @@ import { collectRecentImages } from "./collector.mjs";
 import { sendImageToBoundChat } from "./codex-chat.mjs";
 import { createImageJob, createTextRecognitionJob, getActivePlaceholderIds, getIgnoredGeneratedImagePaths, getImageJob, getTextRecognitionJob, hasRunningImageJobs, submitTextRecognitionEdit } from "./jobs.mjs";
 import { assetsDirFor, projectRegistryPath, publicDir, runtimePathFor } from "./paths.mjs";
-import { addImage, addObject, deleteObject, deleteObjects, ensureProjectStore, markStaleJobPlaceholders, readState, updateObject, updateProjectMeta, updateSelection, updateViewport } from "./store.mjs";
+import { addImage, addObject, deleteObject, deleteObjects, ensureProjectStore, markStaleJobPlaceholders, readState, searchObjects, updateObject, updateProjectMeta, updateSelection, updateViewport } from "./store.mjs";
 import { canvasIdForThread, normalizeThreadId } from "./runtime.mjs";
 
 const contentTypes = {
@@ -92,6 +92,15 @@ async function handleRequest(request, response, context) {
   if (request.method === "GET" && pathname === "/api/state") {
     return sendJson(response, 200, await markStaleJobPlaceholders(projectDir, {
       activePlaceholderIds: getActivePlaceholderIds(jobScopeFor(project)),
+      canvasId: project.canvasId
+    }));
+  }
+
+  if (request.method === "GET" && pathname === "/api/search") {
+    return sendJson(response, 200, await searchObjects(projectDir, {
+      query: requestUrl.searchParams.get("q") || requestUrl.searchParams.get("query") || "",
+      type: requestUrl.searchParams.get("type") || null,
+      limit: Number(requestUrl.searchParams.get("limit") || 20),
       canvasId: project.canvasId
     }));
   }
