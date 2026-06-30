@@ -1,6 +1,7 @@
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
+import crypto from "node:crypto";
 
 export const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const publicDir = path.join(pluginRoot, "public");
@@ -15,6 +16,10 @@ export function dataDirFor(projectDir) {
 }
 
 export function canvasDataDirFor(projectDir, canvasId = null) {
+  return canvasId ? path.join(dataDirFor(projectDir), "threads", storagePathSegment(canvasId)) : dataDirFor(projectDir);
+}
+
+export function legacyCanvasDataDirFor(projectDir, canvasId = null) {
   return canvasId ? path.join(dataDirFor(projectDir), "threads", safePathSegment(canvasId)) : dataDirFor(projectDir);
 }
 
@@ -43,4 +48,15 @@ export function projectRegistryPath() {
 
 export function safePathSegment(value) {
   return String(value || "default").replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, maxSafePathSegmentLength) || "default";
+}
+
+function storagePathSegment(value) {
+  const raw = String(value || "default");
+  const safe = safePathSegment(raw);
+  if (safe === raw && raw.length <= maxSafePathSegmentLength) return safe;
+
+  const hash = crypto.createHash("sha256").update(raw).digest("base64url").slice(0, 12);
+  const readableLength = maxSafePathSegmentLength - hash.length - 1;
+  const readable = safe.slice(0, readableLength) || "id";
+  return `${readable}-${hash}`;
 }

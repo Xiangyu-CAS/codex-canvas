@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
-import { assetsDirFor, statePathFor } from "./paths.mjs";
+import { assetsDirFor, legacyCanvasDataDirFor, statePathFor } from "./paths.mjs";
 
 const defaultState = {
   version: 1,
@@ -169,6 +169,18 @@ export async function ensureProjectStore(projectDir, options = {}) {
 async function migrateLegacyCanvasIfNeeded(projectDir, canvasId) {
   const targetStatePath = statePathFor(projectDir, canvasId);
   if (await fileExists(targetStatePath)) return;
+
+  const legacyCanvasDir = legacyCanvasDataDirFor(projectDir, canvasId);
+  const legacyCanvasStatePath = path.join(legacyCanvasDir, "agent-canvas.json");
+  if (legacyCanvasStatePath !== targetStatePath && await fileExists(legacyCanvasStatePath)) {
+    await fs.mkdir(path.dirname(targetStatePath), { recursive: true });
+    await fs.cp(legacyCanvasDir, path.dirname(targetStatePath), {
+      recursive: true,
+      force: false,
+      errorOnExist: false
+    });
+    return;
+  }
 
   const legacyStatePath = statePathFor(projectDir);
   if (!await fileExists(legacyStatePath)) return;

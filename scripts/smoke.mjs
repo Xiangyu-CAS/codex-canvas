@@ -8,7 +8,7 @@ import { sendImageToBoundChat } from "../src/codex-chat.mjs";
 import { collectRecentImages } from "../src/collector.mjs";
 import { placeImportedElementLayersForTest } from "../src/jobs.mjs";
 import { checkImageProcessingDepsAvailable } from "../src/ocr-setup.mjs";
-import { assetsDirFor, statePathFor } from "../src/paths.mjs";
+import { assetsDirFor, legacyCanvasDataDirFor, statePathFor } from "../src/paths.mjs";
 import { createServer as createAgentCanvasServer } from "../src/server.mjs";
 import { addImage, addObject, deleteObjects, promptHistory, readState, searchObjects, transformState, updateObject, updateSelection, updateViewport, versionGroups } from "../src/store.mjs";
 
@@ -24,6 +24,7 @@ async function main() {
     ["object patch sanitization", testObjectPatchSanitization],
     ["selection sanitization", testSelectionSanitization],
     ["viewport sanitization", testViewportSanitization],
+    ["canvas id path isolation", testCanvasIdPathIsolation],
     ["http object patch sanitization", testHttpObjectPatchSanitization],
     ["http image input boundaries", testHttpImageInputBoundaries],
     ["canvas object search", testCanvasObjectSearch],
@@ -141,6 +142,51 @@ async function testViewportSanitization() {
   assertEqual(legacyState.viewport.x, 0, "readState should sanitize legacy viewport x values");
   assertEqual(legacyState.viewport.y, 24, "readState should preserve finite legacy viewport y values");
   assertEqual(legacyState.viewport.zoom, 0.12, "readState should clamp legacy viewport zoom values");
+}
+
+async function testCanvasIdPathIsolation() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-canvas-id-"));
+  const slashCanvasId = "review/canvas";
+  const underscoreCanvasId = "review_canvas";
+  const slashStatePath = statePathFor(projectDir, slashCanvasId);
+  const underscoreStatePath = statePathFor(projectDir, underscoreCanvasId);
+  if (slashStatePath === underscoreStatePath) {
+    throw new Error("canvasId storage paths should not collide after path sanitization.");
+  }
+
+  const slashObject = await addObject(projectDir, {
+    type: "text",
+    text: "slash canvas",
+    name: "Slash Canvas"
+  }, { canvasId: slashCanvasId });
+  const underscoreObject = await addObject(projectDir, {
+    type: "text",
+    text: "underscore canvas",
+    name: "Underscore Canvas"
+  }, { canvasId: underscoreCanvasId });
+
+  const slashState = await readState(projectDir, { canvasId: slashCanvasId });
+  const underscoreState = await readState(projectDir, { canvasId: underscoreCanvasId });
+  assertEqual(slashState.objects.length, 1, "canvasId with path separators should keep an isolated state file");
+  assertEqual(slashState.objects[0].id, slashObject.id, "slash canvas should read its own object");
+  assertEqual(underscoreState.objects.length, 1, "sanitized-looking canvasId should keep a separate state file");
+  assertEqual(underscoreState.objects[0].id, underscoreObject.id, "underscore canvas should read its own object");
+
+  const legacyProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-legacy-canvas-id-"));
+  const legacyCanvasId = "legacy/canvas";
+  const legacyStatePath = path.join(legacyCanvasDataDirFor(legacyProjectDir, legacyCanvasId), "agent-canvas.json");
+  const migratedStatePath = statePathFor(legacyProjectDir, legacyCanvasId);
+  await fs.mkdir(path.dirname(legacyStatePath), { recursive: true });
+  await fs.writeFile(legacyStatePath, `${JSON.stringify({
+    version: 1,
+    title: "Legacy Canvas",
+    viewport: { x: 0, y: 0, zoom: 0.72 },
+    objects: [{ id: "legacy-object", type: "text", text: "legacy", x: 1, y: 2, width: 10, height: 10 }],
+    selection: "legacy-object"
+  }, null, 2)}\n`);
+  const migratedState = await readState(legacyProjectDir, { canvasId: legacyCanvasId });
+  assertEqual(migratedState.objects[0]?.id, "legacy-object", "unsafe legacy canvasId paths should migrate to collision-resistant storage");
+  await fs.access(migratedStatePath);
 }
 
 async function testHttpObjectPatchSanitization() {
