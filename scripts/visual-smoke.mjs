@@ -229,6 +229,39 @@ async function assertDiscoveryVersionBrowser(page, versionIds) {
   for (const versionId of versionIds) {
     await assertLocatorClassContains(page, `.canvas-object[data-id="${versionId}"]`, "selected");
   }
+  await assertMultiSelectionDragMovesEverySelectedObject(page, versionIds);
+}
+
+async function assertMultiSelectionDragMovesEverySelectedObject(page, versionIds) {
+  const before = await canvasObjectRects(page, versionIds);
+  const first = before[versionIds[0]];
+  await page.mouse.move(first.left + first.width / 2, first.top + first.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(first.left + first.width / 2 + 42, first.top + first.height / 2 + 28, { steps: 4 });
+  await page.mouse.up();
+
+  await page.waitForFunction(({ ids, before }) => {
+    return ids.every((id) => {
+      const element = document.querySelector(`.canvas-object[data-id="${id}"]`);
+      if (!element) return false;
+      const rect = element.getBoundingClientRect();
+      return Math.abs(rect.left - before[id].left) > 10 && Math.abs(rect.top - before[id].top) > 6;
+    });
+  }, { ids: versionIds, before }, { timeout: 5000 });
+}
+
+async function canvasObjectRects(page, ids) {
+  return page.evaluate((ids) => Object.fromEntries(ids.map((id) => {
+    const element = document.querySelector(`.canvas-object[data-id="${id}"]`);
+    if (!element) return [id, null];
+    const rect = element.getBoundingClientRect();
+    return [id, {
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height
+    }];
+  })), ids);
 }
 
 async function runEditElementsLayerSmoke(browser) {

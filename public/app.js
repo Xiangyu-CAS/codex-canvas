@@ -1404,8 +1404,10 @@ function startDrag(event, object, options = {}) {
   event.preventDefault();
   event.stopPropagation();
   const element = event.currentTarget;
+  const isMultiSelectionDrag = !options.forceGroup && selectedIds.size > 1 && selectedIds.has(object.id);
   const useLayerGroup = object.layerGroupId && (options.forceGroup || object.layerGroupLocked);
   const groupMembers = useLayerGroup ? layerGroupMembers(object.layerGroupId) : [];
+  const multiMembers = isMultiSelectionDrag ? selectedObjects() : [];
   if (element.setPointerCapture) {
     try {
       element.setPointerCapture(event.pointerId);
@@ -1413,11 +1415,15 @@ function startDrag(event, object, options = {}) {
       // Continue with window-level pointer listeners if capture is unavailable.
     }
   }
-  setLocalSelection([object.id], { fromUser: true });
+  if (!isMultiSelectionDrag) {
+    setLocalSelection([object.id], { fromUser: true });
+  }
   element.classList.add("selected", "dragging");
   drag = {
     id: object.id,
     groupId: useLayerGroup ? object.layerGroupId : null,
+    multiIds: isMultiSelectionDrag ? multiMembers.map((item) => item.id) : [],
+    multiMembers: multiMembers.map((item) => ({ id: item.id, x: item.x, y: item.y })),
     members: groupMembers.map((item) => ({ id: item.id, x: item.x, y: item.y })),
     element,
     pointerId: event.pointerId,
@@ -1430,7 +1436,7 @@ function startDrag(event, object, options = {}) {
   fetch(apiPath("/api/selection"), {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ selection: object.id })
+    body: JSON.stringify({ selection: selectedId })
   }).catch(() => {});
 
   window.addEventListener("pointermove", moveDrag);
@@ -1442,7 +1448,19 @@ function moveDrag(event) {
   if (!drag) return;
   const dx = Math.round((event.clientX - drag.startX) / viewport.zoom);
   const dy = Math.round((event.clientY - drag.startY) / viewport.zoom);
-  if (drag.groupId) {
+  if (drag.multiMembers?.length) {
+    for (const memberStart of drag.multiMembers) {
+      const member = state.objects.find((item) => item.id === memberStart.id);
+      if (!member) continue;
+      member.x = memberStart.x + dx;
+      member.y = memberStart.y + dy;
+      const memberElement = objectLayer.querySelector(`[data-id="${member.id}"]`);
+      if (memberElement) {
+        memberElement.style.left = `${member.x}px`;
+        memberElement.style.top = `${member.y}px`;
+      }
+    }
+  } else if (drag.groupId) {
     for (const memberStart of drag.members) {
       const member = state.objects.find((item) => item.id === memberStart.id);
       if (!member) continue;
@@ -1483,7 +1501,18 @@ async function endDrag(event) {
     }
   }
   drag = null;
-  if (activeDrag.groupId) {
+  if (activeDrag.multiMembers?.length) {
+    await Promise.all(activeDrag.multiIds.map((id) => {
+      const member = state.objects.find((item) => item.id === id);
+      if (!member) return Promise.resolve();
+      return fetch(apiPath(`/api/objects/${member.id}`), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ x: member.x, y: member.y })
+      }).catch(() => {});
+    }));
+    render();
+  } else if (activeDrag.groupId) {
     await patchLayerGroupMembersSequentially(layerGroupMembers(activeDrag.groupId), (member) => ({ x: member.x, y: member.y }));
     render();
   } else if (object) {
@@ -1639,6 +1668,11 @@ function selectedObjectIds() {
   if (!hasUserSelection) return new Set();
   if (selectedIds.size) return selectedIds;
   return selectedId ? new Set([selectedId]) : new Set();
+}
+
+function selectedObjects() {
+  const ids = selectedObjectIds();
+  return state?.objects.filter((object) => ids.has(object.id)) || [];
 }
 
 function startMarqueeSelection(event) {

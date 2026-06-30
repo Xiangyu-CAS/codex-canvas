@@ -16,6 +16,7 @@ const viewports = [
   { name: "desktop", width: 1280, height: 800, deviceScaleFactor: 1 },
   { name: "mobile", width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 2 }
 ];
+const screenshotCases = ["discovery", "selected", "compare"];
 let visualProjectRegistryPath = null;
 
 async function main() {
@@ -32,22 +33,25 @@ async function main() {
   const results = [];
   try {
     for (const viewport of viewports) {
-      const screenshot = await captureReferenceViewport(browser, viewport);
-      const baselinePath = path.join(baselineDir, `${viewport.name}.png`);
-      if (updateBaselines) {
-        await fsp.mkdir(baselineDir, { recursive: true });
-        await fsp.writeFile(baselinePath, screenshot);
-        results.push({ name: viewport.name, updated: true });
-        continue;
-      }
+      for (const screenshotCase of screenshotCases) {
+        const name = `${viewport.name}-${screenshotCase}`;
+        const screenshot = await captureReferenceViewport(browser, viewport, screenshotCase);
+        const baselinePath = path.join(baselineDir, `${name}.png`);
+        if (updateBaselines) {
+          await fsp.mkdir(baselineDir, { recursive: true });
+          await fsp.writeFile(baselinePath, screenshot);
+          results.push({ name, updated: true });
+          continue;
+        }
 
-      const baseline = await readBaseline(baselinePath, viewport.name);
-      const diff = await comparePngBuffers(browser, baseline, screenshot);
-      if (diff.changedRatio > pixelThreshold) {
-        const percent = (diff.changedRatio * 100).toFixed(2);
-        throw new Error(`${viewport.name} visual regression exceeded ${(pixelThreshold * 100).toFixed(2)}% threshold: ${percent}% pixels changed`);
+        const baseline = await readBaseline(baselinePath, name);
+        const diff = await comparePngBuffers(browser, baseline, screenshot);
+        if (diff.changedRatio > pixelThreshold) {
+          const percent = (diff.changedRatio * 100).toFixed(2);
+          throw new Error(`${name} visual regression exceeded ${(pixelThreshold * 100).toFixed(2)}% threshold: ${percent}% pixels changed`);
+        }
+        results.push({ name, changedRatio: Number(diff.changedRatio.toFixed(5)) });
       }
-      results.push({ name: viewport.name, changedRatio: Number(diff.changedRatio.toFixed(5)) });
     }
   } finally {
     await browser.close();
@@ -55,7 +59,7 @@ async function main() {
   console.log(JSON.stringify({ ok: true, updated: updateBaselines, checks: results }, null, 2));
 }
 
-async function captureReferenceViewport(browser, viewport) {
+async function captureReferenceViewport(browser, viewport, screenshotCase) {
   const projectDir = await fsp.mkdtemp(path.join(os.tmpdir(), `agent-canvas-regression-${viewport.name}-`));
   const source = await addImage(projectDir, {
     dataUrl: `data:image/png;base64,${pngOne}`,
@@ -78,6 +82,18 @@ async function captureReferenceViewport(browser, viewport) {
     width: viewport.name === "mobile" ? 180 : 220,
     height: viewport.name === "mobile" ? 140 : 160
   });
+  await addImage(projectDir, {
+    dataUrl: `data:image/png;base64,${pngOne}`,
+    name: "reference-version-b.png",
+    prompt: "Reference product variant B",
+    sourceObjectId: source.id,
+    batchId: "reference-batch",
+    layoutMode: "canvas-row",
+    x: viewport.name === "mobile" ? 170 : 980,
+    y: viewport.name === "mobile" ? 660 : 280,
+    width: viewport.name === "mobile" ? 160 : 200,
+    height: viewport.name === "mobile" ? 120 : 140
+  });
 
   const { server, url } = await createServer({ projectDir, port: 0, autoCollect: false });
   const context = await browser.newContext({
@@ -92,13 +108,27 @@ async function captureReferenceViewport(browser, viewport) {
     await waitForVisible(page, "#board", "board should be visible");
     await waitForVisible(page, ".canvas-object img", "fixture image should be visible");
     await waitForImageDecoded(page, ".canvas-object img");
-    await page.locator(".prompt-history-button").click();
-    await waitForVisible(page, ".prompt-history-panel:not([hidden])", "discovery panel should be visible");
-    await page.locator("[data-discovery-mode='versions']").click();
-    await page.locator(".version-group-select select").selectOption("prompt");
-    await waitForVisible(page, ".version-group-thumb", "version thumbnails should be visible");
-    await waitForText(page, ".version-group-title", "Reference product variant", "version group title should be deterministic");
-    await waitForImageDecoded(page, ".version-group-thumb");
+
+    if (screenshotCase === "selected") {
+      await page.locator(`.canvas-object[data-id="${source.id}"]`).click();
+      await waitForVisible(page, "#selectionToolbar", "selection toolbar should be visible");
+    } else if (screenshotCase === "compare") {
+      await page.locator(".prompt-history-button").click();
+      await waitForVisible(page, ".prompt-history-panel:not([hidden])", "discovery panel should be visible");
+      await page.locator("[data-discovery-mode='versions']").click();
+      await waitForVisible(page, ".version-group-compare", "version comparison control should be visible");
+      await page.locator(".version-group-compare").first().click();
+      await waitForHidden(page, ".prompt-history-panel", "discovery panel should close after compare");
+      await waitForSelectedCount(page, 2, "compare should select the grouped versions");
+    } else {
+      await page.locator(".prompt-history-button").click();
+      await waitForVisible(page, ".prompt-history-panel:not([hidden])", "discovery panel should be visible");
+      await page.locator("[data-discovery-mode='versions']").click();
+      await page.locator(".version-group-select select").selectOption("prompt");
+      await waitForVisible(page, ".version-group-thumb", "version thumbnails should be visible");
+      await waitForText(page, ".version-group-title", "Reference product variant", "version group title should be deterministic");
+      await waitForImageDecoded(page, ".version-group-thumb");
+    }
     return await page.screenshot({ fullPage: false, animations: "disabled" });
   } finally {
     await context.close();
@@ -289,6 +319,26 @@ async function waitForText(page, selector, expected, message) {
   await page.waitForFunction(({ selector, expected }) => {
     return [...document.querySelectorAll(selector)].some((element) => element.textContent?.includes(expected));
   }, { selector, expected }, { timeout: 5000 }).catch((error) => {
+    throw new Error(`${message}: ${error.message}`);
+  });
+}
+
+async function waitForHidden(page, selector, message) {
+  await page.waitForFunction((target) => {
+    const element = document.querySelector(target);
+    if (!element || element.hidden) return true;
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return style.display === "none" || style.visibility === "hidden" || rect.width === 0 || rect.height === 0;
+  }, selector, { timeout: 5000 }).catch((error) => {
+    throw new Error(`${message}: ${error.message}`);
+  });
+}
+
+async function waitForSelectedCount(page, count, message) {
+  await page.waitForFunction((count) => {
+    return document.querySelectorAll(".canvas-object.selected").length === count;
+  }, count, { timeout: 5000 }).catch((error) => {
     throw new Error(`${message}: ${error.message}`);
   });
 }

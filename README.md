@@ -125,7 +125,7 @@ npm run smoke:visual
 npm run visual:regression
 ```
 
-`visual:regression` 会把固定桌面/移动端画布截图与 `scripts/reference-screenshots/` 中的基线 PNG 比较；需要刷新基线时运行 `npm run visual:regression -- --update`。
+`visual:regression` 会把固定桌面/移动端的 discovery、选中工具栏和版本比较截图与 `scripts/reference-screenshots/` 中的基线 PNG 比较；需要刷新基线时运行 `npm run visual:regression -- --update`。
 
 ## Codex 插件安装
 
