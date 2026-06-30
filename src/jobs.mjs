@@ -482,6 +482,11 @@ async function markTextRecognitionCancelled(job, startedAtMs) {
   job.status = "done";
   job.completedAt = new Date().toISOString();
   job.durationMs = Date.now() - startedAtMs;
+  if (job.projectDir && job.placeholderId) {
+    await deleteObject(job.projectDir, job.placeholderId, { canvasId: job.canvasId || null }).catch(() => {});
+    job.placeholder = null;
+    job.placeholderId = null;
+  }
   await appendJobLog(job, "Edit Text session cancelled.");
 }
 
@@ -1177,6 +1182,13 @@ export async function placeImportedElementLayersForTest(projectDir, job) {
     throw new Error("Edit Elements test helpers are disabled.");
   }
   return placeImportedElementLayers(projectDir, job);
+}
+
+export async function markTextRecognitionCancelledForTest(job, startedAtMs = Date.now()) {
+  if (process.env.AGENT_CANVAS_TEST_HELPERS !== "1") {
+    throw new Error("Text recognition test helpers are disabled.");
+  }
+  return markTextRecognitionCancelled(job, startedAtMs);
 }
 
 async function readElementManifest(job) {

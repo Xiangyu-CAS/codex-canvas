@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { normalizePort } from "../src/cli.mjs";
 import { sendImageToBoundChat } from "../src/codex-chat.mjs";
 import { collectRecentImages } from "../src/collector.mjs";
-import { placeImportedElementLayersForTest } from "../src/jobs.mjs";
+import { markTextRecognitionCancelledForTest, placeImportedElementLayersForTest } from "../src/jobs.mjs";
 import { checkImageProcessingDepsAvailable } from "../src/ocr-setup.mjs";
 import { assetsDirFor, legacyCanvasDataDirFor, statePathFor } from "../src/paths.mjs";
 import { createServer as createAgentCanvasServer } from "../src/server.mjs";
@@ -53,6 +53,7 @@ async function main() {
     ["chat binding alias", testChatBindingAlias],
     ["chat websocket fallback", testChatWebSocketFallback],
     ["chat turn action contract", testChatTurnActionContract],
+    ["edit text cancellation cleanup", testEditTextCancellationCleanup],
     ["edit elements scripts", testEditElementsScripts]
   ]) {
     await test();
@@ -1420,6 +1421,40 @@ async function testChatWebSocketFallback() {
   } finally {
     process.env.AGENT_CANVAS_CODEX_CLI = previousCli;
     globalThis.WebSocket = previousWebSocket;
+  }
+}
+
+async function testEditTextCancellationCleanup() {
+  const previous = process.env.AGENT_CANVAS_TEST_HELPERS;
+  process.env.AGENT_CANVAS_TEST_HELPERS = "1";
+  try {
+    const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-edit-text-cancel-"));
+    const source = await addImage(projectDir, {
+      dataUrl: `data:image/png;base64,${pngOne}`,
+      name: "source.png"
+    });
+    const placeholder = await addImage(projectDir, {
+      dataUrl: `data:image/png;base64,${pngOne}`,
+      name: "edit-text-placeholder.png",
+      sourceObjectId: source.id
+    });
+    const logPath = path.join(projectDir, "job.log");
+    await markTextRecognitionCancelledForTest({
+      id: "text-cancel-test",
+      projectDir,
+      canvasId: null,
+      placeholder,
+      placeholderId: placeholder.id,
+      logPath
+    }, Date.now() - 250);
+    const state = await readState(projectDir);
+    if (state.objects.some((object) => object.id === placeholder.id)) {
+      throw new Error("Edit Text cancellation should remove its running placeholder immediately.");
+    }
+    await fs.access(logPath);
+  } finally {
+    if (previous === undefined) delete process.env.AGENT_CANVAS_TEST_HELPERS;
+    else process.env.AGENT_CANVAS_TEST_HELPERS = previous;
   }
 }
 
