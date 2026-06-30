@@ -6,7 +6,7 @@ import crypto from "node:crypto";
 import { collectRecentImages } from "./collector.mjs";
 import { sendImageToBoundChat } from "./codex-chat.mjs";
 import { createImageJob, createTextRecognitionJob, getActivePlaceholderIds, getIgnoredGeneratedImagePaths, getImageJob, getTextRecognitionJob, hasRunningImageJobs, submitTextRecognitionEdit } from "./jobs.mjs";
-import { assetsDirFor, publicDir, runtimePathFor } from "./paths.mjs";
+import { assetsDirFor, projectRegistryPath, publicDir, runtimePathFor } from "./paths.mjs";
 import { addImage, addObject, deleteObject, deleteObjects, ensureProjectStore, markStaleJobPlaceholders, readState, updateObject, updateProjectMeta, updateSelection, updateViewport } from "./store.mjs";
 import { canvasIdForThread, normalizeThreadId } from "./runtime.mjs";
 
@@ -24,9 +24,10 @@ const contentTypes = {
 };
 const defaultMaxJsonBodyBytes = 32 * 1024 * 1024;
 
-export async function createServer({ projectDir, host = "127.0.0.1", port = 43217, autoCollect = true, chatThreadId = null, autoCollectIntervalMs = 5000, maxJsonBodyBytes = defaultMaxJsonBodyBytes } = {}) {
-  const registry = createProjectRegistry({ host, port, autoCollectIntervalMs, maxJsonBodyBytes });
+export async function createServer({ projectDir, host = "127.0.0.1", port = 43217, autoCollect = true, chatThreadId = null, autoCollectIntervalMs = 5000, maxJsonBodyBytes = defaultMaxJsonBodyBytes, persistentRegistryPath = projectRegistryPath() } = {}) {
+  const registry = createProjectRegistry({ host, port, autoCollectIntervalMs, maxJsonBodyBytes, persistentRegistryPath });
   const initialProject = await registerProject(registry, projectDir, { autoCollect, chatThreadId });
+  await restorePersistedProjects(registry);
 
   const server = http.createServer(async (request, response) => {
     try {
@@ -52,6 +53,7 @@ export async function createServer({ projectDir, host = "127.0.0.1", port = 4321
   registry.baseUrl = `http://${host}:${address.port}/`;
   registry.pid = process.pid;
   await writeProjectRuntime(registry, initialProject);
+  await persistProjectRegistrySafely(registry);
   server.on("close", () => {
     for (const project of registry.projects.values()) {
       if (project.collectorTimer) clearInterval(project.collectorTimer);
@@ -77,6 +79,7 @@ async function handleRequest(request, response, context) {
       chatThreadId: body.chatThreadId || body.threadId || null
     });
     await writeProjectRuntime(context.registry, project);
+    await persistProjectRegistrySafely(context.registry);
     return sendJson(response, 201, {
       project: await publicProject(project),
       url: projectUrl(context.registry, project.id)
@@ -138,6 +141,7 @@ async function handleRequest(request, response, context) {
     }
     const rebound = await bindProjectToThread(context.registry, project, threadId);
     await writeProjectRuntime(context.registry, rebound);
+    await persistProjectRegistrySafely(context.registry);
     return sendJson(response, 200, {
       threadId,
       bound: true,
@@ -250,12 +254,13 @@ function sendJson(response, status, body) {
   response.end(JSON.stringify(body));
 }
 
-function createProjectRegistry({ host, port, autoCollectIntervalMs, maxJsonBodyBytes }) {
+function createProjectRegistry({ host, port, autoCollectIntervalMs, maxJsonBodyBytes, persistentRegistryPath }) {
   return {
     host,
     port,
     autoCollectIntervalMs,
     maxJsonBodyBytes,
+    persistentRegistryPath,
     baseUrl: `http://${host}:${port}/`,
     pid: process.pid,
     defaultProjectId: null,
@@ -292,10 +297,10 @@ function requireHttpProjectDir(projectDir) {
   return projectDir;
 }
 
-async function registerProject(registry, projectDir, { autoCollect = true, chatThreadId = null } = {}) {
+async function registerProject(registry, projectDir, { autoCollect = true, chatThreadId = null, canvasId: explicitCanvasId = null, registeredAt = null } = {}) {
   const resolvedProjectDir = path.resolve(projectDir || process.cwd());
   const normalizedThreadId = normalizeThreadId(chatThreadId);
-  const canvasId = canvasIdForThread(normalizedThreadId);
+  const canvasId = normalizeThreadId(explicitCanvasId) || canvasIdForThread(normalizedThreadId);
   await ensureProjectStore(resolvedProjectDir, { canvasId });
   const id = projectIdFor(resolvedProjectDir, canvasId);
   const existing = registry.projects.get(id);
@@ -303,6 +308,7 @@ async function registerProject(registry, projectDir, { autoCollect = true, chatT
     existing.autoCollect = existing.autoCollect || autoCollect;
     if (normalizedThreadId) existing.chatThreadId = normalizedThreadId;
     existing.canvasId = canvasId;
+    if (registeredAt && !existing.registeredAt) existing.registeredAt = registeredAt;
     if (autoCollect && !existing.collectorTimer) startAutoCollector(existing, registry.autoCollectIntervalMs);
     return existing;
   }
@@ -314,7 +320,7 @@ async function registerProject(registry, projectDir, { autoCollect = true, chatT
     chatThreadId: normalizedThreadId,
     canvasId,
     collectSinceMs: Date.now(),
-    registeredAt: new Date().toISOString(),
+    registeredAt: registeredAt || new Date().toISOString(),
     collectorTimer: null,
     collectorRunning: false
   };
@@ -322,6 +328,73 @@ async function registerProject(registry, projectDir, { autoCollect = true, chatT
   registry.defaultProjectId ||= id;
   if (autoCollect) startAutoCollector(project, registry.autoCollectIntervalMs);
   return project;
+}
+
+async function restorePersistedProjects(registry) {
+  const entries = await readPersistedProjectEntries(registry.persistentRegistryPath);
+  for (const entry of entries) {
+    if (!entry || typeof entry !== "object") continue;
+    if (typeof entry.projectDir !== "string" || !path.isAbsolute(entry.projectDir)) continue;
+    if (!await directoryExists(entry.projectDir)) continue;
+    await registerProject(registry, entry.projectDir, {
+      autoCollect: false,
+      chatThreadId: entry.chatThreadId || null,
+      canvasId: entry.canvasId || null,
+      registeredAt: typeof entry.registeredAt === "string" ? entry.registeredAt : null
+    }).catch((error) => {
+      console.error(`Agent-Canvas skipped persisted project ${entry.projectDir}: ${error.message}`);
+    });
+  }
+}
+
+async function readPersistedProjectEntries(registryPath) {
+  try {
+    const payload = JSON.parse(await fs.readFile(registryPath, "utf8"));
+    if (Array.isArray(payload)) return payload;
+    return Array.isArray(payload?.projects) ? payload.projects : [];
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return [];
+    console.error(`Agent-Canvas could not read project registry ${registryPath}: ${error.message}`);
+    return [];
+  }
+}
+
+async function persistProjectRegistry(registry) {
+  const projects = Array.from(registry.projects.values())
+    .map((project) => ({
+      id: project.id,
+      projectDir: project.projectDir,
+      canvasId: project.canvasId || null,
+      chatThreadId: project.chatThreadId || null,
+      registeredAt: project.registeredAt
+    }))
+    .sort((a, b) => a.projectDir.localeCompare(b.projectDir) || String(a.canvasId || "").localeCompare(String(b.canvasId || "")));
+  const payload = {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    projects
+  };
+  await fs.mkdir(path.dirname(registry.persistentRegistryPath), { recursive: true });
+  const tempPath = `${registry.persistentRegistryPath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tempPath, `${JSON.stringify(payload, null, 2)}\n`);
+  await fs.rename(tempPath, registry.persistentRegistryPath);
+}
+
+async function persistProjectRegistrySafely(registry) {
+  try {
+    await persistProjectRegistry(registry);
+  } catch (error) {
+    console.error(`Agent-Canvas could not write project registry ${registry.persistentRegistryPath}: ${error.message}`);
+  }
+}
+
+async function directoryExists(directoryPath) {
+  try {
+    const stat = await fs.stat(directoryPath);
+    return stat.isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 function startAutoCollector(project, intervalMs = 5000) {

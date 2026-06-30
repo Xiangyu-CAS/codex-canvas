@@ -1,4 +1,5 @@
 import path from "node:path";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 
 export const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -31,6 +32,13 @@ export function jobsDirFor(projectDir, canvasId = null) {
 
 export function runtimePathFor(projectDir) {
   return path.join(dataDirFor(projectDir), ".agent-canvas-runtime.json");
+}
+
+export function projectRegistryPath() {
+  return path.resolve(
+    process.env.AGENT_CANVAS_PROJECT_REGISTRY_PATH
+    || path.join(os.homedir(), ".agents", "agent-canvas", "projects.json")
+  );
 }
 
 export function safePathSegment(value) {

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { addImage, updateObject } from "../src/store.mjs";
-import { createServer } from "../src/server.mjs";
+import { createServer as createAgentCanvasServer } from "../src/server.mjs";
 
 const pngOne = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 const expectedSingleImageActions = [
@@ -20,6 +20,7 @@ const viewports = [
   { name: "desktop", width: 1280, height: 800 },
   { name: "mobile", width: 390, height: 844, isMobile: true, hasTouch: true }
 ];
+let visualProjectRegistryPath = null;
 
 async function main() {
   const playwright = await loadPlaywright();
@@ -69,6 +70,21 @@ async function runWithNpmPlaywright() {
       else reject(new Error(`visual smoke runner exited with status ${code}`));
     });
   });
+}
+
+async function createServer(options = {}) {
+  return createAgentCanvasServer({
+    persistentRegistryPath: await persistentRegistryPathForVisualSmoke(),
+    ...options
+  });
+}
+
+async function persistentRegistryPathForVisualSmoke() {
+  if (!visualProjectRegistryPath) {
+    const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-canvas-visual-registry-"));
+    visualProjectRegistryPath = path.join(tmp, "projects.json");
+  }
+  return visualProjectRegistryPath;
 }
 
 async function launchChromium(playwright) {

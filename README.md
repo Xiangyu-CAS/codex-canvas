@@ -139,6 +139,8 @@ canvas/
   jobs/
 ```
 
+跨项目的画布列表会持久化在 `~/.agents/agent-canvas/projects.json`，用于在本地 Agent-Canvas 服务重启后恢复左侧项目菜单。测试或隔离环境可以通过 `AGENT_CANVAS_PROJECT_REGISTRY_PATH` 指向其他 registry 文件。
+
 `agent-canvas.json` 保存默认画布对象和选区状态；绑定 Codex thread 后，每个 thread 的画布状态保存在 `canvas/threads/<canvasId>/agent-canvas.json`。`assets/` 保存导入的图片文件，`jobs/` 保存后台 AI 操作的日志、中间产物和输出。
 
 服务启动后会自动扫描项目内和 `~/.codex/generated_images` 中新产生的图片文件，并导入画布。自动扫描会忽略 `canvas/`、`node_modules/`、`.git/` 等目录，并在成功扫描后推进每个项目画布的扫描水位；如果不希望自动收集，可以使用 `--no-auto-collect`。

@@ -7,12 +7,13 @@ import { sendImageToBoundChat } from "../src/codex-chat.mjs";
 import { placeImportedElementLayersForTest } from "../src/jobs.mjs";
 import { checkImageProcessingDepsAvailable } from "../src/ocr-setup.mjs";
 import { assetsDirFor } from "../src/paths.mjs";
-import { createServer } from "../src/server.mjs";
+import { createServer as createAgentCanvasServer } from "../src/server.mjs";
 import { addImage, addObject, deleteObjects, readState, transformState, updateObject } from "../src/store.mjs";
 
 const execFileAsync = promisify(execFile);
 
 const pngOne = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+let smokeProjectRegistryPath = null;
 
 async function main() {
   const results = [];
@@ -25,6 +26,7 @@ async function main() {
     ["http project registration boundaries", testHttpProjectRegistrationBoundaries],
     ["frontend action contract", testFrontendActionContract],
     ["thread migration asset paths", testThreadMigrationAssetPaths],
+    ["persistent project registry", testPersistentProjectRegistry],
     ["mcp canvas status", testMcpCanvasStatus],
     ["auto collector watermark", testAutoCollectorWatermark],
     ["package optional dependency scripts", testPackageOptionalDependencyScripts],
@@ -40,6 +42,21 @@ async function main() {
     results.push(name);
   }
   console.log(JSON.stringify({ ok: true, tests: results }, null, 2));
+}
+
+async function createServer(options = {}) {
+  return createAgentCanvasServer({
+    persistentRegistryPath: await persistentRegistryPathForSmoke(),
+    ...options
+  });
+}
+
+async function persistentRegistryPathForSmoke() {
+  if (!smokeProjectRegistryPath) {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-registry-smoke-"));
+    smokeProjectRegistryPath = path.join(tmp, "projects.json");
+  }
+  return smokeProjectRegistryPath;
 }
 
 async function testObjectPatchSanitization() {
@@ -247,6 +264,60 @@ async function testThreadMigrationAssetPaths() {
     throw new Error("Thread canvas migration should rewrite assetPath into the thread assets directory.");
   }
   await fs.access(migratedImage.assetPath);
+}
+
+async function testPersistentProjectRegistry() {
+  const firstProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-registry-first-"));
+  const secondProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-registry-second-"));
+  const registryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-registry-file-"));
+  const persistentRegistryPath = path.join(registryRoot, "projects.json");
+  const first = await createServer({
+    projectDir: firstProjectDir,
+    port: 0,
+    autoCollect: false,
+    persistentRegistryPath
+  });
+  const firstBase = first.url.replace(/\?.*/, "");
+  let registered;
+  try {
+    registered = await postJson(`${firstBase}api/projects`, {
+      projectDir: secondProjectDir,
+      autoCollect: false,
+      threadId: "thread-persisted-registry"
+    });
+    assertEqual(registered.status, 201, "HTTP project registration should succeed before registry persistence is checked");
+  } finally {
+    await new Promise((resolve) => first.server.close(resolve));
+  }
+
+  const registryPayload = JSON.parse(await fs.readFile(persistentRegistryPath, "utf8"));
+  if (!registryPayload.projects?.some((project) => project.projectDir === secondProjectDir && project.chatThreadId === "thread-persisted-registry")) {
+    throw new Error("Persistent project registry should store registered thread-scoped projects.");
+  }
+
+  const restoredProjectId = new URL(registered.body.url).searchParams.get("project");
+  const second = await createServer({
+    projectDir: firstProjectDir,
+    port: 0,
+    autoCollect: false,
+    persistentRegistryPath
+  });
+  const secondBase = second.url.replace(/\?.*/, "");
+  try {
+    const projectsResponse = await fetch(`${secondBase}api/projects`);
+    const projectsBody = await projectsResponse.json();
+    const restored = projectsBody.projects?.find((project) => project.id === restoredProjectId);
+    if (!restored) throw new Error("Restarted Agent-Canvas server should restore registered projects from the persistent registry.");
+    assertEqual(restored.projectDir, secondProjectDir, "Restored project should keep its projectDir");
+    assertEqual(restored.chatThreadId, "thread-persisted-registry", "Restored project should keep its chat binding");
+    assertEqual(restored.chatBound, true, "Restored project should report chat binding");
+    assertEqual(restored.autoCollect, false, "Restored projects should not resume auto-collection implicitly");
+
+    const stateResponse = await fetch(`${secondBase}api/state?project=${encodeURIComponent(restoredProjectId)}`);
+    assertEqual(stateResponse.status, 200, "Restored project id should route to its canvas state after restart");
+  } finally {
+    await new Promise((resolve) => second.server.close(resolve));
+  }
 }
 
 async function testAutoCollectorWatermark() {
