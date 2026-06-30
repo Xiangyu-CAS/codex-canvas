@@ -485,9 +485,12 @@ button {
 
 .version-group-object {
   display: grid;
-  gap: 2px;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
   width: 100%;
   min-width: 0;
+  min-height: 46px;
   border-radius: 7px;
   padding: 7px 8px;
   background: transparent;
@@ -498,6 +501,25 @@ button {
 .version-group-object:focus-visible {
   background: #eeeeec;
   outline: none;
+}
+
+.version-group-object.no-thumb {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.version-group-thumb {
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: #e7e7e5;
+  box-shadow: inset 0 0 0 1px rgba(28, 31, 36, 0.08);
+}
+
+.version-group-object-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
 }
 
 .version-group-object-name {

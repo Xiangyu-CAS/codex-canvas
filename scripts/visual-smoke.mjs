@@ -220,6 +220,10 @@ async function assertDiscoveryVersionBrowser(page, versionIds) {
   await waitForVisible(page, ".prompt-history-panel:not([hidden])", "discovery panel should open");
   await page.locator("[data-discovery-mode='versions']").click();
   await waitForVisible(page, ".version-group", "version groups should render in discovery panel");
+  await waitForVisible(page, ".version-group-thumb", "version group thumbnails should render");
+  const thumbnailCount = await page.locator(".version-group-thumb").count();
+  assert(thumbnailCount >= versionIds.length, "version browser should show thumbnails for grouped image versions");
+  await waitForImageDecoded(page, ".version-group-thumb");
   await page.locator(".version-group-compare").first().click();
   await waitForHidden(page, ".prompt-history-panel", "discovery panel should close after comparing a version group");
   for (const versionId of versionIds) {

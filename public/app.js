@@ -771,16 +771,31 @@ function renderVersionGroups(groups) {
       button.className = "version-group-object";
       button.dataset.versionObjectId = object.id;
 
+      if (object.src) {
+        const thumb = document.createElement("img");
+        thumb.className = "version-group-thumb";
+        thumb.src = assetUrl(object.src);
+        thumb.alt = "";
+        thumb.loading = "lazy";
+        button.append(thumb);
+      } else {
+        button.classList.add("no-thumb");
+      }
+
+      const body = document.createElement("span");
+      body.className = "version-group-object-body";
+
       const name = document.createElement("span");
       name.className = "version-group-object-name";
       name.textContent = object.name || object.prompt || object.id;
-      button.append(name);
+      body.append(name);
 
       const meta = document.createElement("span");
       meta.className = "version-group-object-meta";
       meta.textContent = versionObjectMeta(object);
-      button.append(meta);
+      body.append(meta);
 
+      button.append(body);
       section.append(button);
     }
     promptHistoryUi.list.append(section);
