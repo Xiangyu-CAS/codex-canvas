@@ -46,7 +46,7 @@ Agent-Canvas 可以按四个模块设计：
 node ./bin/agent-canvas.mjs open --project .
 ```
 
-安装本地 OCR：
+安装依赖：
 
 ```bash
 npm install

@@ -6,6 +6,19 @@
   "bin": {
     "agent-canvas": "./bin/agent-canvas.mjs"
   },
+  "files": [
+    ".codex-plugin/",
+    ".mcp.json",
+    "AGENTS.md",
+    "README.md",
+    "assets/",
+    "bin/",
+    "docs/",
+    "public/",
+    "scripts/",
+    "skills/",
+    "src/"
+  ],
   "scripts": {
     "setup:ocr": "node ./bin/agent-canvas.mjs setup-ocr",
     "setup:image-deps": "node ./bin/agent-canvas.mjs setup-image-deps",

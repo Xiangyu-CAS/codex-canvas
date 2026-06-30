@@ -22,9 +22,10 @@ const contentTypes = {
   ".gif": "image/gif",
   ".svg": "image/svg+xml"
 };
+const defaultMaxJsonBodyBytes = 32 * 1024 * 1024;
 
-export async function createServer({ projectDir, host = "127.0.0.1", port = 43217, autoCollect = true, chatThreadId = null, autoCollectIntervalMs = 5000 } = {}) {
-  const registry = createProjectRegistry({ host, port, autoCollectIntervalMs });
+export async function createServer({ projectDir, host = "127.0.0.1", port = 43217, autoCollect = true, chatThreadId = null, autoCollectIntervalMs = 5000, maxJsonBodyBytes = defaultMaxJsonBodyBytes } = {}) {
+  const registry = createProjectRegistry({ host, port, autoCollectIntervalMs, maxJsonBodyBytes });
   const initialProject = await registerProject(registry, projectDir, { autoCollect, chatThreadId });
 
   const server = http.createServer(async (request, response) => {
@@ -69,7 +70,7 @@ async function handleRequest(request, response, context) {
   }
 
   if (request.method === "POST" && pathname === "/api/projects") {
-    const body = await readJson(request);
+    const body = await readJson(request, context.registry);
     const project = await registerProject(context.registry, body.projectDir, {
       autoCollect: body.autoCollect !== false,
       chatThreadId: body.chatThreadId || body.threadId || null
@@ -92,7 +93,7 @@ async function handleRequest(request, response, context) {
   }
 
   if (request.method === "POST" && pathname === "/api/state") {
-    const body = await readJson(request);
+    const body = await readJson(request, context.registry);
     if (body.title !== undefined) {
       return sendJson(response, 200, await updateProjectMeta(projectDir, body, storeOptionsFor(project)));
     }
@@ -100,22 +101,22 @@ async function handleRequest(request, response, context) {
   }
 
   if (request.method === "POST" && pathname === "/api/images") {
-    const body = await readJson(request);
+    const body = await readJson(request, context.registry);
     return sendJson(response, 201, await addImage(projectDir, body, storeOptionsFor(project)));
   }
 
   if (request.method === "POST" && pathname === "/api/objects") {
-    const body = await readJson(request);
+    const body = await readJson(request, context.registry);
     return sendJson(response, 201, await addObject(projectDir, body, storeOptionsFor(project)));
   }
 
   if (request.method === "DELETE" && pathname === "/api/objects") {
-    const body = await readJson(request);
+    const body = await readJson(request, context.registry);
     return sendJson(response, 200, await deleteObjects(projectDir, body.ids || [], storeOptionsFor(project)));
   }
 
   if (request.method === "POST" && pathname === "/api/selection") {
-    const body = await readJson(request);
+    const body = await readJson(request, context.registry);
     return sendJson(response, 200, { selection: await updateSelection(projectDir, body.selection || null, storeOptionsFor(project)) });
   }
 
@@ -127,7 +128,7 @@ async function handleRequest(request, response, context) {
   }
 
   if (request.method === "POST" && pathname === "/api/chat-binding") {
-    const body = await readJson(request);
+    const body = await readJson(request, context.registry);
     const threadId = normalizeThreadId(body.threadId);
     if (!threadId) {
       const error = new Error("A Codex threadId is required to bind Agent-Canvas to chat.");
@@ -145,17 +146,17 @@ async function handleRequest(request, response, context) {
   }
 
   if (request.method === "POST" && pathname === "/api/chat-turn") {
-    const body = await readJson(request);
+    const body = await readJson(request, context.registry);
     return sendJson(response, 200, await sendObjectToBoundChat(projectDir, project, body));
   }
 
   if (request.method === "POST" && pathname === "/api/jobs") {
-    const body = await readJson(request);
+    const body = await readJson(request, context.registry);
     return sendJson(response, 202, await createImageJob(projectDir, body, storeOptionsFor(project)));
   }
 
   if (request.method === "POST" && pathname === "/api/text-recognition") {
-    const body = await readJson(request);
+    const body = await readJson(request, context.registry);
     return sendJson(response, 202, await createTextRecognitionJob(projectDir, body, storeOptionsFor(project)));
   }
 
@@ -171,13 +172,13 @@ async function handleRequest(request, response, context) {
 
   const textRecognitionRunMatch = /^\/api\/text-recognition\/([^/]+)\/run$/.exec(pathname);
   if (request.method === "POST" && textRecognitionRunMatch) {
-    const body = await readJson(request);
+    const body = await readJson(request, context.registry);
     return sendJson(response, 202, await submitTextRecognitionEdit(projectDir, textRecognitionRunMatch[1], body, storeOptionsFor(project)));
   }
 
   const objectMatch = /^\/api\/objects\/([^/]+)$/.exec(pathname);
   if (request.method === "PATCH" && objectMatch) {
-    const body = await readJson(request);
+    const body = await readJson(request, context.registry);
     return sendJson(response, 200, await updateObject(projectDir, objectMatch[1], body, storeOptionsFor(project)));
   }
 
@@ -201,11 +202,33 @@ async function handleRequest(request, response, context) {
   response.writeHead(405).end();
 }
 
-async function readJson(request) {
+async function readJson(request, { maxJsonBodyBytes = defaultMaxJsonBodyBytes } = {}) {
   const chunks = [];
-  for await (const chunk of request) chunks.push(chunk);
+  let totalBytes = 0;
+  for await (const chunk of request) {
+    totalBytes += chunk.length;
+    if (totalBytes > maxJsonBodyBytes) {
+      const error = new Error(`JSON request body exceeds the ${formatBytes(maxJsonBodyBytes)} limit.`);
+      error.statusCode = 413;
+      throw error;
+    }
+    chunks.push(chunk);
+  }
   if (chunks.length === 0) return {};
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  let parsed;
+  try {
+    parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    const error = new Error("Request body must be valid JSON.");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    const error = new Error("Request body must be a JSON object.");
+    error.statusCode = 400;
+    throw error;
+  }
+  return parsed;
 }
 
 async function sendFile(response, filePath) {
@@ -226,17 +249,24 @@ function sendJson(response, status, body) {
   response.end(JSON.stringify(body));
 }
 
-function createProjectRegistry({ host, port, autoCollectIntervalMs }) {
+function createProjectRegistry({ host, port, autoCollectIntervalMs, maxJsonBodyBytes }) {
   return {
     host,
     port,
     autoCollectIntervalMs,
+    maxJsonBodyBytes,
     baseUrl: `http://${host}:${port}/`,
     pid: process.pid,
     defaultProjectId: null,
     projects: new Map(),
     projectAliases: new Map()
   };
+}
+
+function formatBytes(bytes) {
+  if (bytes >= 1024 * 1024) return `${Math.round(bytes / (1024 * 1024))} MiB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KiB`;
+  return `${bytes} bytes`;
 }
 
 async function registerProject(registry, projectDir, { autoCollect = true, chatThreadId = null } = {}) {

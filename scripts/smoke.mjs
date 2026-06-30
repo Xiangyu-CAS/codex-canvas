@@ -19,6 +19,7 @@ async function main() {
     ["store concurrency", testStoreConcurrency],
     ["object patch sanitization", testObjectPatchSanitization],
     ["http object patch sanitization", testHttpObjectPatchSanitization],
+    ["http json boundaries", testHttpJsonBoundaries],
     ["thread migration asset paths", testThreadMigrationAssetPaths],
     ["mcp canvas status", testMcpCanvasStatus],
     ["auto collector watermark", testAutoCollectorWatermark],
@@ -97,6 +98,50 @@ async function testHttpObjectPatchSanitization() {
     assertEqual(body.assetPath, image.body.assetPath, "HTTP patch should not mutate assetPath");
     assertEqual(body.sourcePath, image.body.sourcePath || null, "HTTP patch should not mutate sourcePath");
     assertEqual(body.type, "image", "HTTP patch should not mutate type");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+async function testHttpJsonBoundaries() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-http-json-"));
+  const { server, url } = await createServer({
+    projectDir,
+    port: 0,
+    autoCollect: false,
+    maxJsonBodyBytes: 64
+  });
+  const base = url.replace(/\?.*/, "");
+  const search = new URL(url).search;
+  try {
+    const malformed = await fetch(`${base}api/state${search}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{"
+    });
+    const malformedBody = await malformed.json();
+    assertEqual(malformed.status, 400, "malformed JSON should return a client error");
+    assertEqual(malformedBody.error, "Request body must be valid JSON.", "malformed JSON should return a useful error");
+
+    const nonObject = await fetch(`${base}api/state${search}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "null"
+    });
+    const nonObjectBody = await nonObject.json();
+    assertEqual(nonObject.status, 400, "non-object JSON should return a client error");
+    assertEqual(nonObjectBody.error, "Request body must be a JSON object.", "non-object JSON should describe the API contract");
+
+    const tooLarge = await fetch(`${base}api/state${search}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "x".repeat(128) })
+    });
+    const tooLargeBody = await tooLarge.json();
+    assertEqual(tooLarge.status, 413, "oversized JSON should return payload too large");
+    if (!String(tooLargeBody.error || "").includes("limit")) {
+      throw new Error("oversized JSON should describe the body limit.");
+    }
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
