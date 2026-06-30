@@ -117,6 +117,15 @@ node ./bin/agent-canvas.mjs prompts "product" --project . --json
 node ./bin/agent-canvas.mjs versions "product" --project . --group-by sourceObjectId --json
 ```
 
+作用域选择：
+
+```bash
+node ./bin/agent-canvas.mjs status --project . --thread-id <codex-thread-id> --json
+node ./bin/agent-canvas.mjs import ./example.png --project . --canvas-id <canvas-id>
+```
+
+`--thread-id` 会选择绑定到该 Codex thread 的独立画布；`--canvas-id` 会直接选择明确的 Agent-Canvas 画布作用域，并覆盖由 `--thread-id` 推导出的作用域。MCP 工具同样暴露 `threadId` 和 `canvasId` 参数，用于把读写操作定位到同一项目下的指定画布。
+
 运行验证：
 
 ```bash

@@ -390,12 +390,12 @@ Agent-Canvas
 Usage:
   agent-canvas open [--project <dir>] [--host 127.0.0.1] [--port 43217] [--thread-id <codex-thread-id>]
   agent-canvas start [--project <dir>] [--host 127.0.0.1] [--port 43217] [--thread-id <codex-thread-id>] [--no-auto-collect]
-  agent-canvas import <image-path> [--project <dir>] [--prompt <text>] [--name <name>]
-  agent-canvas collect [--project <dir>] [--from <dir,dir>] [--since-minutes 120] [--limit 20]
-  agent-canvas search [query] [--project <dir>] [--type image|text|drawing|job] [--limit 20] [--json]
-  agent-canvas prompts [query] [--project <dir>] [--limit 20] [--json]
-  agent-canvas versions [query] [--project <dir>] [--group-by sourceObjectId|batchId|layoutMode|prompt] [--limit 20] [--object-limit 20] [--json]
-  agent-canvas status [--project <dir>] [--json]
+  agent-canvas import <image-path> [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--prompt <text>] [--name <name>]
+  agent-canvas collect [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--from <dir,dir>] [--since-minutes 120] [--limit 20]
+  agent-canvas search [query] [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--type image|text|drawing|job] [--limit 20] [--json]
+  agent-canvas prompts [query] [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--limit 20] [--json]
+  agent-canvas versions [query] [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--group-by sourceObjectId|batchId|layoutMode|prompt] [--limit 20] [--object-limit 20] [--json]
+  agent-canvas status [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--json]
   agent-canvas setup-deps [--json]
   agent-canvas setup-ocr [--optional] [--json]
   agent-canvas setup-image-deps [--optional] [--json]
@@ -418,5 +418,9 @@ Commands:
   doctor-ocr Check whether local RapidOCR is available.
   doctor-image-deps Check whether Pillow and numpy are available.
   doctor-deps Check all optional Python dependencies without installing them.
+
+Canvas scope:
+  --thread-id selects the canvas bound to a Codex thread.
+  --canvas-id selects an explicit Agent-Canvas canvas scope and overrides --thread-id.
 `.trim());
 }

@@ -828,17 +828,26 @@ async function testCliCollectHelp() {
     maxBuffer: 1024 * 1024,
     windowsHide: true
   });
-  if (!stdout.includes("agent-canvas collect [--project <dir>] [--from <dir,dir>] [--since-minutes 120] [--limit 20]")) {
+  if (!stdout.includes("agent-canvas import <image-path> [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--prompt <text>] [--name <name>]")) {
+    throw new Error("CLI help should document import canvas scope flags.");
+  }
+  if (!stdout.includes("agent-canvas collect [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--from <dir,dir>] [--since-minutes 120] [--limit 20]")) {
     throw new Error("CLI help should document collect flags.");
   }
-  if (!stdout.includes("agent-canvas search [query] [--project <dir>] [--type image|text|drawing|job] [--limit 20] [--json]")) {
+  if (!stdout.includes("agent-canvas search [query] [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--type image|text|drawing|job] [--limit 20] [--json]")) {
     throw new Error("CLI help should document search flags.");
   }
-  if (!stdout.includes("agent-canvas prompts [query] [--project <dir>] [--limit 20] [--json]")) {
+  if (!stdout.includes("agent-canvas prompts [query] [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--limit 20] [--json]")) {
     throw new Error("CLI help should document prompt history flags.");
   }
-  if (!stdout.includes("agent-canvas versions [query] [--project <dir>] [--group-by sourceObjectId|batchId|layoutMode|prompt] [--limit 20] [--object-limit 20] [--json]")) {
+  if (!stdout.includes("agent-canvas versions [query] [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--group-by sourceObjectId|batchId|layoutMode|prompt] [--limit 20] [--object-limit 20] [--json]")) {
     throw new Error("CLI help should document version grouping flags.");
+  }
+  if (!stdout.includes("agent-canvas status [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--json]")) {
+    throw new Error("CLI help should document status canvas scope flags.");
+  }
+  if (!stdout.includes("--canvas-id selects an explicit Agent-Canvas canvas scope and overrides --thread-id.")) {
+    throw new Error("CLI help should document explicit canvas scope precedence.");
   }
   if (!stdout.includes("Import recent image files from ~/.codex/generated_images and the project.")) {
     throw new Error("CLI help should document collect default roots.");
