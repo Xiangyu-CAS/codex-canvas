@@ -4,7 +4,7 @@ This note records the current evidence for sending a selected Agent-Canvas image
 
 ## Goal
 
-Agent-Canvas already supports chat-to-canvas collection: generated or edited images can be imported into the project canvas. The missing direction is canvas-to-chat: a user selects an image on the canvas and sends it into a Codex chat turn as an image input.
+Agent-Canvas supports chat-to-canvas collection: generated or edited images can be imported into the project canvas. It now also has an implemented canvas-to-chat path: a user selects an image on the canvas and sends it into a bound Codex chat turn as a local image input.
 
 ## Working Paths
 
@@ -118,12 +118,12 @@ The implemented path uses an explicit thread binding and treats each Codex threa
    - Different Codex threads in the same workspace receive different `projectId` values and separate canvas state/assets/jobs.
    - An unbound canvas continues to use the legacy default `canvas/agent-canvas.json` path.
 4. `POST /api/chat-turn` accepts:
+   - `action: "send-to-chat"`
    - `objectId`
-   - `prompt`
-5. The backend refuses the request with `409` unless the project has `chatThreadId`.
+5. The backend refuses requests without the stable `send-to-chat` action, and returns `409` unless the project has `chatThreadId`.
 6. The backend resolves the selected object from that thread's canvas scope to a local `assetPath`.
 7. The backend starts a temporary loopback WebSocket app-server, calls `thread/resume` for the bound thread, then sends `turn/start` with text plus `{ "type": "localImage", "path": assetPath }`.
-8. The frontend exposes this as a stable `send-to-chat` action on selected images.
+8. The frontend and MCP `send_to_chat` tool expose this as a stable `send-to-chat` action on selected images; the prompt text is owned by the backend, not the frontend.
 
 This keeps canvas-to-chat deterministic: Agent-Canvas never guesses a destination thread, never creates a new thread as a fallback for the button, and never shares a bound canvas between Codex threads.
 

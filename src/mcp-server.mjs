@@ -167,8 +167,7 @@ async function handle(method, params) {
 
     if (params.name === "canvas_status") {
       const projectDir = resolveProjectDir(args.projectDir);
-      const runtime = await readRuntime(projectDir);
-      const canvas = await resolveCanvasOptions(projectDir, args, runtime);
+      const canvas = await resolveCanvasOptions(projectDir, args);
       const state = await readState(projectDir, { canvasId: canvas.canvasId });
       return textResult(`Agent-Canvas has ${state.objects.length} object(s).`, {
         projectDir,

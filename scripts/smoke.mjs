@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +15,8 @@ async function main() {
   const results = [];
   for (const [name, test] of [
     ["store concurrency", testStoreConcurrency],
+    ["mcp canvas status", testMcpCanvasStatus],
+    ["auto collector watermark", testAutoCollectorWatermark],
     ["chat binding alias", testChatBindingAlias],
     ["chat websocket fallback", testChatWebSocketFallback],
     ["chat turn action contract", testChatTurnActionContract],
@@ -24,6 +26,56 @@ async function main() {
     results.push(name);
   }
   console.log(JSON.stringify({ ok: true, tests: results }, null, 2));
+}
+
+async function testAutoCollectorWatermark() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-collector-"));
+  const { server, url } = await createServer({
+    projectDir,
+    port: 0,
+    autoCollect: true,
+    autoCollectIntervalMs: 100
+  });
+  const base = url.replace(/\?.*/, "");
+  const search = new URL(url).search;
+  try {
+    const staleMtimeMs = Date.now();
+    const firstPath = path.join(projectDir, "first.png");
+    await fs.writeFile(firstPath, Buffer.from(pngOne, "base64"));
+    await waitForObjectCount(`${base}api/state${search}`, 1, "auto collector should import a new project image");
+
+    const stalePath = path.join(projectDir, "stale-but-new-file.png");
+    await fs.writeFile(stalePath, Buffer.from("not a real png, but a unique image candidate"));
+    await fs.utimes(stalePath, staleMtimeMs / 1000, staleMtimeMs / 1000);
+    await delay(450);
+    const stateResponse = await fetch(`${base}api/state${search}`);
+    const state = await stateResponse.json();
+    assertEqual(state.objects.length, 1, "auto collector should advance its watermark after a successful scan");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+async function testMcpCanvasStatus() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-mcp-"));
+  await addObject(projectDir, { type: "text", text: "mcp", x: 10, y: 10 });
+  const client = await startMcpServer();
+  try {
+    const initialized = await client.request("initialize", {});
+    assertEqual(initialized.serverInfo?.version, "0.1.1", "MCP server version should match package version");
+    const listed = await client.request("tools/list", {});
+    if (!listed.tools?.some((tool) => tool.name === "canvas_status")) {
+      throw new Error("MCP tools/list should expose canvas_status.");
+    }
+    const status = await client.request("tools/call", {
+      name: "canvas_status",
+      arguments: { projectDir }
+    });
+    assertEqual(status.structuredContent?.objects, 1, "MCP canvas_status should read default canvas state");
+    assertEqual(status.structuredContent?.chatBound, false, "MCP canvas_status should not infer chat binding without threadId");
+  } finally {
+    await client.stop();
+  }
 }
 
 async function testChatTurnActionContract() {
@@ -181,6 +233,84 @@ async function postJson(url, body) {
     body: JSON.stringify(body)
   });
   return { status: response.status, body: await response.json().catch(() => ({})) };
+}
+
+async function waitForObjectCount(url, expected, message) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 4000) {
+    const response = await fetch(url);
+    const state = await response.json();
+    if (state.objects?.length === expected) return state;
+    await delay(100);
+  }
+  throw new Error(message);
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function startMcpServer() {
+  const child = spawn(process.execPath, [path.join(process.cwd(), "src", "mcp-server.mjs")], {
+    cwd: process.cwd(),
+    stdio: ["pipe", "pipe", "pipe"]
+  });
+  let nextId = 1;
+  let buffer = "";
+  const pending = new Map();
+  const errors = [];
+
+  child.stderr.on("data", (chunk) => errors.push(chunk.toString()));
+  child.stdout.on("data", (chunk) => {
+    buffer += chunk.toString();
+    for (;;) {
+      const newline = buffer.indexOf("\n");
+      if (newline < 0) return;
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      if (!line) continue;
+      let message;
+      try {
+        message = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const request = pending.get(message.id);
+      if (!request) continue;
+      pending.delete(message.id);
+      clearTimeout(request.timeout);
+      if (message.error) request.reject(new Error(message.error.message || "MCP request failed"));
+      else request.resolve(message.result);
+    }
+  });
+
+  const request = (method, params) => {
+    const id = nextId++;
+    const payload = { jsonrpc: "2.0", id, method, params };
+    const promise = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`MCP request timed out: ${method}${errors.length ? `: ${errors.join("").trim()}` : ""}`));
+      }, 5000);
+      timeout.unref?.();
+      pending.set(id, { resolve, reject, timeout });
+    });
+    child.stdin.write(`${JSON.stringify(payload)}\n`);
+    return promise;
+  };
+
+  const stop = () => new Promise((resolve) => {
+    for (const request of pending.values()) {
+      clearTimeout(request.timeout);
+      request.reject(new Error("MCP server stopped."));
+    }
+    pending.clear();
+    child.once("close", resolve);
+    child.kill();
+    setTimeout(resolve, 1000).unref?.();
+  });
+
+  return { request, stop };
 }
 
 async function runPython(args) {

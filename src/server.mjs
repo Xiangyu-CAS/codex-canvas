@@ -23,8 +23,8 @@ const contentTypes = {
   ".svg": "image/svg+xml"
 };
 
-export async function createServer({ projectDir, host = "127.0.0.1", port = 43217, autoCollect = true, chatThreadId = null } = {}) {
-  const registry = createProjectRegistry({ host, port });
+export async function createServer({ projectDir, host = "127.0.0.1", port = 43217, autoCollect = true, chatThreadId = null, autoCollectIntervalMs = 5000 } = {}) {
+  const registry = createProjectRegistry({ host, port, autoCollectIntervalMs });
   const initialProject = await registerProject(registry, projectDir, { autoCollect, chatThreadId });
 
   const server = http.createServer(async (request, response) => {
@@ -226,10 +226,11 @@ function sendJson(response, status, body) {
   response.end(JSON.stringify(body));
 }
 
-function createProjectRegistry({ host, port }) {
+function createProjectRegistry({ host, port, autoCollectIntervalMs }) {
   return {
     host,
     port,
+    autoCollectIntervalMs,
     baseUrl: `http://${host}:${port}/`,
     pid: process.pid,
     defaultProjectId: null,
@@ -249,7 +250,7 @@ async function registerProject(registry, projectDir, { autoCollect = true, chatT
     existing.autoCollect = existing.autoCollect || autoCollect;
     if (normalizedThreadId) existing.chatThreadId = normalizedThreadId;
     existing.canvasId = canvasId;
-    if (autoCollect && !existing.collectorTimer) startAutoCollector(existing);
+    if (autoCollect && !existing.collectorTimer) startAutoCollector(existing, registry.autoCollectIntervalMs);
     return existing;
   }
 
@@ -261,28 +262,41 @@ async function registerProject(registry, projectDir, { autoCollect = true, chatT
     canvasId,
     collectSinceMs: Date.now(),
     registeredAt: new Date().toISOString(),
-    collectorTimer: null
+    collectorTimer: null,
+    collectorRunning: false
   };
   registry.projects.set(id, project);
   registry.defaultProjectId ||= id;
-  if (autoCollect) startAutoCollector(project);
+  if (autoCollect) startAutoCollector(project, registry.autoCollectIntervalMs);
   return project;
 }
 
-function startAutoCollector(project) {
+function startAutoCollector(project, intervalMs = 5000) {
   project.collectorTimer = setInterval(() => {
-    if (hasRunningImageJobs(jobScopeFor(project))) return;
-    collectRecentImages(project.projectDir, {
+    runAutoCollectorPass(project).catch((error) => {
+      console.error(`Agent-Canvas auto-collect failed for ${project.projectDir}: ${error.message}`);
+    });
+  }, intervalMs);
+  project.collectorTimer.unref?.();
+}
+
+async function runAutoCollectorPass(project) {
+  if (project.collectorRunning) return;
+  if (hasRunningImageJobs(jobScopeFor(project))) return;
+  project.collectorRunning = true;
+  const scanStartedAt = Date.now();
+  try {
+    await collectRecentImages(project.projectDir, {
       sinceMs: project.collectSinceMs,
       limit: 10,
       prompt: "Auto-collected while Agent-Canvas was open",
       excludePaths: getIgnoredGeneratedImagePaths(jobScopeFor(project)),
       canvasId: project.canvasId
-    }).catch((error) => {
-      console.error(`Agent-Canvas auto-collect failed for ${project.projectDir}: ${error.message}`);
     });
-  }, 5000);
-  project.collectorTimer.unref?.();
+    project.collectSinceMs = Math.max(project.collectSinceMs, scanStartedAt);
+  } finally {
+    project.collectorRunning = false;
+  }
 }
 
 function resolveRequestProject(registry, requestUrl) {
