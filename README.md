@@ -37,7 +37,7 @@ Agent-Canvas 可以按四个模块设计：
 - `agent-canvas search`：按名称、prompt、文本、来源路径和图层组元数据搜索画布对象，用于快速定位项目资产。
 - `agent-canvas prompts`：列出最近使用过的唯一 prompt，支持按文本过滤，用于复用项目提示词。
 - `agent-canvas versions` 和画布内 discovery 面板：按 `sourceObjectId`、`batchId`、`layoutMode` 或 `prompt` 分组查看画布对象版本历史，在面板中预览缩略图，并可在画布中框选同组版本做并排比较或绘制临时像素差异热力图。
-- MCP 工具：提供 `open_canvas`、`add_image`、`collect_recent_images`、`canvas_status`、`search_canvas`、`prompt_history`、`version_groups`、`start_image_job`、`send_to_chat`，方便 Codex 在会话中打开画布、收录图片、搜索资产、提示词和版本分组、触发稳定 action 和读取状态。
+- MCP 工具：提供 `open_canvas`、`add_image`、`collect_recent_images`、`canvas_status`、`search_canvas`、`prompt_history`、`version_groups`、`start_image_job`、`send_to_chat`，方便 Codex 在会话中打开画布、收录图片、搜索资产、提示词和版本分组、触发稳定 action 和读取状态。`start_image_job` 使用 `quick-edit`、`remove-bg` 等稳定图片 action id；`send_to_chat` 使用稳定 `send-to-chat` action id，提示词由后端固定生成。
 - 画布 UI：提供 Lovart 风格的浅色无限画布、底部浮动工具栏、图片选择态、非破坏性裁剪和浮动编辑工具栏。
 - 单端口多画布页：默认统一使用 `127.0.0.1:43217`。再次在新 Codex 会话或新项目中打开 `/canvas` 时，现有服务会注册新的项目画布，并返回带 `?project=<id>` 的 URL；同一 workspace 会按 Codex thread 隔离为不同 canvas，左上角项目菜单可以在已注册画布页之间切换。
 - AI 图片操作：`Quick Edit`、`Remove BG`、`Expand`、`Upscale`、`Multi-Angles`、`Move Object`、`Edit Text`、`Edit Elements` 通过稳定 action id 创建后台 job，由后端映射到对应 Agent-Canvas operation skill 和 Codex/ImageGen 执行，再把结果回填到源图右侧。`Expand` 会按用户描述对选中图像做扩图/outpaint；`Upscale` 会保真增强选中图像；`Multi-Angles` 会生成同一主体的多个角度图；`Move Object` 会按用户指令移动图内对象并修补原位置；`Edit Elements` 会生成实例分割图，本地拆出透明对象/文字图层和补全背景，并作为锁定图层组放回画布。
@@ -48,6 +48,8 @@ Agent-Canvas 可以按四个模块设计：
 ```bash
 node ./bin/agent-canvas.mjs open --project .
 ```
+
+CLI 选项支持 `--name value` 和 `--name=value` 两种形式；未知命令或缺少必填参数时会向 stderr 输出错误并以非零状态退出。
 
 安装依赖：
 
@@ -160,6 +162,16 @@ npm run install:personal
   "category": "Productivity"
 }
 ```
+
+安装器只会创建或更新指向当前仓库的 symlink/junction；如果 `~/plugins/agent-canvas` 已经是普通文件或目录，命令会拒绝覆盖并提示先移除该路径。测试或临时安装可以设置 `AGENT_CANVAS_PERSONAL_HOME=/path/to/home npm run install:personal`，这样会写入该目录下的 `plugins/agent-canvas` 和 `.agents/plugins/marketplace.json`，不影响真实用户目录。
+
+发布前可以检查插件包内容：
+
+```bash
+npm pack --dry-run --json
+```
+
+包内应包含 `.codex-plugin/plugin.json`、`.mcp.json`、`skills/`、`src/`、`public/` 和 `bin/`，不应包含本地运行态的 `canvas/`、`.git/` 或 `node_modules/`。
 
 安装后新建 Codex 会话，尝试输入 `/canvas`。当前本机已验证 `/canvas` 可以触发 `agent-canvas:canvas` skill，并在 Codex `in-app browser` 中打开 `http://127.0.0.1:43217/?project=<id>`。如果某些 Codex 版本没有把插件 skill 暴露为 slash command，可以使用 `$canvas` 或直接说“打开 Agent-Canvas 画布”。
 

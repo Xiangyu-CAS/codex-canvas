@@ -15,14 +15,19 @@ const maxPort = 65535;
 
 export async function main(args, context = {}) {
   const command = args[0] || "help";
-  const options = parseOptions(args.slice(1));
-  const projectDir = resolveProjectDir(options.project);
+  if (command === "help" || command === "--help" || command === "-h") {
+    printHelp();
+    return;
+  }
+
+  const { options, positionals } = parseOptions(args.slice(1));
+  const projectDir = resolveProjectDir(optionValue(options, ["project"], "--project"));
 
   if (command === "start") {
-    const port = normalizePort(options.port ?? process.env.AGENT_CANVAS_PORT);
-    const host = options.host || process.env.AGENT_CANVAS_HOST || "127.0.0.1";
+    const port = normalizePort(optionValue(options, ["port"], "--port") ?? process.env.AGENT_CANVAS_PORT);
+    const host = optionValue(options, ["host"], "--host") || process.env.AGENT_CANVAS_HOST || "127.0.0.1";
     const autoCollect = options["no-auto-collect"] !== true;
-    const chatThreadId = normalizeThreadId(options["thread-id"] || options.threadId || process.env.AGENT_CANVAS_CODEX_THREAD_ID);
+    const chatThreadId = normalizeThreadId(optionValue(options, ["thread-id", "threadId"], "--thread-id") || process.env.AGENT_CANVAS_CODEX_THREAD_ID);
     const { url } = await createServer({ projectDir, host, port, autoCollect, chatThreadId });
     console.log(`Agent-Canvas listening on ${url}`);
     console.log(`Project: ${projectDir}`);
@@ -33,11 +38,11 @@ export async function main(args, context = {}) {
   }
 
   if (command === "open") {
-    const port = normalizePort(options.port ?? process.env.AGENT_CANVAS_PORT);
-    const host = options.host || process.env.AGENT_CANVAS_HOST || "127.0.0.1";
+    const port = normalizePort(optionValue(options, ["port"], "--port") ?? process.env.AGENT_CANVAS_PORT);
+    const host = optionValue(options, ["host"], "--host") || process.env.AGENT_CANVAS_HOST || "127.0.0.1";
     const defaultUrl = `http://${host}:${port}/`;
     const autoCollect = options["no-auto-collect"] !== true;
-    const chatThreadId = normalizeThreadId(options["thread-id"] || options.threadId || process.env.AGENT_CANVAS_CODEX_THREAD_ID);
+    const chatThreadId = normalizeThreadId(optionValue(options, ["thread-id", "threadId"], "--thread-id") || process.env.AGENT_CANVAS_CODEX_THREAD_ID);
     await ensureProjectStore(projectDir, { canvasId: canvasIdForThread(chatThreadId) });
     const runtime = await readRuntime(projectDir);
     const existingUrl = await openExistingCanvas(runtime?.url, projectDir, { autoCollect, chatThreadId, allowLegacy: true });
@@ -74,11 +79,15 @@ export async function main(args, context = {}) {
 
   if (command === "import" || command === "add-image") {
     const canvas = await resolveCanvasOptions(projectDir, options);
-    const imagePath = options.path || args[1];
-    const url = options.url;
-    const dataUrl = options.dataUrl;
-    const prompt = options.prompt || "";
-    const name = options.name;
+    const imagePath = optionValue(options, ["path"], "--path") || positionals[0];
+    const url = optionValue(options, ["url"], "--url");
+    const dataUrl = optionValue(options, ["dataUrl", "data-url"], "--dataUrl");
+    if (!imagePath && !url && !dataUrl) {
+      throw usageError("import requires <image-path>, --path, --url, or --dataUrl.");
+    }
+    requireSingleImageInput({ path: imagePath, url, dataUrl });
+    const prompt = optionValue(options, ["prompt"], "--prompt") || "";
+    const name = optionValue(options, ["name"], "--name");
     const object = await addImage(projectDir, { path: imagePath, url, dataUrl, prompt, name }, { canvasId: canvas.canvasId });
     console.log(JSON.stringify(object, null, 2));
     return;
@@ -86,15 +95,15 @@ export async function main(args, context = {}) {
 
   if (command === "collect") {
     const canvas = await resolveCanvasOptions(projectDir, options);
-    const sinceMinutes = normalizeNonNegativeNumber(options["since-minutes"] ?? options.since, defaultSinceMinutes);
-    const limit = normalizePositiveInteger(options.limit, defaultLimit, maxLimit);
-    const roots = parseList(options.from || options.roots);
+    const sinceMinutes = normalizeNonNegativeNumber(optionValue(options, ["since-minutes", "since"], "--since-minutes"), defaultSinceMinutes);
+    const limit = normalizePositiveInteger(optionValue(options, ["limit"], "--limit"), defaultLimit, maxLimit);
+    const roots = parseList(optionValue(options, ["from", "roots"], "--from"));
     const result = await collectRecentImages(projectDir, {
       roots,
       limit,
       sinceMs: Date.now() - sinceMinutes * 60 * 1000,
-      prompt: options.prompt || "Collected after image generation",
-      sourceObjectId: options["source-object-id"] || options.sourceObjectId || null,
+      prompt: optionValue(options, ["prompt"], "--prompt") || "Collected after image generation",
+      sourceObjectId: optionValue(options, ["source-object-id", "sourceObjectId"], "--source-object-id") || null,
       canvasId: canvas.canvasId
     });
     console.log(JSON.stringify(result, null, 2));
@@ -103,14 +112,14 @@ export async function main(args, context = {}) {
 
   if (command === "search") {
     const canvas = await resolveCanvasOptions(projectDir, options);
-    const query = options.query || args[1] || "";
+    const query = optionValue(options, ["query"], "--query") || positionals[0] || "";
     const result = await searchObjects(projectDir, {
       query,
-      type: options.type || null,
-      limit: normalizePositiveInteger(options.limit, defaultLimit, maxLimit),
+      type: optionValue(options, ["type"], "--type") || null,
+      limit: normalizePositiveInteger(optionValue(options, ["limit"], "--limit"), defaultLimit, maxLimit),
       canvasId: canvas.canvasId
     });
-    if (options.json) {
+    if (flagEnabled(options.json)) {
       console.log(JSON.stringify(result, null, 2));
     } else {
       console.log(`Found ${result.total} canvas object(s)${query ? ` for "${query}"` : ""}.`);
@@ -125,13 +134,13 @@ export async function main(args, context = {}) {
 
   if (command === "prompts" || command === "prompt-history") {
     const canvas = await resolveCanvasOptions(projectDir, options);
-    const query = options.query || args[1] || "";
+    const query = optionValue(options, ["query"], "--query") || positionals[0] || "";
     const result = await promptHistory(projectDir, {
       query,
-      limit: normalizePositiveInteger(options.limit, defaultLimit, maxLimit),
+      limit: normalizePositiveInteger(optionValue(options, ["limit"], "--limit"), defaultLimit, maxLimit),
       canvasId: canvas.canvasId
     });
-    if (options.json) {
+    if (flagEnabled(options.json)) {
       console.log(JSON.stringify(result, null, 2));
     } else {
       console.log(`Found ${result.total} prompt(s)${query ? ` matching "${query}"` : ""}.`);
@@ -144,15 +153,15 @@ export async function main(args, context = {}) {
 
   if (command === "versions" || command === "version-groups") {
     const canvas = await resolveCanvasOptions(projectDir, options);
-    const query = options.query || args[1] || "";
+    const query = optionValue(options, ["query"], "--query") || positionals[0] || "";
     const result = await versionGroups(projectDir, {
       query,
-      groupBy: options["group-by"] || options.groupBy || "sourceObjectId",
-      limit: normalizePositiveInteger(options.limit, defaultLimit, maxLimit),
-      objectLimit: normalizePositiveInteger(options["object-limit"] ?? options.objectLimit, defaultLimit, maxLimit),
+      groupBy: optionValue(options, ["group-by", "groupBy"], "--group-by") || "sourceObjectId",
+      limit: normalizePositiveInteger(optionValue(options, ["limit"], "--limit"), defaultLimit, maxLimit),
+      objectLimit: normalizePositiveInteger(optionValue(options, ["object-limit", "objectLimit"], "--object-limit"), defaultLimit, maxLimit),
       canvasId: canvas.canvasId
     });
-    if (options.json) {
+    if (flagEnabled(options.json)) {
       console.log(JSON.stringify(result, null, 2));
     } else {
       console.log(`Found ${result.total} version group(s) by ${result.groupBy}${query ? ` matching "${query}"` : ""}.`);
@@ -175,7 +184,7 @@ export async function main(args, context = {}) {
       objects: state.objects.length,
       selection: state.selection
     };
-    if (options.json) console.log(JSON.stringify(payload, null, 2));
+    if (flagEnabled(options.json)) console.log(JSON.stringify(payload, null, 2));
     else {
       console.log(`Project: ${projectDir}`);
       console.log(`Canvas objects: ${payload.objects}`);
@@ -187,29 +196,29 @@ export async function main(args, context = {}) {
   }
 
   if (command === "setup-ocr") {
-    const result = await installRapidOcr({ optional: options.optional === true });
-    if (options.json) console.log(JSON.stringify(result, null, 2));
+    const result = await installRapidOcr({ optional: flagEnabled(options.optional) });
+    if (flagEnabled(options.json)) console.log(JSON.stringify(result, null, 2));
     else console.log(result.message);
     return;
   }
 
   if (command === "setup-image-deps") {
-    const result = await installImageProcessingDeps({ optional: options.optional === true });
-    if (options.json) console.log(JSON.stringify(result, null, 2));
+    const result = await installImageProcessingDeps({ optional: flagEnabled(options.optional) });
+    if (flagEnabled(options.json)) console.log(JSON.stringify(result, null, 2));
     else console.log(result.message);
     return;
   }
 
   if (command === "setup-deps") {
     const result = await installOptionalPythonDeps();
-    if (options.json) console.log(JSON.stringify(result, null, 2));
+    if (flagEnabled(options.json)) console.log(JSON.stringify(result, null, 2));
     else console.log(result.message);
     return;
   }
 
   if (command === "doctor-ocr") {
     const result = await checkRapidOcrAvailable();
-    if (options.json) console.log(JSON.stringify(result, null, 2));
+    if (flagEnabled(options.json)) console.log(JSON.stringify(result, null, 2));
     else {
       console.log(result.available
         ? `RapidOCR available: ${result.backend}${result.version ? ` ${result.version}` : ""}`
@@ -220,7 +229,7 @@ export async function main(args, context = {}) {
 
   if (command === "doctor-image-deps") {
     const result = await checkImageProcessingDepsAvailable();
-    if (options.json) console.log(JSON.stringify(result, null, 2));
+    if (flagEnabled(options.json)) console.log(JSON.stringify(result, null, 2));
     else {
       console.log(result.available
         ? `Image processing dependencies available: Pillow ${result.versions?.Pillow || ""} numpy ${result.versions?.numpy || ""}`.trim()
@@ -231,7 +240,7 @@ export async function main(args, context = {}) {
 
   if (command === "doctor-deps") {
     const result = await checkOptionalPythonDepsAvailable();
-    if (options.json) console.log(JSON.stringify(result, null, 2));
+    if (flagEnabled(options.json)) console.log(JSON.stringify(result, null, 2));
     else {
       console.log(result.available
         ? "Optional Python dependencies available."
@@ -240,14 +249,27 @@ export async function main(args, context = {}) {
     return;
   }
 
-  printHelp();
+  throw usageError(`Unknown command: ${command}. Run "agent-canvas help" for usage.`);
 }
 
 function parseOptions(args) {
   const options = {};
+  const positionals = [];
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
-    if (!arg.startsWith("--")) continue;
+    if (arg === "--") {
+      positionals.push(...args.slice(i + 1));
+      break;
+    }
+    if (!arg.startsWith("--")) {
+      positionals.push(arg);
+      continue;
+    }
+    const equalsIndex = arg.indexOf("=");
+    if (equalsIndex > 2) {
+      options[arg.slice(2, equalsIndex)] = arg.slice(equalsIndex + 1);
+      continue;
+    }
     const key = arg.slice(2);
     const next = args[i + 1];
     if (!next || next.startsWith("--")) {
@@ -257,7 +279,35 @@ function parseOptions(args) {
       i += 1;
     }
   }
-  return options;
+  return { options, positionals };
+}
+
+function optionValue(options, names, label = null) {
+  for (const name of names) {
+    if (!Object.prototype.hasOwnProperty.call(options, name)) continue;
+    const value = options[name];
+    if (value === true) throw usageError(`${label || `--${name}`} requires a value.`);
+    return value;
+  }
+  return undefined;
+}
+
+function flagEnabled(value) {
+  return value === true || value === "" || value === "true" || value === "1";
+}
+
+function usageError(message) {
+  const error = new Error(message);
+  error.name = "CliUsageError";
+  error.cliUsage = true;
+  error.exitCode = 1;
+  return error;
+}
+
+function requireSingleImageInput(input) {
+  const present = ["path", "url", "dataUrl"].filter((field) => typeof input[field] === "string" && input[field].trim());
+  if (present.length === 1) return;
+  throw usageError("import requires exactly one image input: <image-path>, --path, --url, or --dataUrl.");
 }
 
 function parseList(value) {
@@ -302,15 +352,14 @@ async function waitForRuntime(projectDir, timeoutMs) {
 async function resolveCanvasOptions(projectDir, options = {}, runtime = null) {
   const currentRuntime = runtime || await readRuntime(projectDir);
   const explicitThreadId = normalizeThreadId(
-    options["thread-id"]
-    || options.threadId
+    optionValue(options, ["thread-id", "threadId"], "--thread-id")
     || process.env.AGENT_CANVAS_CODEX_THREAD_ID
   );
   const threadId = normalizeThreadId(
     explicitThreadId
     || currentRuntime?.chatThreadId
   );
-  const canvasId = normalizeThreadId(options["canvas-id"] || options.canvasId)
+  const canvasId = normalizeThreadId(optionValue(options, ["canvas-id", "canvasId"], "--canvas-id"))
     || canvasIdForThread(explicitThreadId)
     || currentRuntime?.canvasId
     || canvasIdForThread(threadId);

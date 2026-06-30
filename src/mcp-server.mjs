@@ -69,7 +69,7 @@ async function handle(method, params) {
           inputSchema: {
             type: "object",
             required: ["projectDir"],
-            anyOf: [
+            oneOf: [
               { required: ["path"] },
               { required: ["url"] },
               { required: ["dataUrl"] }
@@ -158,7 +158,7 @@ async function handle(method, params) {
               roots: {
                 type: "array",
                 items: { type: "string" },
-                description: "Optional project-relative directories to scan. Defaults to ~/.codex/generated_images plus the current project, excluding canvas assets."
+                description: "Optional absolute or project-relative directories to scan. Defaults to ~/.codex/generated_images plus the current project, excluding canvas assets."
               },
               sourceObjectId: {
                 type: "string",
@@ -197,9 +197,14 @@ async function handle(method, params) {
           description: "Send a selected Agent-Canvas image to the explicitly bound Codex thread.",
           inputSchema: {
             type: "object",
-            required: ["projectDir", "objectId", "threadId"],
+            required: ["projectDir", "objectId", "threadId", "action"],
             properties: {
               projectDir: { type: "string", description: "Absolute path to the active Codex project." },
+              action: {
+                type: "string",
+                enum: ["send-to-chat"],
+                description: "Stable Agent-Canvas action id."
+              },
               objectId: { type: "string", description: "Canvas image object id to send." },
               threadId: { type: "string", description: "Codex thread id to receive the selected image." },
               canvasId: { type: "string", description: "Explicit Agent-Canvas canvas id. Overrides the canvas id derived from threadId." }
@@ -227,6 +232,7 @@ async function handle(method, params) {
 
     if (params.name === "add_image") {
       const projectDir = requireProjectDir(args);
+      requireSingleImageInput(args);
       const canvas = await resolveCanvasOptions(projectDir, args);
       const object = await addImage(projectDir, args, { canvasId: canvas.canvasId });
       return textResult(`Added image to Agent-Canvas: ${object.name}`, object);
@@ -311,6 +317,7 @@ async function handle(method, params) {
     if (params.name === "send_to_chat") {
       const projectDir = requireProjectDir(args);
       const canvas = await resolveCanvasOptions(projectDir, args);
+      requireSendToChatAction(args);
       if (!canvas.threadId) {
         const error = new Error("send_to_chat requires an explicit Codex threadId.");
         error.statusCode = 400;
@@ -363,6 +370,21 @@ function textResult(text, data) {
   };
 }
 
+function requireSingleImageInput(args = {}) {
+  const present = ["path", "url", "dataUrl"].filter((field) => typeof args[field] === "string" && args[field].trim());
+  if (present.length === 1) return;
+  const error = new Error("add_image requires exactly one image input: path, url, or dataUrl.");
+  error.statusCode = 400;
+  throw error;
+}
+
+function requireSendToChatAction(args = {}) {
+  if (args.action === "send-to-chat") return;
+  const error = new Error("send_to_chat requires the stable send-to-chat action.");
+  error.statusCode = 400;
+  throw error;
+}
+
 function normalizeToolLimit(value) {
   if (value === undefined || value === null || value === "") return defaultToolLimit;
   const number = Number(value);
@@ -395,14 +417,25 @@ function respond(id, result) {
 
 function respondError(id, error) {
   if (id === undefined || id === null) return;
+  const statusCode = Number.isInteger(error?.statusCode) ? error.statusCode : 500;
   process.stdout.write(`${JSON.stringify({
     jsonrpc: "2.0",
     id,
     error: {
-      code: -32000,
-      message: error?.message || String(error)
+      code: jsonRpcErrorCode(statusCode),
+      message: error?.message || String(error),
+      data: { statusCode }
     }
   })}\n`);
+}
+
+function jsonRpcErrorCode(statusCode) {
+  if (statusCode === 400) return -32602;
+  if (statusCode === 403) return -32003;
+  if (statusCode === 404) return -32004;
+  if (statusCode === 409) return -32009;
+  if (statusCode === 503) return -32003;
+  return -32000;
 }
 
 async function captureConsole(fn) {

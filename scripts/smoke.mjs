@@ -47,8 +47,10 @@ async function main() {
     ["mcp numeric boundaries", testMcpNumericBoundaries],
     ["auto collector watcher watermark", testAutoCollectorWatermark],
     ["package optional dependency scripts", testPackageOptionalDependencyScripts],
+    ["plugin package manifest", testPluginPackageManifest],
     ["personal plugin installer", testPersonalPluginInstaller],
     ["cli collect help", testCliCollectHelp],
+    ["cli argument parsing and errors", testCliArgumentParsingAndErrors],
     ["doctor optional deps without python", testDoctorOptionalDepsWithoutPython],
     ["chat binding alias", testChatBindingAlias],
     ["chat websocket fallback", testChatWebSocketFallback],
@@ -1013,7 +1015,7 @@ async function testAutoCollectorWatermark() {
 async function testMcpCanvasStatus() {
   const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-mcp-"));
   await addObject(projectDir, { type: "text", text: "mcp searchable note", name: "MCP Note", x: 10, y: 10 });
-  await addImage(projectDir, {
+  const promptImage = await addImage(projectDir, {
     dataUrl: `data:image/png;base64,${pngOne}`,
     name: "mcp-prompt.png",
     prompt: "MCP prompt history sample"
@@ -1027,6 +1029,7 @@ async function testMcpCanvasStatus() {
       throw new Error("MCP tools/list should expose canvas_status.");
     }
     assertMcpToolSchema(listed.tools);
+    await assertMcpActionBoundaries(client, projectDir, promptImage.id);
     const status = await client.request("tools/call", {
       name: "canvas_status",
       arguments: { projectDir }
@@ -1094,6 +1097,15 @@ async function testMcpCanvasStatus() {
     await assertRejects(
       () => client.request("tools/call", {
         name: "canvas_status",
+        arguments: {}
+      }),
+      "MCP tool call requires projectDir.",
+      "MCP canvas_status should return the invalid params JSON-RPC code",
+      { code: -32602, statusCode: 400 }
+    );
+    await assertRejects(
+      () => client.request("tools/call", {
+        name: "canvas_status",
         arguments: { projectDir: "relative-project" }
       }),
       "MCP tool call requires an absolute projectDir.",
@@ -1102,6 +1114,64 @@ async function testMcpCanvasStatus() {
   } finally {
     await client.stop();
   }
+}
+
+async function assertMcpActionBoundaries(client, projectDir, imageObjectId) {
+  await assertRejects(
+    () => client.request("tools/call", {
+      name: "add_image",
+      arguments: {
+        projectDir,
+        url: "https://example.invalid/image.png",
+        dataUrl: `data:image/png;base64,${pngOne}`
+      }
+    }),
+    "add_image requires exactly one image input",
+    "MCP add_image should reject ambiguous image inputs",
+    { code: -32602, statusCode: 400 }
+  );
+
+  for (const action of stableImageJobActions) {
+    await assertRejects(
+      () => client.request("tools/call", {
+        name: "start_image_job",
+        arguments: { projectDir, objectId: "missing-object", action }
+      }),
+      "Canvas object not found",
+      `MCP start_image_job should accept stable action ${action} before object lookup`,
+      { code: -32004, statusCode: 404 }
+    );
+  }
+
+  await assertRejects(
+    () => client.request("tools/call", {
+      name: "start_image_job",
+      arguments: { projectDir, objectId: "missing-object", action: "not-a-stable-action" }
+    }),
+    "Unsupported image job action",
+    "MCP start_image_job should reject unknown stable action ids",
+    { code: -32602, statusCode: 400 }
+  );
+
+  await assertRejects(
+    () => client.request("tools/call", {
+      name: "send_to_chat",
+      arguments: { projectDir, threadId: "thread-mcp-send", objectId: imageObjectId }
+    }),
+    "send_to_chat requires the stable send-to-chat action",
+    "MCP send_to_chat should require the stable send-to-chat action",
+    { code: -32602, statusCode: 400 }
+  );
+
+  await assertRejects(
+    () => client.request("tools/call", {
+      name: "send_to_chat",
+      arguments: { projectDir, threadId: "thread-mcp-send", objectId: imageObjectId, action: "quick-edit" }
+    }),
+    "send_to_chat requires the stable send-to-chat action",
+    "MCP send_to_chat should reject image job actions",
+    { code: -32602, statusCode: 400 }
+  );
 }
 
 async function testMcpNumericBoundaries() {
@@ -1156,9 +1226,9 @@ function assertMcpToolSchema(tools = []) {
   if (!addImageSchema.required?.includes("projectDir")) {
     throw new Error("MCP add_image should require projectDir.");
   }
-  const addImageAnyOf = JSON.stringify(addImageSchema.anyOf || []);
+  const addImageChoices = JSON.stringify(addImageSchema.oneOf || addImageSchema.anyOf || []);
   for (const imageInput of ["path", "url", "dataUrl"]) {
-    if (!addImageAnyOf.includes(imageInput)) {
+    if (!addImageChoices.includes(imageInput)) {
       throw new Error(`MCP add_image should declare ${imageInput} as an accepted image input.`);
     }
   }
@@ -1175,10 +1245,14 @@ function assertMcpToolSchema(tools = []) {
     }
   }
   const sendToChatRequired = byName.get("send_to_chat")?.inputSchema?.required || [];
-  for (const field of ["projectDir", "objectId", "threadId"]) {
+  for (const field of ["projectDir", "objectId", "threadId", "action"]) {
     if (!sendToChatRequired.includes(field)) {
       throw new Error(`MCP send_to_chat should require ${field}.`);
     }
+  }
+  const sendToChatActions = byName.get("send_to_chat")?.inputSchema?.properties?.action?.enum || [];
+  if (!sendToChatActions.includes("send-to-chat")) {
+    throw new Error("MCP send_to_chat should expose the stable send-to-chat action.");
   }
 }
 
@@ -1202,6 +1276,69 @@ async function testPackageOptionalDependencyScripts() {
     "node ./scripts/visual-regression.mjs",
     "package.json should expose reference screenshot regression checks"
   );
+}
+
+async function testPluginPackageManifest() {
+  const packageJson = JSON.parse(await fs.readFile(path.join(process.cwd(), "package.json"), "utf8"));
+  const manifestPath = path.join(process.cwd(), ".codex-plugin", "plugin.json");
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+  assertEqual(manifest.name, packageJson.name, "plugin manifest name should match package.json");
+  if (manifest.version !== packageJson.version && !manifest.version?.startsWith(`${packageJson.version}+`)) {
+    throw new Error("plugin manifest version should keep the npm package version as its base.");
+  }
+  assertEqual(manifest.skills, "./skills/", "plugin manifest should point at the packaged skills directory");
+  assertEqual(manifest.mcpServers, "./.mcp.json", "plugin manifest should point at the packaged MCP config");
+
+  const skillsStat = await fs.stat(path.join(process.cwd(), manifest.skills));
+  if (!skillsStat.isDirectory()) {
+    throw new Error("plugin manifest skills path should exist as a directory.");
+  }
+  const mcpPath = path.join(process.cwd(), manifest.mcpServers);
+  const mcpConfig = JSON.parse(await fs.readFile(mcpPath, "utf8"));
+  const server = mcpConfig.mcpServers?.["agent-canvas"];
+  assertEqual(server?.command, "node", "MCP config should run through node");
+  assertEqual(server?.cwd, ".", "MCP config should run from the plugin root");
+  if (!server?.args?.includes("./src/mcp-server.mjs")) {
+    throw new Error("MCP config should point at the packaged MCP server entrypoint.");
+  }
+  await fs.access(path.join(process.cwd(), "src", "mcp-server.mjs"));
+
+  const { stdout } = await execFileAsync(npmExecutable(), ["pack", "--dry-run", "--json"], {
+    cwd: process.cwd(),
+    maxBuffer: 1024 * 1024 * 5,
+    windowsHide: true
+  });
+  const pack = JSON.parse(stdout)[0];
+  const packedFiles = new Set(pack.files.map((file) => file.path));
+  for (const requiredPath of [
+    ".codex-plugin/plugin.json",
+    ".mcp.json",
+    "assets/icon.png",
+    "bin/agent-canvas.mjs",
+    "public/app.js",
+    "scripts/install-personal-plugin.mjs",
+    "skills/canvas/SKILL.md",
+    "src/mcp-server.mjs"
+  ]) {
+    if (!packedFiles.has(requiredPath)) {
+      throw new Error(`npm pack should include ${requiredPath}.`);
+    }
+  }
+  for (const file of packedFiles) {
+    if (file === ".git" || file.startsWith(".git/")) {
+      throw new Error("npm pack should not include git metadata.");
+    }
+    if (file === "node_modules" || file.startsWith("node_modules/")) {
+      throw new Error("npm pack should not include installed dependencies.");
+    }
+    if (file === "canvas" || file.startsWith("canvas/")) {
+      throw new Error("npm pack should not include local canvas runtime data.");
+    }
+  }
+}
+
+function npmExecutable() {
+  return process.platform === "win32" ? "npm.cmd" : "npm";
 }
 
 async function testPersonalPluginInstaller() {
@@ -1254,6 +1391,52 @@ async function testPersonalPluginInstaller() {
   const linkedRealPath = await fs.realpath(linkPath);
   const repoRealPath = await fs.realpath(process.cwd());
   assertEqual(linkedRealPath, repoRealPath, "personal plugin link should resolve to this repository");
+
+  const aliasTmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-personal-plugin-alias-"));
+  const aliasPath = path.join(aliasTmp, "repo-alias");
+  const aliasHome = path.join(aliasTmp, "home");
+  const aliasLinkPath = path.join(aliasHome, "plugins", "agent-canvas");
+  const linkType = process.platform === "win32" ? "junction" : "dir";
+  await fs.symlink(process.cwd(), aliasPath, linkType);
+  await fs.mkdir(path.dirname(aliasLinkPath), { recursive: true });
+  await fs.symlink(aliasPath, aliasLinkPath, linkType);
+  await execFileAsync(process.execPath, [
+    path.join(process.cwd(), "scripts", "install-personal-plugin.mjs"),
+    "--json"
+  ], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      AGENT_CANVAS_PERSONAL_HOME: aliasHome
+    },
+    maxBuffer: 1024 * 1024,
+    windowsHide: true
+  });
+  const aliasLinkedRealPath = await fs.realpath(aliasLinkPath);
+  assertEqual(aliasLinkedRealPath, repoRealPath, "personal plugin installer should accept existing links that resolve to this repository");
+
+  const blockedTmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-personal-plugin-blocked-"));
+  const blockedLinkPath = path.join(blockedTmp, "plugins", "agent-canvas");
+  await fs.mkdir(blockedLinkPath, { recursive: true });
+  const blocked = await execFileAsync(process.execPath, [
+    path.join(process.cwd(), "scripts", "install-personal-plugin.mjs"),
+    "--json"
+  ], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      AGENT_CANVAS_PERSONAL_HOME: blockedTmp
+    },
+    maxBuffer: 1024 * 1024,
+    windowsHide: true
+  }).then(
+    () => ({ ok: true, stderr: "" }),
+    (error) => ({ ok: false, stderr: error.stderr || error.message || "" })
+  );
+  assertEqual(blocked.ok, false, "personal plugin installer should refuse to replace a real plugin directory");
+  if (!blocked.stderr.includes("Refusing to replace non-symlink plugin path")) {
+    throw new Error("personal plugin installer should explain non-symlink path conflicts.");
+  }
 }
 
 async function testCliCollectHelp() {
@@ -1294,6 +1477,74 @@ async function testCliCollectHelp() {
   }
   if (!stdout.includes("Group canvas object version history by sourceObjectId, batchId, layoutMode, or prompt.")) {
     throw new Error("CLI help should document version grouping behavior.");
+  }
+}
+
+async function testCliArgumentParsingAndErrors() {
+  const collectFixture = await createCollectFixtureProject("cli-equals", 2);
+  const collected = await runCliJson([
+    "collect",
+    `--project=${collectFixture.projectDir}`,
+    `--from=${collectFixture.imagesDir}`,
+    "--since-minutes=120",
+    "--limit=1"
+  ]);
+  assertEqual(collected.status, 0, "CLI collect should accept --key=value options");
+  assertEqual(collected.body.imported.length, 1, "CLI collect should apply equals-form limit values");
+  assertEqual(collected.body.scannedRoots[0], collectFixture.imagesDir, "CLI collect should apply equals-form --from paths");
+
+  const importProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-cli-import-"));
+  const sourcePath = path.join(importProjectDir, "source.png");
+  await fs.writeFile(sourcePath, Buffer.from(pngOne, "base64"));
+  const imported = await runCliJson([
+    "import",
+    "--project",
+    importProjectDir,
+    "--prompt=option-before-positional",
+    sourcePath
+  ]);
+  assertEqual(imported.status, 0, "CLI import should accept options before the image path");
+  assertEqual(imported.body.sourcePath, sourcePath, "CLI import should use the positional image path after options");
+  assertEqual(imported.body.prompt, "option-before-positional", "CLI import should apply equals-form prompt values");
+
+  const unknown = await runCli(["does-not-exist"]);
+  assertEqual(unknown.status, 1, "Unknown CLI commands should fail");
+  if (!unknown.stderr.includes("Unknown command: does-not-exist")) {
+    throw new Error("Unknown CLI commands should print a useful error.");
+  }
+  if (unknown.stderr.includes("\n    at ")) {
+    throw new Error("Unknown CLI commands should not print a stack trace.");
+  }
+
+  const missingProject = await runCli(["status", "--project", "--json"]);
+  assertEqual(missingProject.status, 1, "CLI options with missing values should fail");
+  if (!missingProject.stderr.includes("--project requires a value.")) {
+    throw new Error("CLI options with missing values should name the missing option.");
+  }
+
+  const missingLimit = await runCli(["search", "anything", "--project", importProjectDir, "--limit", "--json"]);
+  assertEqual(missingLimit.status, 1, "CLI numeric options with missing values should fail");
+  if (!missingLimit.stderr.includes("--limit requires a value.")) {
+    throw new Error("CLI numeric options with missing values should name the missing option.");
+  }
+
+  const missingImportSource = await runCli(["import", "--project", importProjectDir]);
+  assertEqual(missingImportSource.status, 1, "CLI import without an image source should fail");
+  if (!missingImportSource.stderr.includes("import requires <image-path>")) {
+    throw new Error("CLI import without an image source should print a useful error.");
+  }
+
+  const ambiguousImportSource = await runCli([
+    "import",
+    "--project",
+    importProjectDir,
+    sourcePath,
+    "--url",
+    "https://example.invalid/image.png"
+  ]);
+  assertEqual(ambiguousImportSource.status, 1, "CLI import with multiple image sources should fail");
+  if (!ambiguousImportSource.stderr.includes("import requires exactly one image input")) {
+    throw new Error("CLI import should reject ambiguous image sources.");
   }
 }
 
@@ -1686,7 +1937,18 @@ async function postJson(url, body) {
 }
 
 async function runCliJson(args, options = {}) {
-  const result = await execFileAsync(process.execPath, [path.join(process.cwd(), "bin", "agent-canvas.mjs"), ...args], {
+  const result = await runCli(args, options);
+  let body = {};
+  try {
+    body = JSON.parse(result.stdout.trim() || "{}");
+  } catch (error) {
+    throw new Error(`CLI did not print JSON for ${args.join(" ")}. stdout=${result.stdout.trim()} stderr=${result.stderr.trim()}`);
+  }
+  return { status: result.status, body };
+}
+
+async function runCli(args, options = {}) {
+  return await execFileAsync(process.execPath, [path.join(process.cwd(), "bin", "agent-canvas.mjs"), ...args], {
     cwd: process.cwd(),
     env: options.env || process.env,
     maxBuffer: 1024 * 1024,
@@ -1699,13 +1961,6 @@ async function runCliJson(args, options = {}) {
       status: error.code || 1
     })
   );
-  let body = {};
-  try {
-    body = JSON.parse(result.stdout.trim() || "{}");
-  } catch (error) {
-    throw new Error(`CLI did not print JSON for ${args.join(" ")}. stdout=${result.stdout.trim()} stderr=${result.stderr.trim()}`);
-  }
-  return { status: result.status, body };
 }
 
 async function createLimitFixtureProject(label) {
@@ -1799,8 +2054,14 @@ function startMcpServer() {
       if (!request) continue;
       pending.delete(message.id);
       clearTimeout(request.timeout);
-      if (message.error) request.reject(new Error(message.error.message || "MCP request failed"));
-      else request.resolve(message.result);
+      if (message.error) {
+        const error = new Error(message.error.message || "MCP request failed");
+        error.code = message.error.code;
+        error.data = message.error.data;
+        request.reject(error);
+      } else {
+        request.resolve(message.result);
+      }
     }
   });
 
@@ -1920,12 +2181,18 @@ function assertEqual(actual, expected, message) {
   }
 }
 
-async function assertRejects(fn, expectedMessage, message) {
+async function assertRejects(fn, expectedMessage, message, expected = {}) {
   try {
     await fn();
   } catch (error) {
     if (!String(error?.message || "").includes(expectedMessage)) {
       throw new Error(`${message}. Expected rejection containing ${JSON.stringify(expectedMessage)}, got ${JSON.stringify(error?.message || String(error))}.`);
+    }
+    if (Object.hasOwn(expected, "code") && error?.code !== expected.code) {
+      throw new Error(`${message}. Expected JSON-RPC code ${expected.code}, got ${JSON.stringify(error?.code)}.`);
+    }
+    if (Object.hasOwn(expected, "statusCode") && error?.data?.statusCode !== expected.statusCode) {
+      throw new Error(`${message}. Expected statusCode ${expected.statusCode}, got ${JSON.stringify(error?.data?.statusCode)}.`);
     }
     return;
   }

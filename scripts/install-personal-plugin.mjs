@@ -49,11 +49,11 @@ async function ensurePluginLink(linkPath, targetPath) {
   await fs.mkdir(path.dirname(linkPath), { recursive: true });
 
   const existing = await readExistingLink(linkPath);
-  if (existing === targetPath) return;
+  if (existing && await pathsReferToSameEntry(existing, targetPath)) return;
   if (existing) {
     await fs.rm(linkPath, { force: true, recursive: true });
   } else if (await pathExists(linkPath)) {
-    throw new Error(`Refusing to replace non-symlink plugin path: ${linkPath}`);
+    throw new Error(`Refusing to replace non-symlink plugin path: ${linkPath}. Remove that path or choose a different AGENT_CANVAS_PERSONAL_HOME.`);
   }
 
   try {
@@ -61,7 +61,7 @@ async function ensurePluginLink(linkPath, targetPath) {
   } catch (error) {
     if (error?.code !== "EEXIST") throw error;
     const afterRace = await readExistingLink(linkPath);
-    if (afterRace !== targetPath) throw error;
+    if (!afterRace || !(await pathsReferToSameEntry(afterRace, targetPath))) throw error;
   }
 }
 
@@ -84,6 +84,24 @@ async function pathExists(filePath) {
     if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return false;
     throw error;
   }
+}
+
+async function pathsReferToSameEntry(firstPath, secondPath) {
+  try {
+    const firstRealPath = await fs.realpath(firstPath);
+    const secondRealPath = await fs.realpath(secondPath);
+    return normalizeComparablePath(firstRealPath) === normalizeComparablePath(secondRealPath);
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") {
+      return normalizeComparablePath(path.resolve(firstPath)) === normalizeComparablePath(path.resolve(secondPath));
+    }
+    throw error;
+  }
+}
+
+function normalizeComparablePath(filePath) {
+  const normalized = path.normalize(filePath);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
 async function writeMarketplace(marketplacePath, sourcePath) {
