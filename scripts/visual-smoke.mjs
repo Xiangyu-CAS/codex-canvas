@@ -4,7 +4,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { addImage } from "../src/store.mjs";
+import { addImage, updateObject } from "../src/store.mjs";
 import { createServer } from "../src/server.mjs";
 
 const pngOne = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
@@ -38,10 +38,12 @@ async function main() {
       await runViewportSmoke(browser, viewport);
       results.push(viewport.name);
     }
+    await runEditElementsLayerSmoke(browser);
+    results.push("edit-elements-layers");
   } finally {
     await browser.close();
   }
-  console.log(JSON.stringify({ ok: true, viewports: results }, null, 2));
+  console.log(JSON.stringify({ ok: true, checks: results }, null, 2));
 }
 
 async function runWithNpmPlaywright() {
@@ -171,6 +173,98 @@ async function runViewportSmoke(browser, viewport) {
   }
 }
 
+async function runEditElementsLayerSmoke(browser) {
+  const viewport = { name: "edit-elements", width: 1280, height: 800 };
+  const projectDir = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-canvas-visual-elements-"));
+  const groupId = "layer_group_visual_edit_elements";
+  const background = await addImage(projectDir, {
+    dataUrl: `data:image/png;base64,${pngOne}`,
+    name: "visual-elements-background.png",
+    x: 360,
+    y: 250,
+    width: 260,
+    height: 180
+  });
+  const foreground = await addImage(projectDir, {
+    dataUrl: `data:image/png;base64,${pngOne}`,
+    name: "visual-elements-object.png",
+    x: 430,
+    y: 300,
+    width: 92,
+    height: 70
+  });
+  await updateObject(projectDir, background.id, {
+    layerGroupId: groupId,
+    layerGroupName: "Edit Elements Visual Fixture",
+    layerGroupSourceObjectId: "source-fixture",
+    layerGroupIndex: 0,
+    layerGroupKind: "background",
+    layerGroupLocked: true,
+    layerGroupOriginalX: 360,
+    layerGroupOriginalY: 250,
+    layerGroupOriginalWidth: 260,
+    layerGroupOriginalHeight: 180,
+    layerGroupRelativeX: 0,
+    layerGroupRelativeY: 0,
+    layerGroupOriginalLayerWidth: 260,
+    layerGroupOriginalLayerHeight: 180
+  });
+  await updateObject(projectDir, foreground.id, {
+    layerGroupId: groupId,
+    layerGroupName: "Edit Elements Visual Fixture",
+    layerGroupSourceObjectId: "source-fixture",
+    layerGroupIndex: 2,
+    layerGroupKind: "object",
+    layerGroupLocked: true,
+    layerGroupOriginalX: 360,
+    layerGroupOriginalY: 250,
+    layerGroupOriginalWidth: 260,
+    layerGroupOriginalHeight: 180,
+    layerGroupRelativeX: 70,
+    layerGroupRelativeY: 50,
+    layerGroupOriginalLayerWidth: 92,
+    layerGroupOriginalLayerHeight: 70
+  });
+
+  const { server, url } = await createServer({ projectDir, port: 0, autoCollect: false });
+  const context = await browser.newContext({
+    viewport: { width: viewport.width, height: viewport.height }
+  });
+  const page = await context.newPage();
+  const consoleErrors = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+  try {
+    await page.goto(url, { waitUntil: "networkidle" });
+    await waitForVisible(page, `.canvas-object[data-id="${background.id}"]`, "Edit Elements background layer should render");
+    await waitForVisible(page, `.canvas-object[data-id="${foreground.id}"]`, "Edit Elements object layer should render");
+    await waitForImageDecoded(page, `.canvas-object[data-id="${background.id}"] img`);
+    await waitForImageDecoded(page, `.canvas-object[data-id="${foreground.id}"] img`);
+
+    await assertEditElementsLayerStack(page, {
+      backgroundId: background.id,
+      foregroundId: foreground.id,
+      groupId
+    });
+
+    await page.locator(`.canvas-object[data-id="${foreground.id}"]`).click();
+    await waitForVisible(page, `.layer-group-selection[data-layer-group-id="${groupId}"]`, "Edit Elements layer group overlay should render after selecting a locked layer");
+    await assertEditElementsLayerSelection(page, {
+      backgroundId: background.id,
+      foregroundId: foreground.id,
+      groupId
+    });
+    await assertVisibleControlsDoNotOverlap(page, viewport);
+    assertDeepEqual(consoleErrors.filter((message) => !/favicon/i.test(message)), [], "Edit Elements visual smoke should not emit console errors");
+  } finally {
+    await context.close();
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
 async function assertCanvasIsNotBlank(page, viewport) {
   const snapshot = await page.evaluate(() => {
     const rectSnapshot = (rect) => rect && ({
@@ -206,6 +300,77 @@ async function assertCanvasIsNotBlank(page, viewport) {
   assert(
     intersectionArea(snapshot.objectRect, viewportRect(viewport)) > 4000,
     "canvas object should be visibly present in the viewport"
+  );
+}
+
+async function assertEditElementsLayerStack(page, { backgroundId, foregroundId, groupId }) {
+  const stack = await page.evaluate(({ backgroundId, foregroundId, groupId }) => {
+    const objectElements = [...document.querySelectorAll(".canvas-object")];
+    const objectOrder = objectElements.map((element) => element.dataset.id);
+    const background = document.querySelector(`.canvas-object[data-id="${backgroundId}"]`);
+    const foreground = document.querySelector(`.canvas-object[data-id="${foregroundId}"]`);
+    const rectSnapshot = (element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        left: Math.round(rect.left),
+        top: Math.round(rect.top),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height)
+      };
+    };
+    return {
+      backgroundBeforeForeground: objectOrder.indexOf(backgroundId) < objectOrder.indexOf(foregroundId),
+      groupOverlayPresentBeforeSelection: Boolean(document.querySelector(`.layer-group-selection[data-layer-group-id="${groupId}"]`)),
+      backgroundRect: background ? rectSnapshot(background) : null,
+      foregroundRect: foreground ? rectSnapshot(foreground) : null
+    };
+  }, { backgroundId, foregroundId, groupId });
+
+  assert(stack.backgroundBeforeForeground, "Edit Elements visual fixture should render background below foreground in DOM order");
+  assert(stack.groupOverlayPresentBeforeSelection === false, "Edit Elements layer group overlay should not render before user selection");
+  assertRectVisible(stack.backgroundRect, "Edit Elements background layer");
+  assertRectVisible(stack.foregroundRect, "Edit Elements object layer");
+  assert(stack.foregroundRect.left > stack.backgroundRect.left, "Edit Elements object layer should be offset inside the group");
+  assert(stack.foregroundRect.top > stack.backgroundRect.top, "Edit Elements object layer should be vertically offset inside the group");
+}
+
+async function assertEditElementsLayerSelection(page, { backgroundId, foregroundId, groupId }) {
+  const selection = await page.evaluate(({ backgroundId, foregroundId, groupId }) => {
+    const background = document.querySelector(`.canvas-object[data-id="${backgroundId}"]`);
+    const foreground = document.querySelector(`.canvas-object[data-id="${foregroundId}"]`);
+    const overlay = document.querySelector(`.layer-group-selection[data-layer-group-id="${groupId}"]`);
+    const label = overlay?.querySelector(".layer-group-label");
+    const visibleActions = [...document.querySelectorAll("#selectionToolbar [data-action]")]
+      .filter((button) => !button.hidden && getComputedStyle(button).display !== "none")
+      .map((button) => button.dataset.action);
+    const rectSnapshot = (element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        left: Math.round(rect.left),
+        top: Math.round(rect.top),
+        right: Math.round(rect.right),
+        bottom: Math.round(rect.bottom),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height)
+      };
+    };
+    return {
+      backgroundSelected: background?.classList.contains("layer-group-member-selected") || false,
+      foregroundSelected: foreground?.classList.contains("layer-group-member-selected") || false,
+      overlayRect: overlay ? rectSnapshot(overlay) : null,
+      labelText: label?.textContent || "",
+      visibleActions
+    };
+  }, { backgroundId, foregroundId, groupId });
+
+  assert(selection.backgroundSelected, "Edit Elements group selection should mark the background layer");
+  assert(selection.foregroundSelected, "Edit Elements group selection should mark the foreground layer");
+  assertRectVisible(selection.overlayRect, "Edit Elements layer group overlay");
+  assert(selection.labelText === "Edit Elements Visual Fixture · 2 layers", "Edit Elements layer group overlay should show the group label and layer count");
+  assertDeepEqual(
+    selection.visibleActions,
+    ["reset-layer-group", "group-layer-group"],
+    "Edit Elements group selection should expose only group actions"
   );
 }
 
