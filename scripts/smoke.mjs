@@ -74,6 +74,7 @@ async function testObjectPatchSanitization() {
     x: "not-a-number",
     y: 42,
     width: -10,
+    crop: { x: 0.9, y: -2, width: 0.8, height: 0 },
     src: "https://example.invalid/evil.png",
     assetPath: "/tmp/evil.png",
     sourcePath: "/tmp/source.png",
@@ -83,6 +84,10 @@ async function testObjectPatchSanitization() {
   assertEqual(updated.x, 10, "updateObject should ignore non-numeric coordinates");
   assertEqual(updated.y, 42, "updateObject should keep valid numeric coordinates");
   assertEqual(updated.width, 1, "updateObject should clamp dimensions");
+  assertEqual(updated.crop.x, 0.9, "updateObject should keep sanitized crop x");
+  assertEqual(updated.crop.y, 0, "updateObject should clamp crop y");
+  assertEqual(updated.crop.width, 0.1, "updateObject should clamp crop width to the image edge");
+  assertEqual(updated.crop.height, 0.01, "updateObject should clamp crop height to a minimum");
   assertEqual(updated.src, image.src, "updateObject should not allow src mutation");
   assertEqual(updated.assetPath, image.assetPath, "updateObject should not allow assetPath mutation");
   assertEqual(updated.sourcePath, image.sourcePath || null, "updateObject should not allow sourcePath mutation");
@@ -109,6 +114,7 @@ async function testHttpObjectPatchSanitization() {
       body: JSON.stringify({
         x: "bad",
         y: 64,
+        crop: { x: 0.2, y: 0.25, width: 0.5, height: 0.4 },
         src: "https://example.invalid/evil.png",
         assetPath: "/tmp/evil.png",
         sourcePath: "/tmp/source.png",
@@ -119,6 +125,8 @@ async function testHttpObjectPatchSanitization() {
     assertEqual(patched.status, 200, "HTTP object patch should succeed with sanitized fields");
     assertEqual(body.x, 12, "HTTP patch should ignore invalid coordinate values");
     assertEqual(body.y, 64, "HTTP patch should keep valid coordinate values");
+    assertEqual(body.crop.width, 0.5, "HTTP patch should keep sanitized crop width");
+    assertEqual(body.crop.height, 0.4, "HTTP patch should keep sanitized crop height");
     assertEqual(body.src, image.body.src, "HTTP patch should not mutate src");
     assertEqual(body.assetPath, image.body.assetPath, "HTTP patch should not mutate assetPath");
     assertEqual(body.sourcePath, image.body.sourcePath || null, "HTTP patch should not mutate sourcePath");

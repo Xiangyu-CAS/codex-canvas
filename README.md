@@ -7,7 +7,7 @@ Agent-Canvas 是一款面向 Codex 的本地无限画布插件。用户可以在
 ## 背景
 - 1️⃣ Codex app 自带 `in-app browser`，天然适合形成左侧对话、右侧画布的工作形态。对于需要反复生成、比较和修改图片的用户来说，这种形态可以承载类似 `Lovart` 的画布式图像编辑体验。
 - 2️⃣ Codex 自带 `imagegen` skill，并使用 `gpt-image-2` 进行图像生成和编辑。用户无需额外配置或购买 API，就可以在 Codex 内完成基础的图像生产流程，这为开源插件的传播和使用降低了门槛。
-- 3️⃣ [Cowart](https://github.com/zhongerxin/Cowart) 已经验证了 Codex + 本地无限画布的方向：它基于 tldraw 提供项目本地画布、图片收录、AI image holder 和标注驱动改图等能力。但相比更完整的画布式图像编辑产品，仍有扩展空间，例如 `remove BG`、`Edit Elements`、`Edit Text`、`crop` 等功能。
+- 3️⃣ [Cowart](https://github.com/zhongerxin/Cowart) 已经验证了 Codex + 本地无限画布的方向：它基于 tldraw 提供项目本地画布、图片收录、AI image holder 和标注驱动改图等能力。相比更完整的画布式图像编辑产品，Agent-Canvas 仍可继续扩展更高级的多对象编排、版式和设计协作能力。
 - 4️⃣ Agent-Canvas 已有早期实现基础，核心画布能力已经过验证。此前受限于开源时机和 Codex 图像生成能力尚未完善，用户需要自行配置 API，使用成本较高；现在 Codex 内置 `imagegen` 后，重新启动项目的条件更成熟。
 - 5️⃣ 综上所述，Agent-Canvas 可以作为独立项目推进，同时也可以将可复用的能力和经验贡献给 Cowart 生态。
 
@@ -38,7 +38,7 @@ Agent-Canvas 可以按四个模块设计：
 - `agent-canvas prompts`：列出最近使用过的唯一 prompt，支持按文本过滤，用于复用项目提示词。
 - `agent-canvas versions` 和画布内 discovery 面板：按 `sourceObjectId`、`batchId`、`layoutMode` 或 `prompt` 分组查看画布对象版本历史，在面板中预览缩略图，并可在画布中框选同组版本做并排比较或绘制临时像素差异热力图。
 - MCP 工具：提供 `open_canvas`、`add_image`、`collect_recent_images`、`canvas_status`、`search_canvas`、`prompt_history`、`version_groups`、`start_image_job`、`send_to_chat`，方便 Codex 在会话中打开画布、收录图片、搜索资产、提示词和版本分组、触发稳定 action 和读取状态。
-- 画布 UI：提供 Lovart 风格的浅色无限画布、底部浮动工具栏、图片选择态和浮动编辑工具栏。
+- 画布 UI：提供 Lovart 风格的浅色无限画布、底部浮动工具栏、图片选择态、非破坏性裁剪和浮动编辑工具栏。
 - 单端口多画布页：默认统一使用 `127.0.0.1:43217`。再次在新 Codex 会话或新项目中打开 `/canvas` 时，现有服务会注册新的项目画布，并返回带 `?project=<id>` 的 URL；同一 workspace 会按 Codex thread 隔离为不同 canvas，左上角项目菜单可以在已注册画布页之间切换。
 - AI 图片操作：`Quick Edit`、`Remove BG`、`Expand`、`Edit Text`、`Edit Elements` 通过稳定 action id 创建后台 job，由后端映射到对应 Agent-Canvas operation skill 和 Codex/ImageGen 执行，再把结果回填到源图右侧。`Expand` 会按用户描述对选中图像做扩图/outpaint；`Edit Elements` 会生成实例分割图，本地拆出透明对象/文字图层和补全背景，并作为锁定图层组放回画布。
 - Canvas-to-chat：已 smoke test 跑通 Codex app-server `turn/start` 携带 `localImage` 的路径；发送必须绑定明确的 Codex thread，每个 thread 使用独立 canvas，可通过 `--thread-id`、MCP `open_canvas.threadId` 或 `/api/chat-binding` 写入；详见 [`docs/CANVAS_TO_CHAT.md`](docs/CANVAS_TO_CHAT.md)。
@@ -125,7 +125,7 @@ npm run smoke:visual
 npm run visual:regression
 ```
 
-`visual:regression` 会把固定桌面/移动端的 discovery、选中工具栏、Expand composer、版本比较、版本标注叠层和 Edit Text 截图与 `scripts/reference-screenshots/` 中的基线 PNG 比较；需要刷新基线时运行 `npm run visual:regression -- --update`。
+`visual:regression` 会把固定桌面/移动端的 discovery、选中工具栏、Expand composer、Crop overlay、版本比较、版本标注叠层和 Edit Text 截图与 `scripts/reference-screenshots/` 中的基线 PNG 比较；需要刷新基线时运行 `npm run visual:regression -- --update`。
 
 ## Codex 插件安装
 

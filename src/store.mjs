@@ -591,6 +591,10 @@ function sanitizeObjectPatch(patch = {}) {
     if (typeof patch[key] === "string") next[key] = patch[key].slice(0, key === "text" ? 2000 : 300);
   }
   if (typeof patch.layerGroupLocked === "boolean") next.layerGroupLocked = patch.layerGroupLocked;
+  if (patch.crop && typeof patch.crop === "object") {
+    const crop = sanitizeCrop(patch.crop);
+    if (crop) next.crop = crop;
+  }
   if (Array.isArray(patch.points)) {
     next.points = patch.points
       .filter((point) => Number.isFinite(point?.x) && Number.isFinite(point?.y))
@@ -598,6 +602,24 @@ function sanitizeObjectPatch(patch = {}) {
       .slice(0, 4000);
   }
   return next;
+}
+
+function sanitizeCrop(crop) {
+  const x = Number(crop.x);
+  const y = Number(crop.y);
+  const width = Number(crop.width);
+  const height = Number(crop.height);
+  if (![x, y, width, height].every(Number.isFinite)) return null;
+  const left = Math.max(0, Math.min(0.98, x));
+  const top = Math.max(0, Math.min(0.98, y));
+  const right = Math.max(left + 0.01, Math.min(1, left + Math.max(0.01, width)));
+  const bottom = Math.max(top + 0.01, Math.min(1, top + Math.max(0.01, height)));
+  return {
+    x: Number(left.toFixed(4)),
+    y: Number(top.toFixed(4)),
+    width: Number((right - left).toFixed(4)),
+    height: Number((bottom - top).toFixed(4))
+  };
 }
 
 export async function markStaleJobPlaceholders(projectDir, { activePlaceholderIds = [], timeoutMs = 2 * 60_000, canvasId = null } = {}) {

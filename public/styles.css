@@ -898,13 +898,159 @@ button {
   cursor: grabbing;
 }
 
-.canvas-object img {
+.image-content {
   width: 100%;
   height: 100%;
-  object-fit: contain;
-  display: block;
+  overflow: hidden;
   border-radius: 2px;
+}
+
+.canvas-object img,
+.image-content img {
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  display: block;
   pointer-events: none;
+}
+
+.image-content img.cropped-image {
+  max-width: none;
+  max-height: none;
+  transform-origin: 0 0;
+}
+
+.crop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 18;
+  pointer-events: none;
+}
+
+.crop-scrim,
+.crop-box,
+.crop-actions {
+  position: absolute;
+  pointer-events: auto;
+}
+
+.crop-scrim {
+  background: rgba(12, 15, 20, 0.42);
+}
+
+.crop-box {
+  border: 2px solid #fff;
+  border-radius: 4px;
+  box-shadow:
+    0 0 0 1px rgba(26, 115, 232, 0.92),
+    0 12px 28px rgba(0, 0, 0, 0.18);
+  cursor: move;
+}
+
+.crop-box::before,
+.crop-box::after {
+  content: "";
+  position: absolute;
+  inset: 33.333%;
+  border: solid rgba(255, 255, 255, 0.72);
+  border-width: 0 1px;
+  pointer-events: none;
+}
+
+.crop-box::after {
+  inset: 0;
+  border-width: 1px 0;
+  transform: scaleY(0.333);
+}
+
+.crop-handle {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #1a73e8;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.24);
+}
+
+.crop-nw,
+.crop-w,
+.crop-sw {
+  left: -7px;
+}
+
+.crop-ne,
+.crop-e,
+.crop-se {
+  right: -7px;
+}
+
+.crop-nw,
+.crop-n,
+.crop-ne {
+  top: -7px;
+}
+
+.crop-sw,
+.crop-s,
+.crop-se {
+  bottom: -7px;
+}
+
+.crop-n,
+.crop-s {
+  left: calc(50% - 6px);
+}
+
+.crop-e,
+.crop-w {
+  top: calc(50% - 6px);
+}
+
+.crop-nw,
+.crop-se {
+  cursor: nwse-resize;
+}
+
+.crop-ne,
+.crop-sw {
+  cursor: nesw-resize;
+}
+
+.crop-n,
+.crop-s {
+  cursor: ns-resize;
+}
+
+.crop-e,
+.crop-w {
+  cursor: ew-resize;
+}
+
+.crop-actions {
+  right: -2px;
+  top: calc(100% + 9px);
+  display: flex;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 10px 24px rgba(22, 25, 30, 0.14);
+}
+
+.crop-actions button {
+  height: 28px;
+  border-radius: 6px;
+  padding: 0 10px;
+  background: #202329;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.crop-actions .secondary-action {
+  background: #f0f0ee;
+  color: #4a4d52;
 }
 
 .drawing-object,

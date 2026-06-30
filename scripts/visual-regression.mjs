@@ -17,7 +17,7 @@ const viewports = [
   { name: "desktop", width: 1280, height: 800, deviceScaleFactor: 1 },
   { name: "mobile", width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 2 }
 ];
-const screenshotCases = ["discovery", "selected", "expand", "compare", "overlay", "text-edit"];
+const screenshotCases = ["discovery", "selected", "expand", "crop", "compare", "overlay", "text-edit"];
 let visualProjectRegistryPath = null;
 
 async function main() {
@@ -125,6 +125,14 @@ async function captureReferenceViewport(browser, viewport, screenshotCase) {
         element.style.caretColor = "transparent";
         element.blur();
       });
+      await page.waitForTimeout(50);
+    } else if (screenshotCase === "crop") {
+      await page.locator(`.canvas-object[data-id="${source.id}"]`).click();
+      await waitForVisible(page, "#selectionToolbar", "selection toolbar should be visible");
+      await page.locator('[data-action="crop"]').click();
+      await waitForVisible(page, ".crop-overlay", "Crop overlay should be visible");
+      await page.evaluate(() => document.activeElement?.blur?.());
+      await page.mouse.move(12, 12);
       await page.waitForTimeout(50);
     } else if (screenshotCase === "text-edit") {
       await page.locator(`.canvas-object[data-id="${source.id}"]`).click();

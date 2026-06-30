@@ -70,6 +70,7 @@ const translations = {
     expandPlaceholder: "Describe what should extend beyond the image edges",
     quickEditEmpty: "Describe the edit first.",
     expandEmpty: "Describe what to extend first.",
+    cropApply: "Apply",
     editTextPlaceholder: "Describe the text change here",
     editTextEmpty: "Describe the text change first.",
     editTextTitle: "Edit Text",
@@ -97,6 +98,7 @@ const translations = {
       "quick-edit": "Quick Edit",
       "remove-bg": "Remove BG",
       "expand": "Expand",
+      "crop": "Crop",
       "edit-elements": "Edit Elements",
       "reset-layer-group": "Reset group",
       "group-layer-group": "Group",
@@ -108,6 +110,7 @@ const translations = {
       "quick-edit": "Quick Edit",
       "remove-bg": "Remove BG",
       "expand": "Expand",
+      "crop": "Crop",
       "edit-elements": "Edit Elements",
       "reset-layer-group": "Reset group",
       "group-layer-group": "Group",
@@ -167,6 +170,7 @@ const translations = {
     expandPlaceholder: "描述要向画面边缘外扩展什么内容",
     quickEditEmpty: "先描述你想怎么改。",
     expandEmpty: "先描述要扩展什么内容。",
+    cropApply: "应用",
     editTextPlaceholder: "描述要替换或修改的文字",
     editTextEmpty: "先描述你想改哪些字。",
     editTextTitle: "编辑文字",
@@ -194,6 +198,7 @@ const translations = {
       "quick-edit": "快捷编辑",
       "remove-bg": "去背景",
       "expand": "扩图",
+      "crop": "裁剪",
       "edit-elements": "编辑元素",
       "reset-layer-group": "重置组",
       "group-layer-group": "成组",
@@ -205,6 +210,7 @@ const translations = {
       "quick-edit": "快捷编辑",
       "remove-bg": "去背景",
       "expand": "扩图",
+      "crop": "裁剪",
       "edit-elements": "编辑元素",
       "reset-layer-group": "重置组",
       "group-layer-group": "成组",
@@ -242,6 +248,8 @@ let drag = null;
 let resize = null;
 let drawing = null;
 let marquee = null;
+let cropSession = null;
+let cropDrag = null;
 let viewport = { x: 0, y: 0, zoom: 0.72 };
 let pan = null;
 let viewportSaveTimer = null;
@@ -385,6 +393,10 @@ document.addEventListener("click", (event) => {
     updateSelectionUi();
     if (action === "quick-edit" || action === "edit-text" || action === "expand") {
       openImageActionComposer(action);
+      return;
+    }
+    if (action === "crop") {
+      startCropMode();
       return;
     }
     if (action === "remove-bg" || action === "edit-elements") {
@@ -1274,11 +1286,7 @@ function render() {
     } else if (object.type === "job") {
       element.append(renderJobObject(object));
     } else {
-      const image = document.createElement("img");
-      image.src = assetUrl(object.src);
-      image.alt = object.name || "Canvas image";
-      image.draggable = false;
-      element.append(image);
+      element.append(renderImageObject(object));
     }
 
     if ((object.type || "image") === "image" && object.id === selectedId && selectedIds.size <= 1 && hasUserSelection && !selectedGroupId) {
@@ -1297,6 +1305,9 @@ function render() {
 
       element.append(meta);
       element.append(renderResizeHandles(object));
+      if (cropSession?.objectId === object.id) {
+        element.append(renderCropOverlay(object));
+      }
     }
 
     element.addEventListener("pointerdown", (event) => {
@@ -1600,6 +1611,123 @@ function renderJobObject(object) {
   return shell;
 }
 
+function renderImageObject(object) {
+  const frame = document.createElement("div");
+  frame.className = "image-content";
+
+  const image = document.createElement("img");
+  image.src = assetUrl(object.src);
+  image.alt = object.name || "Canvas image";
+  image.draggable = false;
+  applyImageCrop(image, object);
+  frame.append(image);
+  return frame;
+}
+
+function applyImageCrop(image, object) {
+  const crop = normalizedCrop(object);
+  if (!crop) return;
+  image.classList.add("cropped-image");
+  image.style.width = `${100 / crop.width}%`;
+  image.style.height = `${100 / crop.height}%`;
+  image.style.transform = `translate(${-crop.x * 100}%, ${-crop.y * 100}%)`;
+}
+
+function normalizedCrop(object) {
+  const crop = object?.crop;
+  if (!crop || typeof crop !== "object") return null;
+  const x = Number(crop.x);
+  const y = Number(crop.y);
+  const width = Number(crop.width);
+  const height = Number(crop.height);
+  if (![x, y, width, height].every(Number.isFinite)) return null;
+  const left = clamp(x, 0, 0.98);
+  const top = clamp(y, 0, 0.98);
+  const right = clamp(left + width, left + 0.01, 1);
+  const bottom = clamp(top + height, top + 0.01, 1);
+  if (left <= 0.0001 && top <= 0.0001 && right >= 0.9999 && bottom >= 0.9999) return null;
+  return {
+    x: left,
+    y: top,
+    width: right - left,
+    height: bottom - top
+  };
+}
+
+function renderCropOverlay(object) {
+  const overlay = document.createElement("div");
+  overlay.className = "crop-overlay";
+  overlay.addEventListener("pointerdown", (event) => event.stopPropagation());
+
+  const box = cropSessionBoxFor(object);
+  for (const [className, style] of cropScrimRects(object, box)) {
+    const scrim = document.createElement("div");
+    scrim.className = `crop-scrim ${className}`;
+    Object.assign(scrim.style, style);
+    overlay.append(scrim);
+  }
+
+  const cropBox = document.createElement("div");
+  cropBox.className = "crop-box";
+  cropBox.style.left = `${box.x}px`;
+  cropBox.style.top = `${box.y}px`;
+  cropBox.style.width = `${box.width}px`;
+  cropBox.style.height = `${box.height}px`;
+  cropBox.addEventListener("pointerdown", (event) => {
+    if (event.target.closest("button, .crop-handle")) return;
+    startCropDrag(event, "move");
+  });
+
+  for (const direction of ["nw", "n", "ne", "e", "se", "s", "sw", "w"]) {
+    const handle = document.createElement("div");
+    handle.className = `crop-handle crop-${direction}`;
+    handle.dataset.crop = direction;
+    handle.addEventListener("pointerdown", (event) => startCropDrag(event, direction));
+    cropBox.append(handle);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "crop-actions";
+  const apply = document.createElement("button");
+  apply.type = "button";
+  apply.textContent = t("cropApply");
+  apply.addEventListener("click", applyCropSession);
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "secondary-action";
+  cancel.textContent = t("cancel");
+  cancel.addEventListener("click", cancelCropSession);
+  actions.append(cancel, apply);
+  cropBox.append(actions);
+  overlay.append(cropBox);
+  return overlay;
+}
+
+function cropScrimRects(object, box) {
+  return [
+    ["top", { left: "0px", top: "0px", width: `${object.width}px`, height: `${box.y}px` }],
+    ["right", { left: `${box.x + box.width}px`, top: `${box.y}px`, width: `${object.width - box.x - box.width}px`, height: `${box.height}px` }],
+    ["bottom", { left: "0px", top: `${box.y + box.height}px`, width: `${object.width}px`, height: `${object.height - box.y - box.height}px` }],
+    ["left", { left: "0px", top: `${box.y}px`, width: `${box.x}px`, height: `${box.height}px` }]
+  ];
+}
+
+function cropSessionBoxFor(object) {
+  if (!cropSession || cropSession.objectId !== object.id) return defaultCropBox(object);
+  return clampCropBox(cropSession.box, object);
+}
+
+function defaultCropBox(object) {
+  const insetX = Math.round(Math.min(42, Math.max(12, object.width * 0.12)));
+  const insetY = Math.round(Math.min(42, Math.max(12, object.height * 0.12)));
+  return clampCropBox({
+    x: insetX,
+    y: insetY,
+    width: object.width - insetX * 2,
+    height: object.height - insetY * 2
+  }, object);
+}
+
 function renderResizeHandles(object) {
   const fragment = document.createDocumentFragment();
   for (const direction of ["nw", "n", "ne", "e", "se", "s", "sw", "w"]) {
@@ -1868,6 +1996,151 @@ function resizedImageRect(start, dx, dy) {
   };
 }
 
+function startCropMode() {
+  const object = state.objects.find((item) => item.id === selectedId);
+  if (!object || (object.type || "image") !== "image" || !hasUserSelection) return;
+  closeQuickEdit({ keepPrompt: true });
+  cropSession = {
+    objectId: object.id,
+    box: defaultCropBox(object)
+  };
+  render();
+}
+
+function cancelCropSession(event) {
+  event?.preventDefault();
+  event?.stopPropagation();
+  cropSession = null;
+  cropDrag = null;
+  render();
+}
+
+async function applyCropSession(event) {
+  event?.preventDefault();
+  event?.stopPropagation();
+  if (!cropSession) return;
+  const object = state.objects.find((item) => item.id === cropSession.objectId);
+  if (!object) {
+    cancelCropSession();
+    return;
+  }
+
+  const box = clampCropBox(cropSession.box, object);
+  const previousCrop = normalizedCrop(object) || { x: 0, y: 0, width: 1, height: 1 };
+  const nextCrop = normalizeCropPatch({
+    x: previousCrop.x + previousCrop.width * (box.x / object.width),
+    y: previousCrop.y + previousCrop.height * (box.y / object.height),
+    width: previousCrop.width * (box.width / object.width),
+    height: previousCrop.height * (box.height / object.height)
+  });
+  const patch = {
+    x: object.x + box.x,
+    y: object.y + box.y,
+    width: box.width,
+    height: box.height,
+    crop: nextCrop
+  };
+  Object.assign(object, patch);
+  cropSession = null;
+  cropDrag = null;
+  render();
+  await fetch(apiPath(`/api/objects/${object.id}`), {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(patch)
+  }).catch(() => {});
+  await loadState();
+}
+
+function normalizeCropPatch(crop) {
+  const left = clamp(crop.x, 0, 0.98);
+  const top = clamp(crop.y, 0, 0.98);
+  const right = clamp(left + crop.width, left + 0.01, 1);
+  const bottom = clamp(top + crop.height, top + 0.01, 1);
+  return {
+    x: Number(left.toFixed(4)),
+    y: Number(top.toFixed(4)),
+    width: Number((right - left).toFixed(4)),
+    height: Number((bottom - top).toFixed(4))
+  };
+}
+
+function startCropDrag(event, direction) {
+  if (!cropSession) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const object = state.objects.find((item) => item.id === cropSession.objectId);
+  if (!object) return;
+  cropDrag = {
+    direction,
+    objectId: object.id,
+    startX: event.clientX,
+    startY: event.clientY,
+    objectWidth: object.width,
+    objectHeight: object.height,
+    box: { ...cropSession.box }
+  };
+  event.currentTarget.setPointerCapture?.(event.pointerId);
+  window.addEventListener("pointermove", moveCropDrag);
+  window.addEventListener("pointerup", endCropDrag, { once: true });
+  window.addEventListener("pointercancel", endCropDrag, { once: true });
+}
+
+function moveCropDrag(event) {
+  if (!cropDrag || !cropSession) return;
+  const object = state.objects.find((item) => item.id === cropDrag.objectId);
+  if (!object) return;
+  const dx = Math.round((event.clientX - cropDrag.startX) / viewport.zoom);
+  const dy = Math.round((event.clientY - cropDrag.startY) / viewport.zoom);
+  cropSession.box = cropBoxFromDrag(cropDrag, dx, dy);
+  updateCropOverlayElement(object);
+}
+
+function endCropDrag() {
+  window.removeEventListener("pointermove", moveCropDrag);
+  window.removeEventListener("pointerup", endCropDrag);
+  window.removeEventListener("pointercancel", endCropDrag);
+  cropDrag = null;
+}
+
+function cropBoxFromDrag(start, dx, dy) {
+  const direction = start.direction;
+  const box = { ...start.box };
+  if (direction === "move") {
+    box.x += dx;
+    box.y += dy;
+    return clampCropBox(box, { width: start.objectWidth, height: start.objectHeight });
+  }
+  if (direction.includes("w")) {
+    box.x += dx;
+    box.width -= dx;
+  }
+  if (direction.includes("e")) box.width += dx;
+  if (direction.includes("n")) {
+    box.y += dy;
+    box.height -= dy;
+  }
+  if (direction.includes("s")) box.height += dy;
+  return clampCropBox(box, { width: start.objectWidth, height: start.objectHeight });
+}
+
+function clampCropBox(box, object) {
+  const minSize = Math.min(48, Math.max(24, Math.floor(Math.min(object.width, object.height) / 2)));
+  let width = Math.max(minSize, Math.round(box.width));
+  let height = Math.max(minSize, Math.round(box.height));
+  width = Math.min(width, Math.max(minSize, object.width));
+  height = Math.min(height, Math.max(minSize, object.height));
+  const x = clamp(Math.round(box.x), 0, Math.max(0, object.width - width));
+  const y = clamp(Math.round(box.y), 0, Math.max(0, object.height - height));
+  return { x, y, width, height };
+}
+
+function updateCropOverlayElement(object) {
+  const element = objectLayer.querySelector(`.canvas-object[data-id="${CSS.escape(object.id)}"] .crop-overlay`);
+  if (!element) return;
+  element.replaceWith(renderCropOverlay(object));
+}
+
 async function selectObject(id, { fromUser = false, renderNow = true } = {}) {
   setLocalSelection(id ? [id] : [], { fromUser });
   if (editingTextId && editingTextId !== id) editingTextId = null;
@@ -1882,6 +2155,10 @@ async function selectObject(id, { fromUser = false, renderNow = true } = {}) {
 
 function setLocalSelection(ids, { fromUser = true } = {}) {
   const nextIds = ids.filter(Boolean);
+  if (cropSession && (nextIds.length !== 1 || nextIds[0] !== cropSession.objectId)) {
+    cropSession = null;
+    cropDrag = null;
+  }
   if (versionDiffOverlay && !sameIdSet(nextIds, versionDiffOverlay.ids || [])) {
     versionDiffOverlay = null;
   }
@@ -2026,6 +2303,12 @@ function updateSelectionUi() {
   const groupId = selectedLayerGroupId();
   const isGroupSelection = Boolean(groupId);
 
+  if (cropSession?.objectId === selectedId) {
+    toolbar.hidden = true;
+    closeQuickEdit({ keepPrompt: true });
+    return;
+  }
+
   if (selectedIds.size > 1 || !object || object.type !== "image" || !hasUserSelection) {
     toolbar.hidden = true;
     closeQuickEdit({ keepPrompt: true });
@@ -2041,7 +2324,11 @@ function updateSelectionUi() {
   const toolbarRect = toolbar.getBoundingClientRect();
   const boardRect = board.getBoundingClientRect();
   const objectCenter = (topLeft.x + bottomRight.x) / 2;
-  const top = clamp(topLeft.y - toolbarRect.height - 26, 16, boardRect.height - toolbarRect.height - 16);
+  const topSafeArea = 76;
+  const aboveTop = topLeft.y - toolbarRect.height - 26;
+  const belowTop = bottomRight.y + 16;
+  const preferredTop = aboveTop >= topSafeArea ? aboveTop : belowTop;
+  const top = clamp(preferredTop, topSafeArea, boardRect.height - toolbarRect.height - 16);
   const left = clamp(objectCenter - toolbarRect.width / 2, 16, boardRect.width - toolbarRect.width - 16);
   toolbar.style.transform = `translate(${left}px, ${top}px)`;
   updateQuickEditPosition();
@@ -3105,7 +3392,7 @@ function layerGroupOrigin(groupId) {
 
 function updateToolbarForSelection(isGroupSelection) {
   const groupOnly = new Set(["reset-layer-group", "group-layer-group"]);
-  const singleOnly = new Set(["quick-edit", "remove-bg", "expand", "edit-elements", "edit-text", "send-to-chat", "download"]);
+  const singleOnly = new Set(["quick-edit", "remove-bg", "expand", "crop", "edit-elements", "edit-text", "send-to-chat", "download"]);
   const selectedGroupMemberId = selectedObjectLayerGroupId();
   toolbar.querySelectorAll("[data-action]").forEach((button) => {
     const action = button.dataset.action;

@@ -13,6 +13,7 @@ const expectedSingleImageActions = [
   "quick-edit",
   "remove-bg",
   "expand",
+  "crop",
   "edit-elements",
   "edit-text",
   "send-to-chat",
@@ -209,6 +210,7 @@ async function runViewportSmoke(browser, viewport) {
 
     await assertSingleImageActionToolbar(page);
     await assertExpandComposer(page, viewport);
+    await assertCropWorkflow(page, image.id);
     await assertVisibleControlsDoNotOverlap(page, viewport);
     await assertDiscoveryVersionBrowser(page, [version.id, nextVersion.id]);
     assertDeepEqual(consoleErrors.filter((message) => !/favicon/i.test(message)), [], "visual smoke should not emit console errors");
@@ -614,6 +616,38 @@ async function assertExpandComposer(page, viewport) {
   assert(snapshot.activeAction, "Expand composer should use the image prompt composer mode");
   await page.locator("#quickEditCancel").click();
   await waitForHidden(page, "#quickEditComposer", "Expand composer should close after cancel");
+}
+
+async function assertCropWorkflow(page, imageId) {
+  await page.locator(`.canvas-object[data-id="${imageId}"]`).click();
+  await waitForVisible(page, "#selectionToolbar", "selection toolbar should be visible before Crop");
+  const before = await canvasObjectRects(page, [imageId]);
+  await page.locator('[data-action="crop"]').click();
+  await waitForVisible(page, ".crop-overlay", "Crop overlay should be visible");
+  await waitForHidden(page, "#selectionToolbar", "selection toolbar should hide while cropping");
+
+  const handle = await page.locator(".crop-se").boundingBox();
+  assertRectVisible(handle, "Crop southeast handle");
+  await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(handle.x + handle.width / 2 - 34, handle.y + handle.height / 2 - 24, { steps: 4 });
+  await page.mouse.up();
+  await page.locator(".crop-actions button:not(.secondary-action)").click();
+  await waitForHidden(page, ".crop-overlay", "Crop overlay should close after applying");
+
+  await page.waitForFunction(({ imageId, before }) => {
+    const element = document.querySelector(`.canvas-object[data-id="${imageId}"]`);
+    if (!element) return false;
+    const rect = element.getBoundingClientRect();
+    return rect.width < before[imageId].width - 10 && rect.height < before[imageId].height - 8;
+  }, { imageId, before }, { timeout: 5000 });
+
+  const crop = await page.evaluate((imageId) => {
+    return fetch(`/api/state${window.location.search}`)
+      .then((response) => response.json())
+      .then((state) => state.objects.find((object) => object.id === imageId)?.crop || null);
+  }, imageId);
+  assert(crop && crop.width < 1 && crop.height < 1, "Crop workflow should persist a normalized crop rectangle");
 }
 
 async function assertVisibleControlsDoNotOverlap(page, viewport) {
