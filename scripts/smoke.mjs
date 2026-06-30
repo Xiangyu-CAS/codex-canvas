@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { sendImageToBoundChat } from "../src/codex-chat.mjs";
+import { collectRecentImages } from "../src/collector.mjs";
 import { placeImportedElementLayersForTest } from "../src/jobs.mjs";
 import { checkImageProcessingDepsAvailable } from "../src/ocr-setup.mjs";
 import { assetsDirFor } from "../src/paths.mjs";
@@ -27,6 +28,7 @@ async function main() {
     ["canvas object search", testCanvasObjectSearch],
     ["canvas prompt history", testCanvasPromptHistory],
     ["canvas version groups", testCanvasVersionGroups],
+    ["collector numeric boundaries", testCollectorNumericBoundaries],
     ["cli numeric boundaries", testCliNumericBoundaries],
     ["http query numeric boundaries", testHttpQueryNumericBoundaries],
     ["http json boundaries", testHttpJsonBoundaries],
@@ -361,6 +363,32 @@ async function testCanvasVersionGroups() {
   assertEqual(cli.body.groupBy, "prompt", "CLI versions should pass the prompt grouping field");
   assertEqual(cli.body.total, 1, "CLI versions should filter prompt groups");
   assertEqual(cli.body.groups[0].value, first.prompt, "CLI versions should return matching prompt version groups");
+}
+
+async function testCollectorNumericBoundaries() {
+  const invalidFixture = await createCollectFixtureProject("collector-invalid", 3);
+  const invalid = await collectRecentImages(invalidFixture.projectDir, {
+    roots: [invalidFixture.imagesDir],
+    limit: -5,
+    prompt: "collector invalid limit"
+  });
+  assertEqual(invalid.imported.length, 3, "collector should fall back to the default limit for invalid numeric input");
+
+  const roundedFixture = await createCollectFixtureProject("collector-rounded", 3);
+  const rounded = await collectRecentImages(roundedFixture.projectDir, {
+    roots: [roundedFixture.imagesDir],
+    limit: 1.6,
+    prompt: "collector rounded limit"
+  });
+  assertEqual(rounded.imported.length, 2, "collector should round finite decimal limits consistently with other entry points");
+
+  const cappedFixture = await createCollectFixtureProject("collector-capped", 105);
+  const capped = await collectRecentImages(cappedFixture.projectDir, {
+    roots: [cappedFixture.imagesDir],
+    limit: 1000,
+    prompt: "collector capped limit"
+  });
+  assertEqual(capped.imported.length, 100, "collector should cap oversized limits");
 }
 
 async function testCliNumericBoundaries() {
@@ -880,7 +908,7 @@ function assertMcpToolSchema(tools = []) {
     }
   }
   const startImageJobActions = byName.get("start_image_job")?.inputSchema?.properties?.action?.enum || [];
-  for (const action of ["quick-edit", "remove-bg", "expand", "edit-elements"]) {
+  for (const action of ["quick-edit", "remove-bg", "expand", "edit-text", "edit-elements"]) {
     if (!startImageJobActions.includes(action)) {
       throw new Error(`MCP start_image_job should expose the stable ${action} action.`);
     }
@@ -1395,6 +1423,20 @@ async function createLimitFixtureProject(label) {
     });
   }
   return projectDir;
+}
+
+async function createCollectFixtureProject(label, count) {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), `agent-canvas-${label}-`));
+  const imagesDir = path.join(projectDir, "generated");
+  await fs.mkdir(imagesDir, { recursive: true });
+  const basePng = Buffer.from(pngOne, "base64");
+  for (let index = 0; index < count; index += 1) {
+    await fs.writeFile(path.join(imagesDir, `${label}-${index}.png`), Buffer.concat([
+      basePng,
+      Buffer.from(`agent-canvas-${label}-${index}`)
+    ]));
+  }
+  return { projectDir, imagesDir };
 }
 
 function withoutPathEnv(env) {

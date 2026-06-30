@@ -183,10 +183,10 @@ async function handle(method, params) {
               objectId: { type: "string", description: "Canvas image object id to edit." },
               action: {
                 type: "string",
-                enum: ["quick-edit", "remove-bg", "expand", "edit-elements"],
-                description: "Stable Agent-Canvas action id. Edit Text uses the frontend recognition flow."
+                enum: ["quick-edit", "remove-bg", "expand", "edit-text", "edit-elements"],
+                description: "Stable Agent-Canvas action id."
               },
-              prompt: { type: "string", description: "User edit request for quick-edit or expand." },
+              prompt: { type: "string", description: "User edit request for quick-edit, expand, or edit-text." },
               threadId: { type: "string", description: "Codex thread id whose canvas owns the selected object. Pass explicitly for thread-scoped canvases." },
               canvasId: { type: "string", description: "Explicit Agent-Canvas canvas id. Overrides the canvas id derived from threadId." }
             }
