@@ -16,7 +16,7 @@ const viewports = [
   { name: "desktop", width: 1280, height: 800, deviceScaleFactor: 1 },
   { name: "mobile", width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 2 }
 ];
-const screenshotCases = ["discovery", "selected", "compare"];
+const screenshotCases = ["discovery", "selected", "compare", "text-edit"];
 let visualProjectRegistryPath = null;
 
 async function main() {
@@ -104,6 +104,7 @@ async function captureReferenceViewport(browser, viewport, screenshotCase) {
   });
   const page = await context.newPage();
   try {
+    await installTextEditFixtureRoutes(page);
     await page.goto(url, { waitUntil: "networkidle" });
     await waitForVisible(page, "#board", "board should be visible");
     await waitForVisible(page, ".canvas-object img", "fixture image should be visible");
@@ -112,6 +113,13 @@ async function captureReferenceViewport(browser, viewport, screenshotCase) {
     if (screenshotCase === "selected") {
       await page.locator(`.canvas-object[data-id="${source.id}"]`).click();
       await waitForVisible(page, "#selectionToolbar", "selection toolbar should be visible");
+    } else if (screenshotCase === "text-edit") {
+      await page.locator(`.canvas-object[data-id="${source.id}"]`).click();
+      await waitForVisible(page, "#selectionToolbar", "selection toolbar should be visible");
+      await page.locator('[data-action="edit-text"]').click();
+      await waitForVisible(page, ".quick-edit-composer.edit-text-mode", "Edit Text composer should be visible");
+      await waitForVisible(page, ".edit-text-list input", "Edit Text recognized item input should be visible");
+      await page.locator(".edit-text-list input").first().fill("Updated reference text");
     } else if (screenshotCase === "compare") {
       await page.locator(".prompt-history-button").click();
       await waitForVisible(page, ".prompt-history-panel:not([hidden])", "discovery panel should be visible");
@@ -134,6 +142,36 @@ async function captureReferenceViewport(browser, viewport, screenshotCase) {
     await context.close();
     await new Promise((resolve) => server.close(resolve));
   }
+}
+
+async function installTextEditFixtureRoutes(page) {
+  await page.route(/\/api\/text-recognition(?:\?.*)?$/, async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ id: "visual-text-recognition" })
+    });
+  });
+  await page.route(/\/api\/text-recognition\/visual-text-recognition(?:\?.*)?$/, async (route) => {
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: "visual-text-recognition",
+        stage: "ready",
+        status: "running",
+        items: [
+          {
+            index: 1,
+            text: "Reference text",
+            location: "center",
+            style: "clean product label"
+          }
+        ]
+      })
+    });
+  });
 }
 
 async function readBaseline(baselinePath, name) {
