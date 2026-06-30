@@ -154,6 +154,16 @@ async function testHttpImageInputBoundaries() {
     });
     assertEqual(directory.status, 400, "HTTP image import should reject directory paths as client errors");
     assertEqual(directory.body.error, "Image path must point to a file.", "directory image paths should return a useful error");
+
+    const invalidDataUrl = await postJson(`${base}api/images${search}`, {
+      dataUrl: "data:image/png;base64,not-base64!"
+    });
+    assertEqual(invalidDataUrl.status, 400, "HTTP image import should reject malformed base64 data URLs");
+    assertEqual(invalidDataUrl.body.error, "dataUrl must contain valid base64 image data", "malformed data URLs should return a useful error");
+
+    const stateResponse = await fetch(`${base}api/state${search}`);
+    const state = await stateResponse.json();
+    assertEqual(state.objects.length, 0, "rejected image inputs should not create canvas objects");
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

@@ -771,7 +771,7 @@ async function persistImage(projectDir, input, options = {}) {
     const ext = normalizeExt(`.${match[1]}`) || ".png";
     const name = safeAssetName(input.name || "image", ext);
     const assetPath = path.join(assetsDir, name);
-    const buffer = Buffer.from(match[2], "base64");
+    const buffer = decodeBase64ImagePayload(match[2]);
     await fs.writeFile(assetPath, buffer);
     const dimensions = readImageDimensionsFromBuffer(buffer);
     return {
@@ -823,6 +823,22 @@ function classifyImageSourceError(error) {
     return clientError;
   }
   return error;
+}
+
+function decodeBase64ImagePayload(payload) {
+  const compact = String(payload || "").replace(/\s+/g, "");
+  if (!compact || !/^[A-Za-z0-9+/]*={0,2}$/.test(compact) || compact.length % 4 !== 0) {
+    const error = new Error("dataUrl must contain valid base64 image data");
+    error.statusCode = 400;
+    throw error;
+  }
+  const buffer = Buffer.from(compact, "base64");
+  if (buffer.length === 0) {
+    const error = new Error("dataUrl must contain valid base64 image data");
+    error.statusCode = 400;
+    throw error;
+  }
+  return buffer;
 }
 
 function imageDisplaySize(asset, input) {
