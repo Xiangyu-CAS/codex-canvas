@@ -8,7 +8,6 @@ const projectMenu = document.querySelector("#projectMenu");
 const settingsButton = document.querySelector("#settingsButton");
 const settingsMenu = document.querySelector("#settingsMenu");
 const toolbar = document.querySelector("#selectionToolbar");
-const moreMenu = document.querySelector("#selectionMoreMenu");
 const quickEditComposer = document.querySelector("#quickEditComposer");
 const quickEditPrompt = document.querySelector("#quickEditPrompt");
 const editTextPanel = document.querySelector("#editTextPanel");
@@ -63,9 +62,7 @@ const translations = {
     uploadFailed: "Image upload failed.",
     actions: {
       "quick-edit": "Quick Edit",
-      "upscale": "Upscale",
       "remove-bg": "Remove BG",
-      "eraser": "Eraser",
       "edit-elements": "Edit Elements",
       "reset-layer-group": "Reset group",
       "group-layer-group": "Group",
@@ -75,9 +72,7 @@ const translations = {
     },
     actionNames: {
       "quick-edit": "Quick Edit",
-      "upscale": "Upscale",
       "remove-bg": "Remove BG",
-      "eraser": "Eraser",
       "edit-elements": "Edit Elements",
       "reset-layer-group": "Reset group",
       "group-layer-group": "Group",
@@ -87,13 +82,8 @@ const translations = {
     },
     tools: {
       select: "Select",
-      reference: "Reference",
-      image: "Image",
-      grid: "Layout",
-      frame: "Frame",
       pencil: "Pencil",
       text: "Text",
-      "image-generator": "Image generator",
       "upload-image": "Upload image"
     },
     controls: {
@@ -131,9 +121,7 @@ const translations = {
     uploadFailed: "图片上传失败。",
     actions: {
       "quick-edit": "快捷编辑",
-      "upscale": "放大",
       "remove-bg": "去背景",
-      "eraser": "橡皮工具",
       "edit-elements": "编辑元素",
       "reset-layer-group": "重置组",
       "group-layer-group": "成组",
@@ -143,9 +131,7 @@ const translations = {
     },
     actionNames: {
       "quick-edit": "快捷编辑",
-      "upscale": "放大",
       "remove-bg": "去背景",
-      "eraser": "橡皮工具",
       "edit-elements": "编辑元素",
       "reset-layer-group": "重置组",
       "group-layer-group": "成组",
@@ -155,13 +141,8 @@ const translations = {
     },
     tools: {
       select: "选择",
-      reference: "参考",
-      image: "图片",
-      grid: "布局",
-      frame: "画框",
       pencil: "画笔",
       text: "文字",
-      "image-generator": "生图",
       "upload-image": "上传图片"
     },
     controls: {
@@ -185,7 +166,6 @@ let marquee = null;
 let viewport = { x: 0, y: 0, zoom: 0.72 };
 let pan = null;
 let viewportSaveTimer = null;
-let isMoreMenuOpen = false;
 let quickEditObjectId = null;
 let quickEditAction = null;
 let activeTextRecognitionId = null;
@@ -278,12 +258,6 @@ document.addEventListener("click", (event) => {
   const action = event.target.closest("[data-action]")?.dataset.action;
   if (action) {
     event.stopPropagation();
-    if (action === "more") {
-      isMoreMenuOpen = !isMoreMenuOpen;
-      updateSelectionUi();
-      return;
-    }
-    isMoreMenuOpen = false;
     updateSelectionUi();
     if (action === "quick-edit" || action === "edit-text") {
       openImageActionComposer(action);
@@ -361,7 +335,7 @@ document.addEventListener("pointerdown", (event) => {
   }
   if (isSettingsEvent) return;
   if (!selectedId && selectedIds.size === 0) return;
-  if (event.target.closest(".canvas-object, .selection-toolbar, .selection-more-menu, .quick-edit-composer, .color-palette")) return;
+  if (event.target.closest(".canvas-object, .selection-toolbar, .quick-edit-composer, .color-palette")) return;
   selectObject(null);
 });
 
@@ -920,7 +894,6 @@ function resizedImageRect(start, dx, dy) {
 async function selectObject(id, { fromUser = false, renderNow = true } = {}) {
   setLocalSelection(id ? [id] : [], { fromUser });
   if (editingTextId && editingTextId !== id) editingTextId = null;
-  if (!id) isMoreMenuOpen = false;
   if (renderNow) render();
   else updateSelectionUi();
   await fetch(apiPath("/api/selection"), {
@@ -1064,7 +1037,6 @@ function updateSelectionUi() {
 
   if (selectedIds.size > 1 || !object || object.type !== "image" || !hasUserSelection) {
     toolbar.hidden = true;
-    moreMenu.hidden = true;
     closeQuickEdit({ keepPrompt: true });
     return;
   }
@@ -1081,7 +1053,6 @@ function updateSelectionUi() {
   const top = clamp(topLeft.y - toolbarRect.height - 26, 16, boardRect.height - toolbarRect.height - 16);
   const left = clamp(objectCenter - toolbarRect.width / 2, 16, boardRect.width - toolbarRect.width - 16);
   toolbar.style.transform = `translate(${left}px, ${top}px)`;
-  updateMoreMenuPosition();
   updateQuickEditPosition();
 }
 
@@ -1213,7 +1184,6 @@ async function deleteSelectedObject() {
     const members = layerGroupMembers(groupId);
     setLocalSelection([]);
     editingTextId = null;
-    isMoreMenuOpen = false;
     state.objects = state.objects.filter((object) => object.layerGroupId !== groupId);
     state.selection = null;
     render();
@@ -1222,7 +1192,6 @@ async function deleteSelectedObject() {
   }
   setLocalSelection([]);
   editingTextId = null;
-  isMoreMenuOpen = false;
   state.objects = state.objects.filter((object) => !ids.includes(object.id));
   render();
   await deleteObjectsById(ids);
@@ -1375,7 +1344,6 @@ function openImageActionComposer(action) {
   quickEditAction = action;
   quickEditObjectId = object.id;
   quickEditPrompt.placeholder = composerPlaceholder(action);
-  isMoreMenuOpen = false;
   configureComposerMode(action);
   quickEditComposer.hidden = false;
   frameObjectForQuickEdit(object, action);
@@ -1700,7 +1668,7 @@ function frameSelectedImageForViewing(object) {
 
 function isShortcutEditingTarget(target) {
   if (isEditableTarget(target)) return true;
-  return Boolean(target.closest("button, [role='button'], .selection-toolbar, .selection-more-menu, .quick-edit-composer, .settings-menu, .color-palette"));
+  return Boolean(target.closest("button, [role='button'], .selection-toolbar, .quick-edit-composer, .settings-menu, .color-palette"));
 }
 
 function isDeleteEditingTarget(target) {
@@ -2224,31 +2192,6 @@ async function patchLayerGroupMembersSequentially(members, patchForMember) {
       body: JSON.stringify(patchForMember(member))
     }).catch(() => {});
   }
-}
-
-function updateMoreMenuPosition() {
-  moreMenu.hidden = !isMoreMenuOpen || toolbar.hidden;
-  if (moreMenu.hidden) return;
-
-  const moreButton = toolbar.querySelector('[data-action="more"]');
-  if (!moreButton) {
-    moreMenu.hidden = true;
-    return;
-  }
-  const buttonRect = moreButton.getBoundingClientRect();
-  const menuRect = moreMenu.getBoundingClientRect();
-  const boardRect = board.getBoundingClientRect();
-  const left = clamp(
-    buttonRect.right - boardRect.left - menuRect.width,
-    16,
-    boardRect.width - menuRect.width - 16
-  );
-  const top = clamp(
-    buttonRect.bottom - boardRect.top + 8,
-    16,
-    boardRect.height - menuRect.height - 16
-  );
-  moreMenu.style.transform = `translate(${left}px, ${top}px)`;
 }
 
 function updateQuickEditPosition() {

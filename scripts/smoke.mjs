@@ -20,6 +20,7 @@ async function main() {
     ["object patch sanitization", testObjectPatchSanitization],
     ["http object patch sanitization", testHttpObjectPatchSanitization],
     ["http json boundaries", testHttpJsonBoundaries],
+    ["frontend action contract", testFrontendActionContract],
     ["thread migration asset paths", testThreadMigrationAssetPaths],
     ["mcp canvas status", testMcpCanvasStatus],
     ["auto collector watermark", testAutoCollectorWatermark],
@@ -144,6 +145,29 @@ async function testHttpJsonBoundaries() {
     }
   } finally {
     await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+async function testFrontendActionContract() {
+  const html = await fs.readFile(path.join(process.cwd(), "public", "index.html"), "utf8");
+  const app = await fs.readFile(path.join(process.cwd(), "public", "app.js"), "utf8");
+  const styles = await fs.readFile(path.join(process.cwd(), "public", "styles.css"), "utf8");
+
+  const domActions = quotedAttributeValues(html, "data-action");
+  const translatedActions = objectKeysFromTranslationBlock(app, "actions");
+  assertSetEqual(translatedActions, domActions, "translated actions should match visible action buttons");
+
+  const domTools = new Set([
+    ...quotedAttributeValues(html, "data-tool"),
+    ...[...quotedAttributeValues(html, "data-view-action")]
+      .filter((action) => action === "upload")
+      .map(() => "upload-image")
+  ]);
+  const translatedTools = objectKeysFromTranslationBlock(app, "tools");
+  assertSetEqual(translatedTools, domTools, "translated tools should match visible tool buttons");
+
+  if (/selectionMoreMenu|selection-more-menu|isMoreMenuOpen|data-action=["']more["']/.test(`${html}\n${app}\n${styles}`)) {
+    throw new Error("frontend should not keep orphan selection more-menu code without a More action.");
   }
 }
 
@@ -620,6 +644,41 @@ function assertEqual(actual, expected, message) {
   if (actual !== expected) {
     throw new Error(`${message}. Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}.`);
   }
+}
+
+function assertSetEqual(actual, expected, message) {
+  const actualValues = [...actual].sort();
+  const expectedValues = [...expected].sort();
+  if (JSON.stringify(actualValues) !== JSON.stringify(expectedValues)) {
+    throw new Error(`${message}. Expected ${JSON.stringify(expectedValues)}, got ${JSON.stringify(actualValues)}.`);
+  }
+}
+
+function quotedAttributeValues(source, attribute) {
+  const values = new Set();
+  const pattern = new RegExp(`${attribute}="([^"]+)"`, "g");
+  for (const match of source.matchAll(pattern)) values.add(match[1]);
+  return values;
+}
+
+function objectKeysFromTranslationBlock(source, blockName) {
+  const start = source.indexOf(`${blockName}: {`);
+  if (start < 0) return new Set();
+  const openBrace = source.indexOf("{", start);
+  let depth = 0;
+  for (let index = openBrace; index < source.length; index += 1) {
+    const char = source[index];
+    if (char === "{") depth += 1;
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        const block = source.slice(openBrace + 1, index);
+        return new Set([...block.matchAll(/^\s*(?:"([^"]+)"|([a-zA-Z0-9_-]+))\s*:/gm)]
+          .map((match) => match[1] || match[2]));
+      }
+    }
+  }
+  return new Set();
 }
 
 main().catch((error) => {
