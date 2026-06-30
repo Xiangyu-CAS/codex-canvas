@@ -9,6 +9,7 @@ import { collectRecentImages } from "../src/collector.mjs";
 import { markTextRecognitionCancelledForTest, placeImportedElementLayersForTest } from "../src/jobs.mjs";
 import { checkImageProcessingDepsAvailable } from "../src/ocr-setup.mjs";
 import { assetsDirFor, legacyCanvasDataDirFor, statePathFor } from "../src/paths.mjs";
+import { canvasIdForThread } from "../src/runtime.mjs";
 import { createServer as createAgentCanvasServer } from "../src/server.mjs";
 import { addImage, addObject, deleteObjects, promptHistory, readState, searchObjects, transformState, updateObject, updateSelection, updateViewport, versionGroups } from "../src/store.mjs";
 
@@ -52,6 +53,7 @@ async function main() {
     ["personal plugin installer", testPersonalPluginInstaller],
     ["cli collect help", testCliCollectHelp],
     ["cli argument parsing and errors", testCliArgumentParsingAndErrors],
+    ["cli codex thread environment", testCliCodexThreadEnvironment],
     ["doctor optional deps without python", testDoctorOptionalDepsWithoutPython],
     ["chat binding alias", testChatBindingAlias],
     ["chat websocket fallback", testChatWebSocketFallback],
@@ -1625,6 +1627,44 @@ async function testCliArgumentParsingAndErrors() {
   if (!ambiguousImportSource.stderr.includes("import requires exactly one image input")) {
     throw new Error("CLI import should reject ambiguous image sources.");
   }
+}
+
+async function testCliCodexThreadEnvironment() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-cli-thread-env-"));
+  const codexThreadId = "thread-from-codex-env";
+  const agentThreadId = "thread-from-agent-env";
+  const baseEnv = {
+    ...process.env,
+    AGENT_CANVAS_PROJECT_DIR: projectDir
+  };
+
+  const codexEnvStatus = await runCliJson(["status", "--project", projectDir, "--json"], {
+    env: {
+      ...baseEnv,
+      AGENT_CANVAS_CODEX_THREAD_ID: "",
+      CODEX_THREAD_ID: codexThreadId
+    }
+  });
+  assertEqual(codexEnvStatus.status, 0, "CLI status should accept CODEX_THREAD_ID from the Codex desktop environment");
+  assertEqual(codexEnvStatus.body.canvasId, canvasIdForThread(codexThreadId), "CLI should derive a thread-scoped canvas from CODEX_THREAD_ID");
+
+  const agentEnvStatus = await runCliJson(["status", "--project", projectDir, "--json"], {
+    env: {
+      ...baseEnv,
+      AGENT_CANVAS_CODEX_THREAD_ID: agentThreadId,
+      CODEX_THREAD_ID: codexThreadId
+    }
+  });
+  assertEqual(agentEnvStatus.body.canvasId, canvasIdForThread(agentThreadId), "AGENT_CANVAS_CODEX_THREAD_ID should override CODEX_THREAD_ID for explicit plugin launches");
+
+  const explicitStatus = await runCliJson(["status", "--project", projectDir, "--thread-id", "thread-from-flag", "--json"], {
+    env: {
+      ...baseEnv,
+      AGENT_CANVAS_CODEX_THREAD_ID: agentThreadId,
+      CODEX_THREAD_ID: codexThreadId
+    }
+  });
+  assertEqual(explicitStatus.body.canvasId, canvasIdForThread("thread-from-flag"), "explicit --thread-id should override thread environment variables");
 }
 
 async function testDoctorOptionalDepsWithoutPython() {

@@ -13,6 +13,7 @@ Use this skill to open the local Agent-Canvas board and keep generated images co
    - Prefer the `agent-canvas.open_canvas` MCP tool when available.
    - Pass the active workspace path as `projectDir`.
    - Pass the current Codex thread id as `threadId` whenever it is available; Agent-Canvas uses this explicit binding for canvas-to-chat image sends and to keep one canvas per Codex thread.
+   - When falling back to the CLI, `agent-canvas open` will also read `CODEX_THREAD_ID` or `AGENT_CANVAS_CODEX_THREAD_ID` from the environment. If neither is available, the canvas is the shared project default, not a per-thread canvas.
    - If the MCP tool is not available, run `node <plugin-root>/bin/agent-canvas.mjs open --project <workspace>`.
 2. Fast open behavior:
    - Prefer reusing the existing runtime URL in `<workspace>/canvas/.agent-canvas-runtime.json` when it responds.

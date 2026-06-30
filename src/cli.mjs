@@ -28,7 +28,7 @@ export async function main(args, context = {}) {
     const port = normalizePort(optionValue(options, ["port"], "--port") ?? process.env.AGENT_CANVAS_PORT);
     const host = optionValue(options, ["host"], "--host") || process.env.AGENT_CANVAS_HOST || "127.0.0.1";
     const autoCollect = options["no-auto-collect"] !== true;
-    const chatThreadId = normalizeThreadId(optionValue(options, ["thread-id", "threadId"], "--thread-id") || process.env.AGENT_CANVAS_CODEX_THREAD_ID);
+    const chatThreadId = normalizeThreadId(optionValue(options, ["thread-id", "threadId"], "--thread-id") || environmentThreadId());
     const { url } = await createServer({ projectDir, host, port, autoCollect, chatThreadId });
     console.log(`Agent-Canvas listening on ${url}`);
     console.log(`Project: ${projectDir}`);
@@ -43,7 +43,7 @@ export async function main(args, context = {}) {
     const host = optionValue(options, ["host"], "--host") || process.env.AGENT_CANVAS_HOST || "127.0.0.1";
     const defaultUrl = `http://${host}:${port}/`;
     const autoCollect = options["no-auto-collect"] !== true;
-    const chatThreadId = normalizeThreadId(optionValue(options, ["thread-id", "threadId"], "--thread-id") || process.env.AGENT_CANVAS_CODEX_THREAD_ID);
+    const chatThreadId = normalizeThreadId(optionValue(options, ["thread-id", "threadId"], "--thread-id") || environmentThreadId());
     await ensureProjectStore(projectDir, { canvasId: canvasIdForThread(chatThreadId) });
     const runtime = await readRuntime(projectDir);
     const existingUrl = await openExistingCanvas(runtime?.url, projectDir, { autoCollect, chatThreadId, allowLegacy: true });
@@ -354,7 +354,7 @@ async function resolveCanvasOptions(projectDir, options = {}, runtime = null) {
   const currentRuntime = runtime || await readRuntime(projectDir);
   const explicitThreadId = normalizeThreadId(
     optionValue(options, ["thread-id", "threadId"], "--thread-id")
-    || process.env.AGENT_CANVAS_CODEX_THREAD_ID
+    || environmentThreadId()
   );
   const threadId = normalizeThreadId(
     explicitThreadId
@@ -487,6 +487,10 @@ async function readProjectRegistryToken() {
 
 function isCapabilityToken(token) {
   return typeof token === "string" && /^[A-Za-z0-9_-]{24,}$/.test(token);
+}
+
+function environmentThreadId() {
+  return process.env.AGENT_CANVAS_CODEX_THREAD_ID || process.env.CODEX_THREAD_ID || null;
 }
 
 function printHelp() {
