@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { addImage, readState } from "./store.mjs";
+import { addImage, isSupportedImageBuffer, readState } from "./store.mjs";
 
 const imageExtensions = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif"]);
 const boardPadding = 120;
@@ -216,6 +216,7 @@ async function walkImages(currentPath, context) {
     if (stat.mtimeMs < context.sinceMs) continue;
 
     const buffer = await fs.readFile(absolutePath);
+    if (!isSupportedImageBuffer(buffer)) continue;
     const hash = crypto.createHash("sha256").update(buffer).digest("hex");
     if (context.knownHashes.has(hash)) continue;
     context.knownHashes.add(hash);

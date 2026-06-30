@@ -360,11 +360,25 @@ async function testHttpImageInputBoundaries() {
     assertEqual(directory.status, 400, "HTTP image import should reject directory paths as client errors");
     assertEqual(directory.body.error, "Image path must point to a file.", "directory image paths should return a useful error");
 
+    const fakeImagePath = path.join(projectDir, "fake.png");
+    await fs.writeFile(fakeImagePath, "not a real png");
+    const fakeImage = await postJson(`${base}api/images${search}`, {
+      path: fakeImagePath
+    });
+    assertEqual(fakeImage.status, 400, "HTTP image import should reject files that only have image extensions");
+    assertEqual(fakeImage.body.error, "Image path must point to a supported image file.", "fake local images should return a useful error");
+
     const invalidDataUrl = await postJson(`${base}api/images${search}`, {
       dataUrl: "data:image/png;base64,not-base64!"
     });
     assertEqual(invalidDataUrl.status, 400, "HTTP image import should reject malformed base64 data URLs");
     assertEqual(invalidDataUrl.body.error, "dataUrl must contain valid base64 image data", "malformed data URLs should return a useful error");
+
+    const fakeDataUrl = await postJson(`${base}api/images${search}`, {
+      dataUrl: `data:image/png;base64,${Buffer.from("not a real png").toString("base64")}`
+    });
+    assertEqual(fakeDataUrl.status, 400, "HTTP image import should reject base64 payloads that are not images");
+    assertEqual(fakeDataUrl.body.error, "dataUrl must contain supported image data", "fake image data URLs should return a useful error");
 
     const ambiguous = await postJson(`${base}api/images${search}`, {
       url: "https://example.invalid/image.png",
@@ -1009,7 +1023,7 @@ async function testAutoCollectorWatermark() {
     await delay(450);
     const stateResponse = await fetch(`${base}api/state${search}`);
     const state = await stateResponse.json();
-    assertEqual(state.objects.length, 1, "auto collector should advance its watermark after a successful scan");
+    assertEqual(state.objects.length, 1, "auto collector should ignore files that only have image extensions");
 
     const baselineDir = path.join(projectDir, "scripts", "reference-screenshots");
     await fs.mkdir(baselineDir, { recursive: true });

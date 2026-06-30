@@ -884,6 +884,7 @@ async function persistImage(projectDir, input, options = {}) {
       error.statusCode = 400;
       throw error;
     }
+    await assertSupportedImageFile(sourcePath);
     const ext = normalizeExt(path.extname(sourcePath)) || ".png";
     const name = safeAssetName(input.name || path.basename(sourcePath, ext), ext);
     const assetPath = path.join(assetsDir, name);
@@ -909,6 +910,11 @@ async function persistImage(projectDir, input, options = {}) {
     const name = safeAssetName(input.name || "image", ext);
     const assetPath = path.join(assetsDir, name);
     const buffer = decodeBase64ImagePayload(match[2]);
+    if (!isSupportedImageBuffer(buffer)) {
+      const error = new Error("dataUrl must contain supported image data");
+      error.statusCode = 400;
+      throw error;
+    }
     await fs.writeFile(assetPath, buffer);
     const dimensions = readImageDimensionsFromBuffer(buffer);
     return {
@@ -946,6 +952,17 @@ async function copyImageSource(sourcePath, assetPath) {
   } catch (error) {
     throw classifyImageSourceError(error);
   }
+}
+
+async function assertSupportedImageFile(sourcePath) {
+  try {
+    if (isSupportedImageBuffer(await fs.readFile(sourcePath))) return;
+  } catch (error) {
+    throw classifyImageSourceError(error);
+  }
+  const error = new Error("Image path must point to a supported image file.");
+  error.statusCode = 400;
+  throw error;
 }
 
 function classifyImageSourceError(error) {
@@ -1013,8 +1030,20 @@ function readImageDimensionsFromBuffer(buffer) {
     || {};
 }
 
+export function isSupportedImageBuffer(buffer) {
+  if (hasAvifSignature(buffer)) return true;
+  const dimensions = readPngDimensions(buffer)
+    || readJpegDimensions(buffer)
+    || readGifDimensions(buffer)
+    || readWebpDimensions(buffer);
+  return Number.isFinite(dimensions?.width)
+    && dimensions.width > 0
+    && Number.isFinite(dimensions?.height)
+    && dimensions.height > 0;
+}
+
 function readPngDimensions(buffer) {
-  if (buffer.length < 24 || buffer.toString("ascii", 1, 4) !== "PNG") return null;
+  if (buffer.length < 24 || !hasPngSignature(buffer)) return null;
   return {
     width: buffer.readUInt32BE(16),
     height: buffer.readUInt32BE(20),
@@ -1023,7 +1052,7 @@ function readPngDimensions(buffer) {
 }
 
 function readJpegDimensions(buffer) {
-  if (buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) return null;
+  if (buffer.length < 4 || !hasJpegSignature(buffer)) return null;
   let offset = 2;
   while (offset + 9 < buffer.length) {
     if (buffer[offset] !== 0xff) return null;
@@ -1042,7 +1071,7 @@ function readJpegDimensions(buffer) {
 }
 
 function readGifDimensions(buffer) {
-  if (buffer.length < 10 || buffer.toString("ascii", 0, 3) !== "GIF") return null;
+  if (buffer.length < 10 || !hasGifSignature(buffer)) return null;
   return {
     width: buffer.readUInt16LE(6),
     height: buffer.readUInt16LE(8)
@@ -1050,7 +1079,7 @@ function readGifDimensions(buffer) {
 }
 
 function readWebpDimensions(buffer) {
-  if (buffer.length < 30 || buffer.toString("ascii", 0, 4) !== "RIFF" || buffer.toString("ascii", 8, 12) !== "WEBP") {
+  if (buffer.length < 30 || !hasWebpSignature(buffer)) {
     return null;
   }
 
@@ -1075,6 +1104,41 @@ function readWebpDimensions(buffer) {
     };
   }
   return null;
+}
+
+function hasPngSignature(buffer) {
+  return buffer.length >= 8
+    && buffer[0] === 0x89
+    && buffer.toString("ascii", 1, 4) === "PNG"
+    && buffer[4] === 0x0d
+    && buffer[5] === 0x0a
+    && buffer[6] === 0x1a
+    && buffer[7] === 0x0a;
+}
+
+function hasJpegSignature(buffer) {
+  return buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+}
+
+function hasGifSignature(buffer) {
+  if (buffer.length < 6) return false;
+  const signature = buffer.toString("ascii", 0, 6);
+  return signature === "GIF87a" || signature === "GIF89a";
+}
+
+function hasWebpSignature(buffer) {
+  return buffer.length >= 12
+    && buffer.toString("ascii", 0, 4) === "RIFF"
+    && buffer.toString("ascii", 8, 12) === "WEBP";
+}
+
+function hasAvifSignature(buffer) {
+  if (buffer.length < 12 || buffer.toString("ascii", 4, 8) !== "ftyp") return false;
+  const brands = [buffer.toString("ascii", 8, 12)];
+  for (let offset = 16; offset + 4 <= Math.min(buffer.length, 64); offset += 4) {
+    brands.push(buffer.toString("ascii", offset, offset + 4));
+  }
+  return brands.some((brand) => brand === "avif" || brand === "avis");
 }
 
 function normalizeExt(ext) {
