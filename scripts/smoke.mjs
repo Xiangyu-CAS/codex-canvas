@@ -118,6 +118,20 @@ async function testSelectionSanitization() {
   assertEqual(cleared, null, "updateSelection should clear unknown object ids");
   const state = await readState(projectDir);
   assertEqual(state.selection, null, "selection state should not persist orphan object ids");
+
+  const corruptProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-corrupt-state-"));
+  await fs.mkdir(path.dirname(statePathFor(corruptProjectDir)), { recursive: true });
+  await fs.writeFile(statePathFor(corruptProjectDir), `${JSON.stringify({
+    version: 1,
+    title: "Corrupt State",
+    viewport: { x: 1, y: 2, zoom: 0.72 },
+    objects: { id: "not-an-array" },
+    selection: "missing-object"
+  }, null, 2)}\n`);
+  const corruptState = await readState(corruptProjectDir);
+  assertEqual(Array.isArray(corruptState.objects), true, "readState should normalize corrupt object collections to an array");
+  assertEqual(corruptState.objects.length, 0, "readState should drop non-array object collections");
+  assertEqual(corruptState.selection, null, "readState should clear selections that do not point at existing objects");
 }
 
 async function testViewportSanitization() {

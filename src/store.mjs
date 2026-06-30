@@ -380,10 +380,18 @@ async function writeStateFile(projectDir, state, options = {}) {
 }
 
 function normalizeState(state = {}) {
+  const objects = Array.isArray(state.objects)
+    ? state.objects.filter((object) => object && typeof object === "object")
+    : [];
+  const selection = typeof state.selection === "string" && objects.some((object) => object.id === state.selection)
+    ? state.selection
+    : null;
   return {
     ...defaultState,
     ...state,
-    viewport: normalizeViewport(state.viewport)
+    viewport: normalizeViewport(state.viewport),
+    objects,
+    selection
   };
 }
 
