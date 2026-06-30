@@ -8,8 +8,10 @@ import { collectRecentImages } from "./collector.mjs";
 import { sendImageToBoundChat } from "./codex-chat.mjs";
 import { createImageJob, createTextRecognitionJob, getActivePlaceholderIds, getIgnoredGeneratedImagePaths, getImageJob, getTextRecognitionJob, hasRunningImageJobs, submitTextRecognitionEdit } from "./jobs.mjs";
 import { assetsDirFor, projectRegistryPath, publicDir, runtimePathFor } from "./paths.mjs";
-import { addImage, addObject, deleteObject, deleteObjects, ensureProjectStore, markStaleJobPlaceholders, promptHistory, readState, searchObjects, updateObject, updateProjectMeta, updateSelection, updateViewport, versionGroups } from "./store.mjs";
+import { exportLayerGroupPsd } from "./psd-export.mjs";
+import { addImage, addObject, deleteObject, deleteObjects, ensureProjectStore, markStaleJobPlaceholders, promptHistory, readState, reorderLayerGroupLayer, restoreObjects, searchObjects, updateObject, updateProjectMeta, updateSelection, updateViewport, versionGroups } from "./store.mjs";
 import { canvasIdForThread, normalizeThreadId } from "./runtime.mjs";
+import { appUpdateStatus, updateApp } from "./updater.mjs";
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -21,7 +23,8 @@ const contentTypes = {
   ".jpeg": "image/jpeg",
   ".webp": "image/webp",
   ".gif": "image/gif",
-  ".svg": "image/svg+xml"
+  ".svg": "image/svg+xml",
+  ".psd": "image/vnd.adobe.photoshop"
 };
 const defaultMaxJsonBodyBytes = 32 * 1024 * 1024;
 const maxQueryLimit = 100;
@@ -68,10 +71,19 @@ export async function createServer({ projectDir, host = "127.0.0.1", port = 4321
 async function handleRequest(request, response, context) {
   const requestUrl = new URL(request.url, "http://agent-canvas.local");
   const pathname = decodePathname(requestUrl.pathname);
-  requireCapabilityToken(request, requestUrl, pathname, context.registry);
 
   if (request.method === "GET" && pathname === "/api/projects") {
     return sendJson(response, 200, { projects: await listProjects(context.registry) });
+  }
+
+  if (request.method === "GET" && pathname === "/api/app-update") {
+    return sendJson(response, 200, await appUpdateStatus({
+      checkRemote: requestUrl.searchParams.get("check") === "1"
+    }));
+  }
+
+  if (request.method === "POST" && pathname === "/api/app-update") {
+    return sendJson(response, 200, await updateApp());
   }
 
   if (request.method === "POST" && pathname === "/api/projects") {
@@ -150,9 +162,40 @@ async function handleRequest(request, response, context) {
     return sendJson(response, 200, await deleteObjects(projectDir, body.ids || [], storeOptionsFor(project)));
   }
 
+  if (request.method === "POST" && pathname === "/api/objects/restore") {
+    const body = await readJson(request, context.registry);
+    return sendJson(response, 201, await restoreObjects(projectDir, body.objects || [], {
+      ...storeOptionsFor(project),
+      selection: body.selection || null
+    }));
+  }
+
   if (request.method === "POST" && pathname === "/api/selection") {
     const body = await readJson(request, context.registry);
     return sendJson(response, 200, { selection: await updateSelection(projectDir, body.selection || null, storeOptionsFor(project)) });
+  }
+
+  const layerGroupReorderMatch = /^\/api\/layer-groups\/([^/]+)\/reorder$/.exec(pathname);
+  if (request.method === "POST" && layerGroupReorderMatch) {
+    const body = await readJson(request, context.registry);
+    return sendJson(response, 200, await reorderLayerGroupLayer(
+      projectDir,
+      layerGroupReorderMatch[1],
+      body.objectId,
+      body.direction,
+      storeOptionsFor(project)
+    ));
+  }
+
+  const layerGroupPsdMatch = /^\/api\/layer-groups\/([^/]+)\/psd$/.exec(pathname);
+  if (request.method === "GET" && layerGroupPsdMatch) {
+    const exported = await exportLayerGroupPsd(projectDir, layerGroupPsdMatch[1], storeOptionsFor(project));
+    return sendBinary(response, 200, exported.buffer, {
+      "content-type": contentTypes[".psd"],
+      "content-disposition": `attachment; filename="${headerSafeFilename(exported.filename)}"`,
+      "cache-control": "no-cache",
+      "referrer-policy": "no-referrer"
+    });
   }
 
   if (request.method === "GET" && pathname === "/api/chat-binding") {
@@ -289,6 +332,15 @@ function sendJson(response, status, body) {
   response.end(JSON.stringify(body));
 }
 
+function sendBinary(response, status, buffer, headers = {}) {
+  response.writeHead(status, headers);
+  response.end(buffer);
+}
+
+function headerSafeFilename(filename) {
+  return String(filename || "agent-canvas-layers.psd").replace(/["\\\r\n]/g, "_");
+}
+
 function parsePositiveIntegerQueryParam(searchParams, name, defaultValue, fallbackName = null) {
   const rawValue = searchParams.get(name) ?? (fallbackName ? searchParams.get(fallbackName) : null);
   if (rawValue === null || rawValue === "") return defaultValue;
@@ -301,7 +353,6 @@ function createProjectRegistry({ host, port, autoCollect, autoCollectIntervalMs,
   return {
     host,
     port,
-    capabilityToken: crypto.randomBytes(24).toString("base64url"),
     autoCollect,
     autoCollectIntervalMs,
     autoCollectWatchDebounceMs,
@@ -332,24 +383,6 @@ function decodePathname(pathname) {
     }
     throw error;
   }
-}
-
-function requireCapabilityToken(request, requestUrl, pathname, registry) {
-  if (!requiresCapabilityToken(request, pathname)) return;
-  const token = request.headers["x-agent-canvas-token"] || requestUrl.searchParams.get("token");
-  if (isCapabilityToken(token) && token === registry.capabilityToken) return;
-  const error = new Error("Agent-Canvas API writes require the runtime capability token.");
-  error.statusCode = 403;
-  throw error;
-}
-
-function isCapabilityToken(token) {
-  return typeof token === "string" && /^[A-Za-z0-9_-]{24,}$/.test(token);
-}
-
-function requiresCapabilityToken(request, pathname) {
-  if (!pathname.startsWith("/api/")) return false;
-  return !["GET", "HEAD", "OPTIONS"].includes(request.method);
 }
 
 function requireHttpProjectDir(projectDir) {
@@ -406,8 +439,7 @@ async function registerProject(registry, projectDir, { autoCollect = true, chatT
 }
 
 async function restorePersistedProjects(registry) {
-  const { projects: entries, aliases, capabilityToken } = await readPersistedRegistry(registry.persistentRegistryPath);
-  if (isCapabilityToken(capabilityToken)) registry.capabilityToken = capabilityToken;
+  const { projects: entries, aliases } = await readPersistedRegistry(registry.persistentRegistryPath);
   for (const entry of entries) {
     if (!entry || typeof entry !== "object") continue;
     if (typeof entry.projectDir !== "string" || !path.isAbsolute(entry.projectDir)) continue;
@@ -432,16 +464,15 @@ async function restorePersistedProjects(registry) {
 async function readPersistedRegistry(registryPath) {
   try {
     const payload = JSON.parse(await fs.readFile(registryPath, "utf8"));
-    if (Array.isArray(payload)) return { projects: payload, aliases: [], capabilityToken: null };
+    if (Array.isArray(payload)) return { projects: payload, aliases: [] };
     return {
       projects: Array.isArray(payload?.projects) ? payload.projects : [],
-      aliases: Array.isArray(payload?.aliases) ? payload.aliases : [],
-      capabilityToken: typeof payload?.capabilityToken === "string" ? payload.capabilityToken : null
+      aliases: Array.isArray(payload?.aliases) ? payload.aliases : []
     };
   } catch (error) {
-    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return { projects: [], aliases: [], capabilityToken: null };
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return { projects: [], aliases: [] };
     console.error(`Agent-Canvas could not read project registry ${registryPath}: ${error.message}`);
-    return { projects: [], aliases: [], capabilityToken: null };
+    return { projects: [], aliases: [] };
   }
 }
 
@@ -459,7 +490,6 @@ async function persistProjectRegistry(registry) {
   const payload = {
     version: 1,
     updatedAt: new Date().toISOString(),
-    capabilityToken: registry.capabilityToken,
     projects,
     aliases: Array.from(registry.projectAliases.entries())
       .filter(([, to]) => registry.projects.has(to))
@@ -577,13 +607,23 @@ async function runAutoCollectorPass(project) {
 }
 
 function resolveRequestProject(registry, requestUrl) {
-  const requestedId = requestUrl.searchParams.get("project") || registry.defaultProjectId;
+  const requestedId = requestUrl.searchParams.get("project") || projectIdForThreadQuery(registry, requestUrl) || registry.defaultProjectId;
   const resolvedId = resolveProjectAlias(registry, requestedId);
   const project = resolvedId ? registry.projects.get(resolvedId) : null;
   if (project) return project;
   const error = new Error(`Canvas project not found: ${requestedId || "(missing)"}`);
   error.statusCode = 404;
   throw error;
+}
+
+function projectIdForThreadQuery(registry, requestUrl) {
+  const threadId = normalizeThreadId(requestUrl.searchParams.get("threadId") || requestUrl.searchParams.get("thread-id"));
+  const canvasId = canvasIdForThread(threadId);
+  if (!canvasId) return null;
+  for (const project of registry.projects.values()) {
+    if (project.canvasId === canvasId) return project.id;
+  }
+  return null;
 }
 
 function resolveProjectAlias(registry, projectId) {
@@ -725,7 +765,8 @@ async function writeProjectRuntime(registry, project) {
 function projectUrl(registry, projectId) {
   const url = new URL(registry.baseUrl);
   url.searchParams.set("project", projectId);
-  url.searchParams.set("token", registry.capabilityToken);
+  const project = registry.projects.get(projectId);
+  if (project?.chatThreadId) url.searchParams.set("threadId", project.chatThreadId);
   return url.toString();
 }
 

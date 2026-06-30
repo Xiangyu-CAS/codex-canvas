@@ -729,6 +729,67 @@ export async function updateProjectMeta(projectDir, patch, options = {}) {
   });
 }
 
+export async function reorderLayerGroupLayer(projectDir, groupId, objectId, direction, options = {}) {
+  const step = direction === "up" ? 1 : direction === "down" ? -1 : 0;
+  if (!groupId || !objectId || step === 0) {
+    const error = new Error("Layer reorder requires a layer group id, object id, and direction.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return mutateState(projectDir, options, (state) => {
+    const firstGroupIndex = state.objects.findIndex((object) => object.layerGroupId === groupId);
+    const groupObjects = state.objects
+      .filter((object) => object.layerGroupId === groupId)
+      .sort((a, b) => (a.layerGroupIndex || 0) - (b.layerGroupIndex || 0));
+    const currentIndex = groupObjects.findIndex((object) => object.id === objectId);
+    if (firstGroupIndex < 0 || currentIndex < 0 || groupObjects.length < 2) {
+      const error = new Error("Layer group member not found.");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const nextIndex = currentIndex + step;
+    if (nextIndex < 0 || nextIndex >= groupObjects.length) {
+      return {
+        state,
+        value: {
+          objects: groupObjects,
+          changed: false
+        }
+      };
+    }
+
+    const reordered = [...groupObjects];
+    [reordered[currentIndex], reordered[nextIndex]] = [reordered[nextIndex], reordered[currentIndex]];
+    const reindexed = reordered.map((object, index) => ({
+      ...object,
+      layerGroupIndex: index
+    }));
+    const reindexedById = new Map(reindexed.map((object) => [object.id, object]));
+    const otherObjects = state.objects.filter((object) => object.layerGroupId !== groupId);
+    const insertIndex = Math.min(firstGroupIndex, otherObjects.length);
+    const objects = [
+      ...otherObjects.slice(0, insertIndex),
+      ...reindexed,
+      ...otherObjects.slice(insertIndex)
+    ];
+
+    return {
+      state: {
+        ...state,
+        objects,
+        selection: objectId
+      },
+      value: {
+        objects: reindexed,
+        object: reindexedById.get(objectId),
+        changed: true
+      }
+    };
+  });
+}
+
 export async function updateObject(projectDir, id, patch, options = {}) {
   return mutateState(projectDir, options, (state) => {
     let updated = null;
@@ -774,6 +835,7 @@ function sanitizeObjectPatch(patch = {}) {
   for (const key of ["layerGroupIndex", "layerGroupOriginalX", "layerGroupOriginalY", "layerGroupRelativeX", "layerGroupRelativeY"]) {
     if (Number.isFinite(patch[key])) next[key] = sanitizeCoordinate(patch[key]);
   }
+  if (Number.isFinite(patch.assetVersion)) next.assetVersion = Math.max(0, Math.round(patch.assetVersion));
   for (const key of [
     "layerGroupOriginalWidth",
     "layerGroupOriginalHeight",
@@ -782,7 +844,7 @@ function sanitizeObjectPatch(patch = {}) {
   ]) {
     if (Number.isFinite(patch[key])) next[key] = sanitizeDimension(patch[key]);
   }
-  for (const key of ["name", "text", "color", "stroke", "status", "error", "layoutMode", "sourceObjectId", "layerGroupId", "layerGroupName", "layerGroupSourceObjectId", "layerGroupKind"]) {
+  for (const key of ["name", "text", "color", "stroke", "status", "error", "layoutMode", "sourceObjectId", "layerGroupId", "layerGroupName", "layerGroupSourceObjectId", "layerGroupKind", "layerGroupBackgroundStatus"]) {
     if (typeof patch[key] === "string") next[key] = patch[key].slice(0, key === "text" ? 2000 : 300);
   }
   if (typeof patch.layerGroupLocked === "boolean") next.layerGroupLocked = patch.layerGroupLocked;
@@ -894,6 +956,69 @@ export async function deleteObjects(projectDir, ids, options = {}) {
     return {
       state: { ...state, objects, selection },
       value: { ids: deletedIds, deleted: true }
+    };
+  });
+}
+
+export async function restoreObjects(projectDir, entries, options = {}) {
+  const restoreEntries = Array.isArray(entries)
+    ? entries
+      .map((entry) => {
+        const object = entry && typeof entry === "object" && entry.object && typeof entry.object === "object"
+          ? entry.object
+          : entry;
+        const index = Number.isInteger(entry?.index) ? entry.index : null;
+        return { object, index };
+      })
+      .filter((entry) => entry.object && typeof entry.object === "object")
+    : [];
+  if (restoreEntries.length === 0) {
+    const error = new Error("restore_objects requires at least one object.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return mutateState(projectDir, options, (state) => {
+    const existingIds = new Set(state.objects.map((object) => object.id));
+    const restored = [];
+    const seenIds = new Set();
+    for (const entry of restoreEntries) {
+      const object = normalizePersistedObject(entry.object, {
+        projectDir,
+        canvasId: canvasIdFrom(options)
+      });
+      if (!object) continue;
+      if (existingIds.has(object.id) || seenIds.has(object.id)) {
+        const error = new Error(`Canvas object already exists: ${object.id}`);
+        error.statusCode = 409;
+        throw error;
+      }
+      seenIds.add(object.id);
+      restored.push({ object, index: entry.index });
+    }
+    if (restored.length === 0) {
+      const error = new Error("restore_objects did not include any valid canvas objects.");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const objects = [...state.objects];
+    for (const entry of restored) {
+      const index = Number.isInteger(entry.index)
+        ? Math.min(Math.max(entry.index, 0), objects.length)
+        : objects.length;
+      objects.splice(index, 0, entry.object);
+    }
+    const requestedSelection = typeof options.selection === "string" && restored.some((entry) => entry.object.id === options.selection)
+      ? options.selection
+      : state.selection;
+
+    return {
+      state: { ...state, objects, selection: requestedSelection },
+      value: {
+        objects: restored.map((entry) => entry.object),
+        selection: requestedSelection
+      }
     };
   });
 }

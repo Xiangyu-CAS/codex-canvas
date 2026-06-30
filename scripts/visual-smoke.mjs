@@ -13,9 +13,6 @@ const expectedSingleImageActions = [
   "quick-edit",
   "remove-bg",
   "expand",
-  "upscale",
-  "multi-angles",
-  "move-object",
   "crop",
   "edit-elements",
   "edit-text",
@@ -215,9 +212,10 @@ async function runViewportSmoke(browser, viewport) {
 
     await assertSingleImageActionToolbar(page);
     await assertExpandComposer(page, viewport);
-    await assertCropWorkflow(page, image.id);
+    const croppedImageId = await assertCropWorkflow(page, image.id);
+    await assertDeleteUndoShortcut(page, croppedImageId);
     await assertVisibleControlsDoNotOverlap(page, viewport);
-    await assertDiscoveryVersionBrowser(page, [version.id, nextVersion.id]);
+    await assertDiscoveryVersionBrowser(page, [version.id, nextVersion.id, croppedImageId]);
     assertDeepEqual(consoleErrors.filter((message) => !/favicon/i.test(message)), [], "visual smoke should not emit console errors");
   } finally {
     await context.close();
@@ -396,7 +394,7 @@ async function runEditElementsLayerSmoke(browser) {
     layerGroupSourceObjectId: "source-fixture",
     layerGroupIndex: 0,
     layerGroupKind: "background",
-    layerGroupLocked: true,
+    layerGroupLocked: false,
     layerGroupOriginalX: 360,
     layerGroupOriginalY: 250,
     layerGroupOriginalWidth: 260,
@@ -412,7 +410,7 @@ async function runEditElementsLayerSmoke(browser) {
     layerGroupSourceObjectId: "source-fixture",
     layerGroupIndex: 2,
     layerGroupKind: "object",
-    layerGroupLocked: true,
+    layerGroupLocked: false,
     layerGroupOriginalX: 360,
     layerGroupOriginalY: 250,
     layerGroupOriginalWidth: 260,
@@ -448,12 +446,13 @@ async function runEditElementsLayerSmoke(browser) {
     });
 
     await page.locator(`.canvas-object[data-id="${foreground.id}"]`).click();
-    await waitForVisible(page, `.layer-group-selection[data-layer-group-id="${groupId}"]`, "Edit Elements layer group overlay should render after selecting a locked layer");
+    await waitForVisible(page, "#selectionToolbar", "Edit Elements layer toolbar should render after selecting an unlocked layer");
     await assertEditElementsLayerSelection(page, {
       backgroundId: background.id,
       foregroundId: foreground.id,
       groupId
     });
+    await assertEditElementsLayerSelectionClears(page);
     await assertVisibleControlsDoNotOverlap(page, viewport);
     assertDeepEqual(consoleErrors.filter((message) => !/favicon/i.test(message)), [], "Edit Elements visual smoke should not emit console errors");
   } finally {
@@ -618,15 +617,40 @@ async function assertEditElementsLayerStack(page, { backgroundId, foregroundId, 
   assert(stack.foregroundRect.top > stack.backgroundRect.top, "Edit Elements object layer should be vertically offset inside the group");
 }
 
+async function assertEditElementsLayerSelectionClears(page) {
+  const boardRect = await page.locator("#board").evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { left: rect.left, top: rect.top };
+  });
+  await page.mouse.click(boardRect.left + 40, boardRect.top + 240);
+  await waitForHidden(page, "#selectionToolbar", "Edit Elements layer toolbar should hide after clicking blank canvas");
+  const toolbarState = await page.evaluate(() => {
+    const toolbar = document.querySelector("#selectionToolbar");
+    return {
+      hidden: toolbar?.hidden || false,
+      hasLayerGroupActions: toolbar?.classList.contains("has-layer-group-actions") || false,
+      visibleGroupActions: [...document.querySelectorAll("#selectionToolbar [data-action]")]
+        .filter((button) => ["reset-layer-group", "layer-down", "layer-up", "group-layer-group"].includes(button.dataset.action))
+        .filter((button) => !button.hidden && getComputedStyle(button).display !== "none")
+        .map((button) => button.dataset.action)
+    };
+  });
+  assert(toolbarState.hidden, "Edit Elements toolbar should be hidden after clearing selection");
+  assert(toolbarState.hasLayerGroupActions === false, "Edit Elements toolbar should clear special layer-group layout state");
+  assertDeepEqual(toolbarState.visibleGroupActions, [], "Edit Elements group-only actions should be hidden after clearing selection");
+}
+
 async function assertEditElementsLayerSelection(page, { backgroundId, foregroundId, groupId }) {
   const selection = await page.evaluate(({ backgroundId, foregroundId, groupId }) => {
     const background = document.querySelector(`.canvas-object[data-id="${backgroundId}"]`);
     const foreground = document.querySelector(`.canvas-object[data-id="${foregroundId}"]`);
     const overlay = document.querySelector(`.layer-group-selection[data-layer-group-id="${groupId}"]`);
     const label = overlay?.querySelector(".layer-group-label");
-    const visibleActions = [...document.querySelectorAll("#selectionToolbar [data-action]")]
-      .filter((button) => !button.hidden && getComputedStyle(button).display !== "none")
-      .map((button) => button.dataset.action);
+    const toolbar = document.querySelector("#selectionToolbar");
+    const visibleButtons = [...document.querySelectorAll("#selectionToolbar [data-action]")]
+      .filter((button) => !button.hidden && getComputedStyle(button).display !== "none");
+    const visibleActions = visibleButtons.map((button) => button.dataset.action);
+    const actionText = Object.fromEntries(visibleButtons.map((button) => [button.dataset.action, button.textContent.trim()]));
     const rectSnapshot = (element) => {
       const rect = element.getBoundingClientRect();
       return {
@@ -638,23 +662,41 @@ async function assertEditElementsLayerSelection(page, { backgroundId, foreground
         height: Math.round(rect.height)
       };
     };
+    const actionRects = Object.fromEntries(visibleButtons.map((button) => [button.dataset.action, rectSnapshot(button)]));
     return {
-      backgroundSelected: background?.classList.contains("layer-group-member-selected") || false,
-      foregroundSelected: foreground?.classList.contains("layer-group-member-selected") || false,
+      backgroundSelected: background?.classList.contains("selected") || background?.classList.contains("layer-group-member-selected") || false,
+      foregroundSelected: foreground?.classList.contains("selected") || foreground?.classList.contains("layer-group-member-selected") || false,
       overlayRect: overlay ? rectSnapshot(overlay) : null,
       labelText: label?.textContent || "",
-      visibleActions
+      toolbarRect: toolbar ? rectSnapshot(toolbar) : null,
+      visibleActions,
+      actionText,
+      actionRects
     };
   }, { backgroundId, foregroundId, groupId });
 
-  assert(selection.backgroundSelected, "Edit Elements group selection should mark the background layer");
-  assert(selection.foregroundSelected, "Edit Elements group selection should mark the foreground layer");
-  assertRectVisible(selection.overlayRect, "Edit Elements layer group overlay");
-  assert(selection.labelText === "Edit Elements Visual Fixture · 2 layers", "Edit Elements layer group overlay should show the group label and layer count");
+  assert(!selection.backgroundSelected, "Edit Elements unlocked selection should not select the background layer");
+  assert(selection.foregroundSelected, "Edit Elements unlocked selection should mark only the clicked layer");
+  assert(selection.overlayRect === null, "Edit Elements unlocked selection should not render a group overlay");
+  assert(selection.labelText === "", "Edit Elements unlocked selection should not show a group overlay label");
   assertDeepEqual(
     selection.visibleActions,
-    ["reset-layer-group", "group-layer-group"],
-    "Edit Elements group selection should expose only group actions"
+    ["quick-edit", "remove-bg", "expand", "crop", "edit-elements", "reset-layer-group", "layer-down", "layer-up", "group-layer-group", "edit-text", "send-to-chat", "download"],
+    "Edit Elements unlocked layer selection should expose image actions plus group actions"
+  );
+  assert(
+    selection.actionRects["reset-layer-group"].top > selection.actionRects["quick-edit"].top + 20,
+    "Edit Elements group actions should render on a second toolbar row"
+  );
+  assert(
+    selection.actionRects.download.top === selection.actionRects["reset-layer-group"].top,
+    "Edit Elements PSD download should render with the group actions row"
+  );
+  assert(selection.actionText["layer-down"].includes("Layer down"), "Layer down should render text in the toolbar");
+  assert(selection.actionText["layer-up"].includes("Layer up"), "Layer up should render text in the toolbar");
+  assert(
+    selection.toolbarRect.width < 760,
+    "Edit Elements two-row toolbar should stay compact instead of stretching across the viewport"
   );
 }
 
@@ -684,7 +726,7 @@ async function assertSingleImageActionToolbar(page) {
 
 async function assertExpandComposer(page, viewport) {
   await page.locator('[data-action="expand"]').click();
-  await waitForVisible(page, ".quick-edit-composer.quick-edit-mode", "Expand composer should be visible");
+  await waitForVisible(page, ".quick-edit-composer.expand-mode", "Expand composer should be visible");
   const snapshot = await page.evaluate(() => {
     const composer = document.querySelector("#quickEditComposer");
     const textarea = document.querySelector("#quickEditPrompt");
@@ -699,13 +741,13 @@ async function assertExpandComposer(page, viewport) {
         height: Math.round(rect.height)
       } : null,
       placeholder: textarea?.placeholder || "",
-      activeAction: document.querySelector("#quickEditComposer")?.classList.contains("quick-edit-mode") || false
+      activeAction: document.querySelector("#quickEditComposer")?.classList.contains("expand-mode") || false
     };
   });
   assertRectVisible(snapshot.rect, "Expand composer");
   assertRectInsideViewport(snapshot.rect, viewport, "Expand composer");
   assert(snapshot.placeholder.includes("extend"), "Expand composer should show expansion-specific placeholder text");
-  assert(snapshot.activeAction, "Expand composer should use the image prompt composer mode");
+  assert(snapshot.activeAction, "Expand composer should use the expand controls mode");
   await page.locator("#quickEditCancel").click();
   await waitForHidden(page, "#quickEditComposer", "Expand composer should close after cancel");
 }
@@ -713,7 +755,18 @@ async function assertExpandComposer(page, viewport) {
 async function assertCropWorkflow(page, imageId) {
   await page.locator(`.canvas-object[data-id="${imageId}"]`).click();
   await waitForVisible(page, "#selectionToolbar", "selection toolbar should be visible before Crop");
-  const before = await canvasObjectRects(page, [imageId]);
+  const before = await page.evaluate((imageId) => {
+    return fetch(`/api/state${window.location.search}`)
+      .then((response) => response.json())
+      .then((state) => {
+        const source = state.objects.find((object) => object.id === imageId);
+        return {
+          count: state.objects.length,
+          sourceX: source?.x || 0,
+          sourceWidth: source?.width || 0
+        };
+      });
+  }, imageId);
   await page.locator('[data-action="crop"]').click();
   await waitForVisible(page, ".crop-overlay", "Crop overlay should be visible");
   await waitForHidden(page, "#selectionToolbar", "selection toolbar should hide while cropping");
@@ -727,19 +780,49 @@ async function assertCropWorkflow(page, imageId) {
   await page.locator(".crop-actions button:not(.secondary-action)").click();
   await waitForHidden(page, ".crop-overlay", "Crop overlay should close after applying");
 
-  await page.waitForFunction(({ imageId, before }) => {
-    const element = document.querySelector(`.canvas-object[data-id="${imageId}"]`);
-    if (!element) return false;
-    const rect = element.getBoundingClientRect();
-    return rect.width < before[imageId].width - 10 && rect.height < before[imageId].height - 8;
-  }, { imageId, before }, { timeout: 5000 });
-
-  const crop = await page.evaluate((imageId) => {
+  const result = await page.waitForFunction(({ imageId, before }) => {
     return fetch(`/api/state${window.location.search}`)
       .then((response) => response.json())
-      .then((state) => state.objects.find((object) => object.id === imageId)?.crop || null);
-  }, imageId);
-  assert(crop && crop.width < 1 && crop.height < 1, "Crop workflow should persist a normalized crop rectangle");
+      .then((state) => {
+        const source = state.objects.find((object) => object.id === imageId);
+        const cropped = state.objects.find((object) => object.sourceObjectId === imageId && /-crop\.png$/i.test(object.name || ""));
+        if (!source || !cropped || state.objects.length <= before.count) return null;
+        return { source, cropped };
+      });
+  }, { imageId, before }, { timeout: 5000 });
+  const { source, cropped } = await result.jsonValue();
+  assert(!source.crop, "Crop workflow should leave the original image uncropped");
+  assert(cropped.width < before.sourceWidth, "Crop workflow should create a smaller derived image");
+  assert(cropped.x >= before.sourceX + before.sourceWidth, "Crop workflow should place the derived image to the right of the source");
+  return cropped.id;
+}
+
+async function assertDeleteUndoShortcut(page, objectId) {
+  await page.locator(`.canvas-object[data-id="${objectId}"]`).click();
+  await waitForVisible(page, "#selectionToolbar", "selection toolbar should be visible before Delete");
+  await page.keyboard.press("Delete");
+  await waitForHidden(page, `.canvas-object[data-id="${objectId}"]`, "deleted object should leave the canvas before undo");
+  await page.waitForFunction((objectId) => (
+    fetch(`/api/state${window.location.search}`)
+      .then((response) => response.json())
+      .then((state) => !state.objects.some((object) => object.id === objectId))
+  ), objectId, { timeout: 5000 });
+
+  await page.keyboard.press("Control+Z");
+  await waitForVisible(page, `.canvas-object[data-id="${objectId}"]`, "Ctrl+Z should restore the deleted object");
+  const restored = await page.evaluate((objectId) => (
+    fetch(`/api/state${window.location.search}`)
+      .then((response) => response.json())
+      .then((state) => {
+        const object = state.objects.find((item) => item.id === objectId);
+        return {
+          exists: Boolean(object),
+          selected: state.selection === objectId
+        };
+      })
+  ), objectId);
+  assert(restored.exists, "Ctrl+Z undo should restore the deleted object in persisted state");
+  assert(restored.selected, "Ctrl+Z undo should restore selection to the deleted object");
 }
 
 async function assertVisibleControlsDoNotOverlap(page, viewport) {

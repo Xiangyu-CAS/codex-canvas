@@ -7,6 +7,7 @@ import { collectRecentImages } from "./collector.mjs";
 import { projectRegistryPath, resolveProjectDir } from "./paths.mjs";
 import { checkImageProcessingDepsAvailable, checkOptionalPythonDepsAvailable, checkRapidOcrAvailable, installImageProcessingDeps, installOptionalPythonDeps, installRapidOcr } from "./ocr-setup.mjs";
 import { canvasIdForThread, readRuntime, writeRuntime, normalizeThreadId } from "./runtime.mjs";
+import { appUpdateStatus, updateApp } from "./updater.mjs";
 
 const defaultLimit = 20;
 const maxLimit = 100;
@@ -192,6 +193,29 @@ export async function main(args, context = {}) {
       console.log(`Selected: ${payload.selection || "(none)"}`);
       console.log(`Canvas ID: ${payload.canvasId || "(default)"}`);
       console.log(`URL: ${runtime?.url || "(not running)"}`);
+    }
+    return;
+  }
+
+  if (command === "update") {
+    const checkOnly = flagEnabled(options.check);
+    const result = checkOnly
+      ? await appUpdateStatus({ checkRemote: true })
+      : await updateApp();
+    if (flagEnabled(options.json)) {
+      console.log(JSON.stringify(result, null, 2));
+    } else if (checkOnly) {
+      console.log(`Agent-Canvas ${result.version}`);
+      console.log(result.canUpdate
+        ? `Git branch ${result.git.branch} tracks ${result.git.upstream}.`
+        : "Automatic git update is unavailable for this install.");
+      console.log(result.updateAvailable
+        ? `Update available: ${result.git.behind} commit(s) behind.`
+        : "No update available.");
+    } else {
+      console.log(result.output || "Agent-Canvas update completed.");
+      console.log(`Current version: ${result.version}`);
+      console.log(`Current git head: ${result.git.head || "(unknown)"}`);
     }
     return;
   }
@@ -434,12 +458,10 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 750) {
 }
 
 async function registerRemoteProject(baseUrl, projectDir, { autoCollect = true, chatThreadId = null } = {}) {
-  const capabilityToken = capabilityTokenFromUrl(baseUrl) || await readProjectRegistryToken();
   const response = await fetchWithTimeout(apiUrl(baseUrl, "/api/projects"), {
     method: "POST",
     headers: {
-      "content-type": "application/json",
-      ...(capabilityToken ? { "x-agent-canvas-token": capabilityToken } : {})
+      "content-type": "application/json"
     },
     body: JSON.stringify({ projectDir, autoCollect, chatThreadId })
   }, 2000);
@@ -467,28 +489,6 @@ async function registerRemoteProject(baseUrl, projectDir, { autoCollect = true, 
   };
 }
 
-function capabilityTokenFromUrl(baseUrl) {
-  try {
-    const token = new URL(baseUrl).searchParams.get("token");
-    return isCapabilityToken(token) ? token : null;
-  } catch {
-    return null;
-  }
-}
-
-async function readProjectRegistryToken() {
-  try {
-    const payload = JSON.parse(await fs.readFile(projectRegistryPath(), "utf8"));
-    return isCapabilityToken(payload?.capabilityToken) ? payload.capabilityToken : null;
-  } catch {
-    return null;
-  }
-}
-
-function isCapabilityToken(token) {
-  return typeof token === "string" && /^[A-Za-z0-9_-]{24,}$/.test(token);
-}
-
 function environmentThreadId() {
   return process.env.AGENT_CANVAS_CODEX_THREAD_ID || process.env.CODEX_THREAD_ID || null;
 }
@@ -506,6 +506,7 @@ Usage:
   agent-canvas prompts [query] [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--limit 20] [--json]
   agent-canvas versions [query] [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--group-by sourceObjectId|batchId|layoutMode|prompt] [--limit 20] [--object-limit 20] [--json]
   agent-canvas status [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--json]
+  agent-canvas update [--check] [--json]
   agent-canvas setup-deps [--json]
   agent-canvas setup-ocr [--optional] [--json]
   agent-canvas setup-image-deps [--optional] [--json]
@@ -522,6 +523,7 @@ Commands:
   prompts   List recent unique prompts from canvas objects.
   versions  Group canvas object version history by sourceObjectId, batchId, layoutMode, or prompt.
   status    Print current canvas runtime and object count.
+  update    Check for or apply a git fast-forward update for this Agent-Canvas install.
   setup-ocr Explicitly install RapidOCR for local Edit Text recognition.
   setup-image-deps Explicitly install Pillow and numpy for Edit Elements local layer processing.
   setup-deps Explicitly install optional Python dependencies for OCR and Edit Elements.

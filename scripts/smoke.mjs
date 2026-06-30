@@ -6,24 +6,26 @@ import { promisify } from "node:util";
 import { normalizePort } from "../src/cli.mjs";
 import { sendImageToBoundChat } from "../src/codex-chat.mjs";
 import { collectRecentImages } from "../src/collector.mjs";
-import { markTextRecognitionCancelledForTest, placeImportedElementLayersForTest } from "../src/jobs.mjs";
+import { createImageJob, getImageJob, markTextRecognitionCancelledForTest, placeImportedElementLayersForTest } from "../src/jobs.mjs";
 import { checkImageProcessingDepsAvailable } from "../src/ocr-setup.mjs";
-import { assetsDirFor, legacyCanvasDataDirFor, statePathFor } from "../src/paths.mjs";
+import { assetsDirFor, jobsDirFor, legacyCanvasDataDirFor, statePathFor } from "../src/paths.mjs";
+import { exportLayerGroupPsd } from "../src/psd-export.mjs";
 import { canvasIdForThread } from "../src/runtime.mjs";
 import { createServer as createAgentCanvasServer } from "../src/server.mjs";
-import { addImage, addObject, deleteObjects, promptHistory, readState, searchObjects, transformState, updateObject, updateSelection, updateViewport, versionGroups } from "../src/store.mjs";
+import { addImage, addObject, deleteObjects, promptHistory, readState, reorderLayerGroupLayer, restoreObjects, searchObjects, transformState, updateObject, updateSelection, updateViewport, versionGroups } from "../src/store.mjs";
 
 const execFileAsync = promisify(execFile);
 
 const pngOne = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
-const stableFrontendImageActions = ["quick-edit", "remove-bg", "expand", "upscale", "multi-angles", "move-object", "edit-text", "edit-elements"];
-const directImageJobActions = ["quick-edit", "remove-bg", "expand", "upscale", "multi-angles", "move-object", "edit-elements"];
+const stableFrontendImageActions = ["quick-edit", "remove-bg", "expand", "edit-text", "edit-elements"];
+const directImageJobActions = ["quick-edit", "remove-bg", "expand", "edit-elements"];
 let smokeProjectRegistryPath = null;
 
 async function main() {
   const results = [];
   for (const [name, test] of [
     ["store concurrency", testStoreConcurrency],
+    ["delete undo restore", testDeleteUndoRestore],
     ["object patch sanitization", testObjectPatchSanitization],
     ["object input sanitization", testObjectInputSanitization],
     ["selection sanitization", testSelectionSanitization],
@@ -42,6 +44,7 @@ async function main() {
     ["http file response boundaries", testHttpFileResponseBoundaries],
     ["http project registration boundaries", testHttpProjectRegistrationBoundaries],
     ["frontend action contract", testFrontendActionContract],
+    ["image job error contract", testImageJobErrorContract],
     ["thread migration asset paths", testThreadMigrationAssetPaths],
     ["persistent project registry", testPersistentProjectRegistry],
     ["persistent project registry restored auto collector", testPersistentProjectRegistryRestoredAutoCollector],
@@ -51,6 +54,7 @@ async function main() {
     ["package optional dependency scripts", testPackageOptionalDependencyScripts],
     ["plugin package manifest", testPluginPackageManifest],
     ["personal plugin installer", testPersonalPluginInstaller],
+    ["dev plugin cache linker", testDevPluginCacheLinker],
     ["cli collect help", testCliCollectHelp],
     ["cli argument parsing and errors", testCliArgumentParsingAndErrors],
     ["cli codex thread environment", testCliCodexThreadEnvironment],
@@ -59,6 +63,7 @@ async function main() {
     ["chat websocket fallback", testChatWebSocketFallback],
     ["chat turn action contract", testChatTurnActionContract],
     ["edit text cancellation cleanup", testEditTextCancellationCleanup],
+    ["quick edit annotations", testQuickEditAnnotations],
     ["edit elements scripts", testEditElementsScripts]
   ]) {
     await test();
@@ -759,10 +764,7 @@ async function testHttpProjectRegistrationBoundaries() {
   const base = url.replace(/\?.*/, "");
   const search = new URL(url).search;
   try {
-    const unauthorized = await postJson(`${base}api/projects`, {
-      projectDir
-    });
-    assertEqual(unauthorized.status, 403, "HTTP project registration should require the runtime capability token");
+    assertEqual(new URL(url).searchParams.get("token"), null, "Agent-Canvas URLs should not expose runtime capability tokens");
 
     const missing = await postJson(`${base}api/projects${search}`, {});
     assertEqual(missing.status, 400, "HTTP project registration should reject missing projectDir");
@@ -861,6 +863,21 @@ async function assertHttpImageJobActionsAccepted() {
   }
 }
 
+async function testImageJobErrorContract() {
+  const app = await fs.readFile(path.join(process.cwd(), "public", "app.js"), "utf8");
+  const styles = await fs.readFile(path.join(process.cwd(), "public", "styles.css"), "utf8");
+  const runner = await fs.readFile(path.join(process.cwd(), "src", "codex-runner.mjs"), "utf8");
+  if (!runner.includes('"--skip-git-repo-check"')) {
+    throw new Error("Codex image jobs should skip the git repo trust check so thread-scoped canvas directories can run jobs.");
+  }
+  if (!/function summarizeCodexFailure/.test(runner) || !/Codex image job failed:/.test(runner)) {
+    throw new Error("Codex image job failures should surface a concise CLI log detail instead of only the exit code.");
+  }
+  if (!app.includes("job-error-message") || !styles.includes(".job-error-message")) {
+    throw new Error("Failed image job placeholders should render the job error text visibly.");
+  }
+}
+
 async function testThreadMigrationAssetPaths() {
   const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-migrate-"));
   const defaultImage = await addImage(projectDir, {
@@ -892,7 +909,6 @@ async function testPersistentProjectRegistry() {
   });
   const firstBase = first.url.replace(/\?.*/, "");
   const firstSearch = new URL(first.url).search;
-  const firstToken = new URL(first.url).searchParams.get("token");
   const firstProjectId = new URL(first.url).searchParams.get("project");
   let registered;
   let reboundOldProjectId;
@@ -904,6 +920,8 @@ async function testPersistentProjectRegistry() {
       threadId: "thread-persisted-registry"
     });
     assertEqual(registered.status, 201, "HTTP project registration should succeed before registry persistence is checked");
+    assertEqual(new URL(registered.body.url).searchParams.get("threadId"), "thread-persisted-registry", "Thread-scoped canvas URLs should include the bound threadId");
+    assertEqual(new URL(registered.body.url).searchParams.get("token"), null, "Thread-scoped canvas URLs should not include runtime capability tokens");
 
     const rebound = await postJson(`${firstBase}api/projects${firstSearch}`, {
       projectDir: reboundProjectDir,
@@ -911,17 +929,18 @@ async function testPersistentProjectRegistry() {
     });
     assertEqual(rebound.status, 201, "HTTP project registration should support a project that will be rebound");
     reboundOldProjectId = new URL(rebound.body.url).searchParams.get("project");
-    const reboundBinding = await postJson(`${firstBase}api/chat-binding?project=${encodeURIComponent(reboundOldProjectId)}&token=${encodeURIComponent(firstToken)}`, {
+    const reboundBinding = await postJson(`${firstBase}api/chat-binding?project=${encodeURIComponent(reboundOldProjectId)}`, {
       threadId: "thread-persisted-alias"
     });
     assertEqual(reboundBinding.status, 200, "HTTP chat binding should succeed before alias persistence is checked");
+    assertEqual(new URL(reboundBinding.body.url).searchParams.get("threadId"), "thread-persisted-alias", "Chat binding should return a thread-scoped canvas URL");
     reboundNewProjectId = reboundBinding.body.projectId;
   } finally {
     await new Promise((resolve) => first.server.close(resolve));
   }
 
   const registryPayload = JSON.parse(await fs.readFile(persistentRegistryPath, "utf8"));
-  assertEqual(registryPayload.capabilityToken, firstToken, "Persistent project registry should store the runtime capability token for local CLI reuse");
+  assertEqual(registryPayload.capabilityToken, undefined, "Persistent project registry should not store runtime capability tokens");
   if (!registryPayload.projects?.some((project) => project.projectDir === secondProjectDir && project.chatThreadId === "thread-persisted-registry")) {
     throw new Error("Persistent project registry should store registered thread-scoped projects.");
   }
@@ -937,7 +956,7 @@ async function testPersistentProjectRegistry() {
     persistentRegistryPath
   });
   const secondBase = second.url.replace(/\?.*/, "");
-  assertEqual(new URL(second.url).searchParams.get("token"), firstToken, "Restarted Agent-Canvas server should reuse the persisted capability token");
+  assertEqual(new URL(second.url).searchParams.get("token"), null, "Restarted Agent-Canvas URLs should not include runtime capability tokens");
   try {
     const projectsResponse = await fetch(`${secondBase}api/projects`);
     const projectsBody = await projectsResponse.json();
@@ -1520,6 +1539,59 @@ async function testPersonalPluginInstaller() {
   }
 }
 
+async function testDevPluginCacheLinker() {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-dev-cache-"));
+  const manifest = JSON.parse(await fs.readFile(path.join(process.cwd(), ".codex-plugin", "plugin.json"), "utf8"));
+  const cachePath = path.join(tmp, ".codex", "plugins", "cache", "personal", manifest.name, manifest.version);
+  const markerPath = path.join(cachePath, "cache-marker.txt");
+  await fs.mkdir(cachePath, { recursive: true });
+  await fs.writeFile(markerPath, "old-cache");
+
+  const commonArgs = [
+    path.join(process.cwd(), "scripts", "link-dev-plugin-cache.mjs"),
+    "--home",
+    tmp,
+    "--json"
+  ];
+  const dryRun = await execFileAsync(process.execPath, [...commonArgs, "--dry-run"], {
+    cwd: process.cwd(),
+    maxBuffer: 1024 * 1024,
+    windowsHide: true
+  });
+  const dryRunResult = JSON.parse(dryRun.stdout);
+  assertEqual(dryRunResult.ok, true, "dev cache linker dry run should report success");
+  assertEqual(dryRunResult.dryRun, true, "dev cache linker should mark dry run output");
+  assertEqual(await fs.readFile(markerPath, "utf8"), "old-cache", "dev cache linker dry run should not modify cache files");
+
+  const linked = await execFileAsync(process.execPath, commonArgs, {
+    cwd: process.cwd(),
+    maxBuffer: 1024 * 1024,
+    windowsHide: true
+  });
+  const linkedResult = JSON.parse(linked.stdout);
+  assertEqual(linkedResult.ok, true, "dev cache linker should report success");
+  if (!linkedResult.backupPath) {
+    throw new Error("dev cache linker should back up an existing real cache directory.");
+  }
+  assertEqual(
+    await fs.readFile(path.join(linkedResult.backupPath, "cache-marker.txt"), "utf8"),
+    "old-cache",
+    "dev cache linker should preserve the old cache directory in the backup"
+  );
+
+  const linkedRealPath = await fs.realpath(cachePath);
+  const repoRealPath = await fs.realpath(process.cwd());
+  assertEqual(linkedRealPath, repoRealPath, "dev cache linker should make Codex cache resolve to this repository");
+
+  const repeated = await execFileAsync(process.execPath, commonArgs, {
+    cwd: process.cwd(),
+    maxBuffer: 1024 * 1024,
+    windowsHide: true
+  });
+  const repeatedResult = JSON.parse(repeated.stdout);
+  assertEqual(repeatedResult.alreadyLinked, true, "dev cache linker should be idempotent once cache points at the repository");
+}
+
 async function testCliCollectHelp() {
   const { stdout } = await execFileAsync(process.execPath, [path.join(process.cwd(), "bin", "agent-canvas.mjs"), "help"], {
     cwd: process.cwd(),
@@ -1770,6 +1842,29 @@ async function testStoreConcurrency() {
   assertEqual(state.objects.length, 0, "deleteObjects should delete objects when ids include surrounding whitespace");
 }
 
+async function testDeleteUndoRestore() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-undo-"));
+  const first = await addObject(projectDir, { type: "text", text: "first", x: 1, y: 1 });
+  const second = await addObject(projectDir, { type: "text", text: "second", x: 2, y: 2 });
+  const third = await addObject(projectDir, { type: "text", text: "third", x: 3, y: 3 });
+  await updateSelection(projectDir, second.id);
+  const beforeDelete = await readState(projectDir);
+  const deletedEntries = [first.id, third.id].map((id) => {
+    const index = beforeDelete.objects.findIndex((object) => object.id === id);
+    return { object: beforeDelete.objects[index], index };
+  });
+
+  await deleteObjects(projectDir, [first.id, third.id]);
+  let state = await readState(projectDir);
+  assertEqual(state.objects.map((object) => object.id).join(","), second.id, "deleteObjects should remove the selected undo fixtures");
+
+  const restored = await restoreObjects(projectDir, deletedEntries, { selection: third.id });
+  assertEqual(restored.objects.map((object) => object.id).join(","), `${first.id},${third.id}`, "restoreObjects should keep original object ids");
+  state = await readState(projectDir);
+  assertEqual(state.objects.map((object) => object.id).join(","), `${first.id},${second.id},${third.id}`, "restoreObjects should reinsert objects at their original z-order");
+  assertEqual(state.selection, third.id, "restoreObjects should restore requested selection when it belongs to restored objects");
+}
+
 async function testChatBindingAlias() {
   const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-rebind-"));
   const { server, url } = await createServer({ projectDir, port: 0, autoCollect: false });
@@ -1846,6 +1941,144 @@ async function testEditTextCancellationCleanup() {
   }
 }
 
+async function testQuickEditAnnotations() {
+  const deps = await checkImageProcessingDepsAvailable();
+  if (!deps.available) {
+    console.warn(`Skipping quick edit annotation smoke test; missing optional image dependencies: ${deps.missing?.join(", ") || "unknown"}.`);
+    return;
+  }
+
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-quick-edit-annotations-"));
+  const fakeCodex = path.join(tmp, process.platform === "win32" ? "codex.cmd" : "codex");
+  const makeSource = path.join(tmp, "make-source.py");
+  await fs.writeFile(makeSource, [
+    "from pathlib import Path",
+    "from PIL import Image, ImageDraw",
+    "import sys",
+    "root = Path(sys.argv[1])",
+    "image = Image.new('RGBA', (48, 32), (240, 240, 240, 255))",
+    "draw = ImageDraw.Draw(image)",
+    "draw.rectangle((4, 4, 44, 28), outline=(30, 30, 30, 255), width=2)",
+    "image.save(root / 'source.png')"
+  ].join("\n"));
+  await runPython([makeSource, tmp]);
+  await fs.writeFile(fakeCodex, fakeCodexCaptureImageJobScript(), { mode: 0o755 });
+
+  const previousCli = process.env.AGENT_CANVAS_CODEX_CLI;
+  process.env.AGENT_CANVAS_CODEX_CLI = fakeCodex;
+  try {
+    const plainProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-quick-edit-plain-"));
+    const plainSource = await addImage(plainProjectDir, {
+      path: path.join(tmp, "source.png"),
+      name: "plain-source.png",
+      x: 20,
+      y: 30,
+      width: 96,
+      height: 64
+    });
+    const plainJob = await createImageJob(plainProjectDir, {
+      action: "quick-edit",
+      objectId: plainSource.id,
+      prompt: "Make the border blue"
+    });
+    await waitForImageJobDone(plainJob.id);
+    const plainCapture = await readCapturedCodexJob(plainProjectDir, plainJob.id);
+    assertEqual(path.resolve(plainCapture.imageArgs[0]), path.resolve(plainSource.assetPath), "Quick Edit without annotations should send the original source image");
+    if (/temporary user annotations/.test(plainCapture.prompt || "")) {
+      throw new Error("Quick Edit without annotations should not append the annotation prompt suffix.");
+    }
+
+    const annotatedProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-quick-edit-marked-"));
+    const markedSource = await addImage(annotatedProjectDir, {
+      path: path.join(tmp, "source.png"),
+      name: "marked-source.png",
+      x: 20,
+      y: 30,
+      width: 96,
+      height: 64
+    });
+    await addObject(annotatedProjectDir, {
+      type: "drawing",
+      x: 40,
+      y: 50,
+      width: 24,
+      height: 16,
+      points: [{ x: 0, y: 0 }, { x: 24, y: 16 }],
+      stroke: "#d93025",
+      strokeWidth: 4
+    });
+    await addObject(annotatedProjectDir, {
+      type: "text",
+      text: "remove this",
+      x: 60,
+      y: 42,
+      width: 70,
+      height: 24,
+      fontSize: 18,
+      color: "#1a73e8"
+    });
+    await addObject(annotatedProjectDir, {
+      type: "text",
+      text: "outside",
+      x: 240,
+      y: 42,
+      width: 70,
+      height: 24,
+      fontSize: 18,
+      color: "#202124"
+    });
+
+    const annotatedJob = await createImageJob(annotatedProjectDir, {
+      action: "quick-edit",
+      objectId: markedSource.id,
+      prompt: "Follow the markup"
+    });
+    await waitForImageJobDone(annotatedJob.id);
+    const capture = await readCapturedCodexJob(annotatedProjectDir, annotatedJob.id);
+    const imageArg = capture.imageArgs[0] || "";
+    if (!imageArg.endsWith(path.join("inputs", "quick-edit-annotated.png"))) {
+      throw new Error(`Quick Edit with annotations should send the composed annotated PNG, got ${imageArg}.`);
+    }
+    if (!/Follow the markup/.test(capture.prompt || "") || !/temporary user annotations/.test(capture.prompt || "") || !/Text annotations captured by Agent-Canvas/.test(capture.prompt || "") || !/remove this/.test(capture.prompt || "") || !/Do not keep annotation/.test(capture.prompt || "")) {
+      throw new Error("Quick Edit with annotations should append the annotation removal prompt suffix.");
+    }
+
+    const manifestPath = path.join(jobsDirFor(annotatedProjectDir), annotatedJob.id, "inputs", "quick-edit-annotations.json");
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
+    assertEqual(manifest.items.length, 2, "Quick Edit should include only drawing/text annotations that overlap the source image");
+    assertEqual(manifest.sourceSize.width, 48, "Quick Edit annotation manifest should use source image width");
+    assertEqual(manifest.sourceSize.height, 32, "Quick Edit annotation manifest should use source image height");
+    const drawing = manifest.items.find((item) => item.type === "drawing");
+    if (!drawing) throw new Error("Quick Edit annotation manifest should include the overlapping drawing.");
+    assertEqual(drawing.points[0].x, 10, "Quick Edit drawing x coordinates should scale from canvas to source pixels");
+    assertEqual(drawing.points[0].y, 10, "Quick Edit drawing y coordinates should scale from canvas to source pixels");
+    const text = manifest.items.find((item) => item.type === "text");
+    if (!text || text.text !== "remove this") {
+      throw new Error("Quick Edit annotation manifest should include the overlapping text label.");
+    }
+    await fs.access(imageArg);
+  } finally {
+    if (previousCli === undefined) delete process.env.AGENT_CANVAS_CODEX_CLI;
+    else process.env.AGENT_CANVAS_CODEX_CLI = previousCli;
+  }
+}
+
+async function waitForImageJobDone(jobId) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 4000) {
+    const job = getImageJob(jobId);
+    if (job.status === "done") return job;
+    if (job.status === "failed") throw new Error(`Image job failed: ${job.error || "unknown error"}`);
+    await delay(100);
+  }
+  throw new Error(`Image job did not finish: ${jobId}`);
+}
+
+async function readCapturedCodexJob(projectDir, jobId) {
+  const capturePath = path.join(jobsDirFor(projectDir), jobId, "outputs", "codex-capture.json");
+  return JSON.parse(await fs.readFile(capturePath, "utf8"));
+}
+
 async function testEditElementsScripts() {
   const deps = await checkImageProcessingDepsAvailable();
   if (!deps.available) {
@@ -1862,8 +2095,8 @@ async function testEditElementsScripts() {
     "root = Path(sys.argv[1])",
     "source = Image.new('RGBA', (48, 32), (255, 255, 255, 255))",
     "draw = ImageDraw.Draw(source)",
-    "draw.rectangle((6, 6, 18, 20), fill=(255, 0, 0, 255))",
-    "draw.rectangle((28, 8, 40, 22), fill=(0, 92, 255, 255))",
+    "draw.rectangle((4, 4, 20, 22), fill=(255, 0, 0, 255))",
+    "draw.rectangle((26, 6, 42, 24), fill=(0, 92, 255, 255))",
     "source.putpixel((0, 0), (255, 255, 255, 0))",
     "source.save(root / 'source.png')",
     "seg = Image.new('RGB', (48, 32), (0, 0, 0))",
@@ -1887,6 +2120,7 @@ async function testEditElementsScripts() {
     "--min-area-px", "20",
     "--pad", "0",
     "--edge-feather", "0",
+    "--mask-grow-color-distance", "8",
     "--write-reconstruction",
     "--force"
   ]);
@@ -1903,21 +2137,31 @@ async function testEditElementsScripts() {
   assertEqual(manifest.sourceSize.height, 32, "split_elements manifest should preserve source height");
   assertEqual(manifest.layers.length, 3, "split_elements should export two foreground layers plus residual background");
   assertEqual(manifest.exportedLayers, 3, "split_elements exported layer count should match manifest layers");
+  assertEqual(manifest.maskGrowPixels, 2, "split_elements should record the foreground mask safety band");
   assertEqual(manifest.backgroundLayer, true, "split_elements should record that a residual background layer was exported");
   const backgroundLayer = manifest.layers.find((layer) => layer.kind === "background");
   if (!backgroundLayer) throw new Error("split_elements should include a residual background layer.");
   assertEqual(backgroundLayer.bbox.join(","), "0,0,48,32", "residual background should keep full-frame bounds when uncovered pixels span the canvas");
   const objectLayers = manifest.layers.filter((layer) => layer.kind !== "background");
-  const redLayer = objectLayers.find((layer) => layer.bbox.join(",") === "6,6,19,21");
-  if (!redLayer) throw new Error("split_elements should merge nearby red segmentation colors into one object layer.");
-  const blueLayer = objectLayers.find((layer) => layer.bbox.join(",") === "28,8,41,23");
+  const redLayer = objectLayers.find((layer) => layer.bbox.join(",") === "4,4,21,23");
+  if (!redLayer) throw new Error("split_elements should merge nearby red segmentation colors into one grown object layer.");
+  const blueLayer = objectLayers.find((layer) => layer.bbox.join(",") === "26,6,43,25");
   if (!blueLayer) throw new Error("split_elements should preserve the independent blue object layer.");
+  if (!objectLayers.every((layer) => layer.maskGrowPixels > 0)) {
+    throw new Error("split_elements should grow foreground layer masks to avoid eroded object edges.");
+  }
   for (const layer of manifest.layers) {
     await fs.access(layer.path);
   }
   if (!manifest.reconstruction?.reconstructionPath || manifest.reconstruction.coverageRatio < 0.99) {
     throw new Error("split_elements reconstruction output should cover the source image.");
   }
+  await runPython([
+    path.join(process.cwd(), "scripts", "verify_elements_layers.py"),
+    "--manifest", path.join(tmp, "layers", "elements-manifest.json"),
+    "--max-diff", "0",
+    "--min-coverage", "1"
+  ]);
 
   const preparedBackground = await inspectPreparedBackground(tmp);
   assertEqual(preparedBackground.size, "48x32", "prepare_completed_background should resize completed backgrounds to source size");
@@ -1965,17 +2209,42 @@ async function inspectPreparedBackground(tmp) {
 
 async function testEditElementsLayerPlacement(tmp) {
   const previous = process.env.AGENT_CANVAS_TEST_HELPERS;
+  const previousCli = process.env.AGENT_CANVAS_CODEX_CLI;
   process.env.AGENT_CANVAS_TEST_HELPERS = "1";
   try {
     const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-elements-place-"));
     const outputDir = path.join(projectDir, "job-output");
     const elementsDir = path.join(outputDir, "elements");
     await fs.mkdir(elementsDir, { recursive: true });
+    const fakeCodex = path.join(projectDir, process.platform === "win32" ? "codex.cmd" : "codex");
+    await fs.writeFile(fakeCodex, fakeCodexCompletedBackgroundScript(), { mode: 0o755 });
+    process.env.AGENT_CANVAS_CODEX_CLI = fakeCodex;
+
+    const placementSourcePath = path.join(projectDir, "placement-source.png");
+    const makePlacementSource = path.join(projectDir, "make-placement-source.py");
+    await fs.writeFile(makePlacementSource, [
+      "from PIL import Image, ImageDraw",
+      "import sys",
+      "image = Image.new('RGBA', (96, 64), (245, 245, 245, 255))",
+      "draw = ImageDraw.Draw(image)",
+      "draw.rectangle((10, 5, 30, 25), fill=(30, 90, 220, 255))",
+      "image.save(sys.argv[1])"
+    ].join("\n"));
+    await runPython([makePlacementSource, placementSourcePath]);
 
     const backgroundPath = path.join(elementsDir, "element-01-background.png");
     const objectPath = path.join(elementsDir, "element-02-object.png");
     await fs.copyFile(path.join(tmp, "background.png"), backgroundPath);
-    await fs.writeFile(objectPath, Buffer.from(pngOne, "base64"));
+    const makeObjectLayer = path.join(projectDir, "make-object-layer.py");
+    await fs.writeFile(makeObjectLayer, [
+      "from PIL import Image, ImageDraw",
+      "import sys",
+      "image = Image.new('RGBA', (20, 20), (0, 0, 0, 0))",
+      "draw = ImageDraw.Draw(image)",
+      "draw.rectangle((0, 0, 19, 19), fill=(30, 90, 220, 255))",
+      "image.save(sys.argv[1])"
+    ].join("\n"));
+    await runPython([makeObjectLayer, objectPath]);
 
     const source = await addImage(projectDir, {
       path: path.join(tmp, "source.png"),
@@ -2003,18 +2272,19 @@ async function testEditElementsLayerPlacement(tmp) {
     });
 
     await fs.writeFile(path.join(elementsDir, "elements-manifest.json"), `${JSON.stringify({
+      source: placementSourcePath,
       sourceSize: { width: 96, height: 64 },
-      backgroundCompleted: true,
+      backgroundCompleted: false,
       layers: [
         {
-          index: 0,
+          index: 9,
           kind: "background",
           path: backgroundPath,
           bbox: [0, 0, 96, 64],
           areaPixels: 6144
         },
         {
-          index: 2,
+          index: 0,
           kind: "object",
           path: objectPath,
           bbox: [10, 5, 30, 25],
@@ -2026,8 +2296,11 @@ async function testEditElementsLayerPlacement(tmp) {
     await placeImportedElementLayersForTest(projectDir, {
       id: "placement-contract",
       canvasId: null,
+      projectDir,
       outputDir,
+      logPath: path.join(projectDir, "placement-contract.log"),
       sourceObjectId: source.id,
+      imagePath: placementSourcePath,
       placeholder,
       placeholderId: placeholder.id,
       imported: [topLayer, bottomLayer]
@@ -2040,7 +2313,10 @@ async function testEditElementsLayerPlacement(tmp) {
     const groupMembers = state.objects.filter((object) => object.layerGroupId === "layer_group_placement-contract");
     assertEqual(groupMembers.length, 2, "Edit Elements placement should assign every imported layer to one group");
     assertEqual(groupMembers[0].layerGroupKind, "background", "Edit Elements layer stack should place the background first");
+    assertEqual(groupMembers[0].layerGroupIndex, 0, "Edit Elements background layer should default to the bottom layer index");
+    assertEqual(groupMembers[0].layerGroupBackgroundStatus, "filling", "Edit Elements should place residual background immediately while completion runs");
     assertEqual(groupMembers[1].layerGroupKind, "object", "Edit Elements layer stack should place object layers above the background");
+    assertEqual(groupMembers[1].layerGroupIndex, 1, "Edit Elements foreground layers should default above the background layer");
     assertEqual(state.selection, groupMembers[1].id, "Edit Elements placement should select the topmost group layer");
     assertEqual(groupMembers[0].x, 300, "background layer should align to placeholder x");
     assertEqual(groupMembers[0].y, 200, "background layer should align to placeholder y");
@@ -2051,16 +2327,45 @@ async function testEditElementsLayerPlacement(tmp) {
     assertEqual(groupMembers[1].width, 40, "object layer width should scale from manifest bbox");
     assertEqual(groupMembers[1].height, 40, "object layer height should scale from manifest bbox");
     for (const member of groupMembers) {
-      assertEqual(member.layerGroupLocked, true, "Edit Elements grouped layers should start locked");
+      assertEqual(member.layerGroupLocked, false, "Edit Elements layers should retain group metadata but start unlocked");
       assertEqual(member.layerGroupSourceObjectId, source.id, "Edit Elements group metadata should retain source object id");
       assertEqual(member.layerGroupOriginalX, 300, "Edit Elements group metadata should retain original placeholder x");
       assertEqual(member.layerGroupOriginalY, 200, "Edit Elements group metadata should retain original placeholder y");
       assertEqual(member.layerGroupOriginalWidth, 192, "Edit Elements group metadata should retain original placeholder width");
       assertEqual(member.layerGroupOriginalHeight, 128, "Edit Elements group metadata should retain original placeholder height");
     }
+    const psd = await exportLayerGroupPsd(projectDir, "layer_group_placement-contract");
+    assertEqual(psd.buffer.subarray(0, 4).toString("ascii"), "8BPS", "PSD export should write a Photoshop document");
+    assertEqual(psd.layerCount, 2, "PSD export should include every image layer in the Edit Elements group");
+
+    await reorderLayerGroupLayer(projectDir, "layer_group_placement-contract", groupMembers[1].id, "down");
+    const movedDownState = await readState(projectDir);
+    const movedDownMembers = movedDownState.objects.filter((object) => object.layerGroupId === "layer_group_placement-contract");
+    assertEqual(movedDownMembers[0].id, groupMembers[1].id, "Layer down should move the selected object below its previous neighbor");
+    await reorderLayerGroupLayer(projectDir, "layer_group_placement-contract", groupMembers[1].id, "up");
+    const movedUpState = await readState(projectDir);
+    const movedUpMembers = movedUpState.objects.filter((object) => object.layerGroupId === "layer_group_placement-contract");
+    assertEqual(movedUpMembers[1].id, groupMembers[1].id, "Layer up should move the selected object above its previous neighbor");
+
+    const readyBackground = await waitForLocalStateObject(
+      projectDir,
+      (object) => object.id === bottomLayer.id && object.layerGroupBackgroundStatus === "ready" && Number.isFinite(object.assetVersion),
+      "Edit Elements background completion should replace the imported background layer in place"
+    );
+    assertEqual(readyBackground.layerGroupKind, "background", "completed background should remain the background group layer");
+    const completedManifest = JSON.parse(await fs.readFile(path.join(elementsDir, "elements-manifest.json"), "utf8"));
+    assertEqual(completedManifest.backgroundCompleted, true, "background completion should update the elements manifest");
+    await runPython([
+      path.join(process.cwd(), "scripts", "verify_elements_layers.py"),
+      "--manifest", path.join(elementsDir, "elements-manifest.json"),
+      "--require-completed-background",
+      "--write-final-composite", path.join(elementsDir, "completed-reconstruction.png")
+    ]);
   } finally {
     if (previous === undefined) delete process.env.AGENT_CANVAS_TEST_HELPERS;
     else process.env.AGENT_CANVAS_TEST_HELPERS = previous;
+    if (previousCli === undefined) delete process.env.AGENT_CANVAS_CODEX_CLI;
+    else process.env.AGENT_CANVAS_CODEX_CLI = previousCli;
   }
 }
 
@@ -2146,6 +2451,17 @@ async function waitForStateObject(url, predicate, message) {
   while (Date.now() - startedAt < 4000) {
     const response = await fetch(url);
     const state = await response.json();
+    const object = state.objects?.find(predicate);
+    if (object) return object;
+    await delay(100);
+  }
+  throw new Error(message);
+}
+
+async function waitForLocalStateObject(projectDir, predicate, message) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 4000) {
+    const state = await readState(projectDir);
     const object = state.objects?.find(predicate);
     if (object) return object;
     await delay(100);
@@ -2309,6 +2625,44 @@ net.createServer((socket) => {
     }
   });
 }).listen(port, "127.0.0.1");
+`;
+}
+
+function fakeCodexCompletedBackgroundScript() {
+  return `#!/usr/bin/env node
+const fs = require("fs");
+const path = require("path");
+const outputDir = process.env.AGENT_CANVAS_JOB_OUTPUT_DIR;
+if (!outputDir) {
+  console.error("AGENT_CANVAS_JOB_OUTPUT_DIR is required");
+  process.exit(2);
+}
+setTimeout(() => {
+  fs.mkdirSync(outputDir, { recursive: true });
+  fs.writeFileSync(path.join(outputDir, "edit-elements-background-completed.png"), Buffer.from("${pngOne}", "base64"));
+}, 250);
+`;
+}
+
+function fakeCodexCaptureImageJobScript() {
+  return `#!/usr/bin/env node
+const fs = require("fs");
+const path = require("path");
+const outputDir = process.env.AGENT_CANVAS_JOB_OUTPUT_DIR;
+if (!outputDir) {
+  console.error("AGENT_CANVAS_JOB_OUTPUT_DIR is required");
+  process.exit(2);
+}
+const args = process.argv.slice(2);
+const imageArgs = [];
+for (let index = 0; index < args.length; index += 1) {
+  if (args[index] === "--image" && args[index + 1]) imageArgs.push(args[index + 1]);
+}
+const prompt = args[args.length - 1] || "";
+fs.mkdirSync(outputDir, { recursive: true });
+fs.writeFileSync(path.join(outputDir, "codex-capture.json"), JSON.stringify({ args, imageArgs, prompt }, null, 2));
+fs.copyFileSync(imageArgs[0], path.join(outputDir, "quick-edit-result.png"));
+fs.appendFileSync(path.join(outputDir, "quick-edit-result.png"), Buffer.from("agent-canvas-quick-edit-output"));
 `;
 }
 

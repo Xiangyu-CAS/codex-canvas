@@ -11,8 +11,10 @@ Use this skill when the user invokes Quick Edit from Agent-Canvas or asks to per
 
 1. Treat the selected canvas image as the edit target.
 2. Use the user's Quick Edit text as the primary edit instruction.
-3. Preserve the source image's aspect ratio, subject identity, layout, visible text, and design intent unless the user explicitly asks to change them.
-4. Save the final selected output as a PNG under the job output directory provided by Agent-Canvas.
-5. Agent-Canvas will collect the output and place it in a row to the right of the source image.
+3. If the attached image contains temporary pencil or text annotations from Agent-Canvas, treat those marks as edit guidance and region references.
+4. Apply the requested edit according to the annotations, then remove all temporary annotation strokes, boxes, and label text from the final image.
+5. Preserve the source image's aspect ratio, subject identity, layout, visible text, and design intent unless the user explicitly asks to change them.
+6. Save the final selected output as a PNG under the job output directory provided by Agent-Canvas.
+7. Agent-Canvas will collect the output and place it in a row to the right of the source image.
 
 Do not ask follow-up questions from a background Quick Edit job. Make the most reasonable edit from the provided instruction.

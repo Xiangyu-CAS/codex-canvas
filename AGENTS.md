@@ -14,7 +14,7 @@
 
 ## Skill Boundary
 
-- Canvas AI operations should be modeled as dedicated skills plus backend job actions. Examples: Quick Edit, Remove BG, Upscale, Edit Elements, Edit Text, Multi-Angles, Move Object, and image generation.
+- Canvas AI operations should be modeled as dedicated skills plus backend job actions. Examples: Quick Edit, Remove BG, Edit Elements, Edit Text, and image generation.
 - Each AI operation skill should document the edit intent, required inputs, preservation rules, output requirements, and canvas placement behavior.
 - The frontend should send stable action ids such as `quick-edit` or `remove-bg`; it should not embed operation-specific prompts.
 - The backend job layer should map action ids to operation prompts/skills, run Codex/ImageGen through cross-platform Codex-supported tooling, and collect outputs back to the canvas.

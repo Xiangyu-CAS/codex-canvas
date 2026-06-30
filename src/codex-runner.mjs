@@ -34,17 +34,20 @@ export async function startCodexImageJob({ projectDir, action, imagePath, output
   const imagePaths = (Array.isArray(imagePath) ? imagePath : [imagePath]).filter(Boolean);
   const args = [
     "exec",
-    "--ephemeral",
+    "--ephemeral"
+  ];
+  if (model) args.push("--model", model);
+  args.push(
+    "--skip-git-repo-check",
     "--color", "never",
     "-c", `model_reasoning_effort=${JSON.stringify(reasoningEffort)}`,
     "--cd", projectDir,
     "--sandbox", "danger-full-access"
-  ];
+  );
   for (const attachedImagePath of imagePaths) {
     args.push("--image", attachedImagePath);
   }
   args.push("--", prompt);
-  if (model) args.splice(4, 0, "--model", model);
 
   const child = spawnCodexProcess(executable, args, {
     cwd: projectDir,
@@ -74,7 +77,10 @@ export async function startCodexImageJob({ projectDir, action, imagePath, output
         resolve({ executable, code, signal, log });
         return;
       }
-      const error = new Error(`Codex image job failed with ${signal || `exit code ${code}`}.`);
+      const detail = summarizeCodexFailure(log);
+      const error = new Error(detail
+        ? `Codex image job failed: ${detail}`
+        : `Codex image job failed with ${signal || `exit code ${code}`}.`);
       error.code = code;
       error.signal = signal;
       error.log = log;
@@ -95,6 +101,18 @@ export function spawnCodexProcess(executable, args, options = {}) {
 export async function runCodexImageJob(options) {
   const job = await startCodexImageJob(options);
   return job.done;
+}
+
+function summarizeCodexFailure(log) {
+  const lines = String(log || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !line.startsWith("[agent-canvas]"))
+    .filter((line) => !/^Reading additional input from stdin/i.test(line));
+  const detail = lines.at(-1);
+  if (!detail) return "";
+  return detail.length > 240 ? `${detail.slice(0, 237)}...` : detail;
 }
 
 function platformBundledCandidates() {
@@ -224,84 +242,17 @@ function promptForAction({ action, outputDir, userPrompt }) {
       "Use the canvas-expand skill and the imagegen skill to expand the attached image.",
       "Optimize for latency: do not inspect unrelated repository files, do not produce variants, and do not run broad filesystem searches before generation.",
       "",
-      "Task: outpaint the selected image beyond its current edges according to this user instruction:",
+      "Task: outpaint the attached padded canvas according to this instruction:",
       userPrompt || "Expand the image naturally beyond its current frame.",
       "",
+      "The original source image is pasted inside the padded canvas at the user-chosen position. Keep that original content visually unchanged.",
+      "Replace all padding/blurred surrounding area with coherent generated content; do not leave blur, blank margins, checkerboards, seams, or borders.",
       "Preserve the source subject identity, visible text, perspective, lighting, colors, and design intent.",
       "Extend the scene or design outside the current frame; do not crop, zoom in, replace the main subject, or redesign unrelated content.",
-      "Keep the original image content centered or anchored as the visual source, with plausible new surrounding content.",
-      "Use a wider or taller canvas only when the instruction implies that direction; otherwise create a balanced expansion with extra context around all sides.",
       "Treat this as an outpainting image edit, not a new unrelated generation.",
       "",
       `Save or copy the final expanded image into this exact directory: ${outputDir}`,
       "Use a descriptive filename ending in .png, such as expand-result.png.",
-      "As soon as the generated PNG exists, copy it into the output directory and finish.",
-      "Do not modify source files outside that output directory.",
-      "Do not ask follow-up questions. Do not perform extra visual QA unless generation clearly failed.",
-      "",
-      "Finish with a concise message containing the saved output path."
-    ].join("\n");
-  }
-
-  if (action === "upscale") {
-    return [
-      "Use the canvas-upscale skill and the imagegen skill to enhance the attached image.",
-      "Optimize for latency: do not inspect unrelated repository files, do not produce variants, and do not run broad filesystem searches before generation.",
-      "",
-      "Task: upscale and enhance the selected image.",
-      userPrompt ? `User guidance: ${userPrompt}` : "User guidance: preserve the image faithfully while improving production quality.",
-      "Increase apparent resolution, sharpness, and detail while preserving the source image's subject identity, composition, aspect ratio, visible text, colors, and design intent.",
-      "Do not redesign, crop, reframe, add new objects, remove objects, or change text content.",
-      "Treat this as a faithful image enhancement/edit, not a new unrelated generation.",
-      "",
-      `Save or copy the final upscaled image into this exact directory: ${outputDir}`,
-      "Use a descriptive filename ending in .png, such as upscale-result.png.",
-      "As soon as the generated PNG exists, copy it into the output directory and finish.",
-      "Do not modify source files outside that output directory.",
-      "Do not ask follow-up questions. Do not perform extra visual QA unless generation clearly failed.",
-      "",
-      "Finish with a concise message containing the saved output path."
-    ].join("\n");
-  }
-
-  if (action === "multi-angles") {
-    return [
-      "Use the canvas-multi-angles skill and the imagegen skill to create alternate views of the attached image.",
-      "Optimize for latency: do not inspect unrelated repository files, do not run broad filesystem searches, and keep the output count bounded.",
-      "",
-      "Task: generate a small set of alternate angle/view images for the selected subject or composition.",
-      userPrompt ? `User guidance: ${userPrompt}` : "User guidance: create the most useful consistent angle set for the selected subject.",
-      "Create 3 to 4 coherent PNG outputs that show useful alternate views such as front, three-quarter, side, and back/top when applicable.",
-      "Preserve subject identity, product/design details, visible markings, material, color palette, and overall design intent across every view.",
-      "Do not invent unrelated products or redesign the subject. Keep each output as a single finished image, not a contact sheet, grid, label sheet, or comparison board.",
-      "If the source is a flat UI/design rather than a physical object, create perspective/mockup angle variants while preserving the design content.",
-      "",
-      `Save or copy every final angle image into this exact directory: ${outputDir}`,
-      "Use descriptive filenames ending in .png, such as multi-angles-front.png and multi-angles-side.png.",
-      "As soon as the generated PNG files exist, copy them into the output directory and finish.",
-      "Do not modify source files outside that output directory.",
-      "Do not ask follow-up questions. Do not perform extra visual QA unless generation clearly failed.",
-      "",
-      "Finish with a concise message containing the saved output paths."
-    ].join("\n");
-  }
-
-  if (action === "move-object") {
-    return [
-      "Use the canvas-move-object skill and the imagegen skill to edit the attached image.",
-      "Optimize for latency: do not inspect unrelated repository files, do not produce variants, and do not run broad filesystem searches before generation.",
-      "",
-      "Task: move an object within the selected image according to this user instruction:",
-      userPrompt || "Move the requested object to a more suitable location while preserving the image.",
-      "",
-      "Move only the object or visual element requested by the instruction.",
-      "Preserve the moved object's identity, proportions, lighting, perspective, and visible details.",
-      "Fill the object's original location plausibly from surrounding content, and keep all unrelated subjects, text, layout, colors, and design intent unchanged.",
-      "Do not crop, zoom, restyle, replace the object, or create a new unrelated composition.",
-      "Treat this as a localized image edit, not a new unrelated generation.",
-      "",
-      `Save or copy the final image into this exact directory: ${outputDir}`,
-      "Use a descriptive filename ending in .png, such as move-object-result.png.",
       "As soon as the generated PNG exists, copy it into the output directory and finish.",
       "Do not modify source files outside that output directory.",
       "Do not ask follow-up questions. Do not perform extra visual QA unless generation clearly failed.",

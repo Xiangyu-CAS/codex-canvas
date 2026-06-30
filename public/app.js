@@ -8,14 +8,24 @@ const projectOptionsButton = document.querySelector(".project-header button");
 const projectMenu = document.querySelector("#projectMenu");
 const settingsButton = document.querySelector("#settingsButton");
 const settingsMenu = document.querySelector("#settingsMenu");
+const appVersionValue = document.querySelector("#appVersionValue");
+const appUpdateButton = document.querySelector("#appUpdateButton");
+const appUpdateLabel = document.querySelector("#appUpdateLabel");
+const appUpdateStatus = document.querySelector("#appUpdateStatus");
 const toolbar = document.querySelector("#selectionToolbar");
 const quickEditComposer = document.querySelector("#quickEditComposer");
 const quickEditPrompt = document.querySelector("#quickEditPrompt");
 const editTextPanel = document.querySelector("#editTextPanel");
 const editTextList = document.querySelector("#editTextList");
 const editTextStatus = document.querySelector("#editTextStatus");
+const expandPanel = document.querySelector("#expandPanel");
+const expandScale = document.querySelector("#expandScale");
+const expandPreset = document.querySelector("#expandPreset");
+const expandRatios = document.querySelector("#expandRatios");
 const quickEditCancel = document.querySelector("#quickEditCancel");
 const quickEditRun = document.querySelector("#quickEditRun");
+const quickEditMarkupControls = document.querySelector("#quickEditMarkupControls");
+const quickEditColorPalette = document.querySelector("#quickEditColorPalette");
 const zoomLabel = document.querySelector("#zoomLabel");
 const toast = document.querySelector("#toast");
 const toolDock = document.querySelector(".tool-dock");
@@ -31,7 +41,7 @@ const toolColorStorageKey = "agentCanvasToolColor";
 const toolColors = ["#202124", "#d93025", "#f9ab00", "#188038", "#1a73e8", "#9334e6", "#ffffff"];
 const initialSearchParams = new URLSearchParams(window.location.search);
 let currentProjectId = initialSearchParams.get("project") || "";
-let runtimeCapabilityToken = initialSearchParams.get("token") || "";
+let currentThreadId = initialSearchParams.get("threadId") || initialSearchParams.get("thread-id") || "";
 let registeredProjects = [];
 const pendingTextRecognitionCancels = new Set();
 
@@ -42,6 +52,16 @@ const translations = {
     canvasViewControls: "Canvas view controls",
     settings: "Settings",
     language: "Language",
+    appVersion: "Version",
+    checkUpdates: "Check updates",
+    updateNow: "Update",
+    updateChecking: "Checking...",
+    updateAvailable: "Available",
+    updateCurrent: "Current",
+    updateUnavailable: "Unavailable",
+    updateRunning: "Updating...",
+    updateDone: "Updated. Refresh canvas to use the new version.",
+    updateFailed: "Update failed.",
     projectOptions: "Project options",
     switchCanvas: "Switch canvas",
     currentCanvas: "Current",
@@ -70,10 +90,16 @@ const translations = {
     textPlaceholder: "Text",
     quickEditPlaceholder: "Describe your edit here",
     expandPlaceholder: "Describe what should extend beyond the image edges",
-    moveObjectPlaceholder: "Describe which object to move and where",
     quickEditEmpty: "Describe the edit first.",
     expandEmpty: "Describe what to extend first.",
-    moveObjectEmpty: "Describe which object to move first.",
+    expandTitle: "Expand",
+    expandScale: "Scale",
+    expandPreset: "Preset",
+    expandPresetGeneral: "General",
+    expandPresetPhoto: "Photo",
+    expandPresetPoster: "Poster",
+    expandPresetProduct: "Product",
+    expandOriginalRatio: "Original ratio",
     cropApply: "Apply",
     editTextPlaceholder: "Describe the text change here",
     editTextEmpty: "Describe the text change first.",
@@ -98,16 +124,16 @@ const translations = {
     chatNotBound: "Bind this canvas to a Codex thread first.",
     uploadDone: "Image uploaded.",
     uploadFailed: "Image upload failed.",
+    downloadFailed: "Download failed.",
     actions: {
       "quick-edit": "Quick Edit",
       "remove-bg": "Remove BG",
       "expand": "Expand",
-      "upscale": "Upscale",
-      "multi-angles": "Multi-Angles",
-      "move-object": "Move Object",
       "crop": "Crop",
       "edit-elements": "Edit Elements",
       "reset-layer-group": "Reset group",
+      "layer-up": "Layer up",
+      "layer-down": "Layer down",
       "group-layer-group": "Group",
       "edit-text": "Edit Text",
       "send-to-chat": "Send to chat",
@@ -117,12 +143,11 @@ const translations = {
       "quick-edit": "Quick Edit",
       "remove-bg": "Remove BG",
       "expand": "Expand",
-      "upscale": "Upscale",
-      "multi-angles": "Multi-Angles",
-      "move-object": "Move Object",
       "crop": "Crop",
       "edit-elements": "Edit Elements",
       "reset-layer-group": "Reset group",
+      "layer-up": "Layer up",
+      "layer-down": "Layer down",
       "group-layer-group": "Group",
       "edit-text": "Edit Text",
       "send-to-chat": "Send to chat",
@@ -150,6 +175,16 @@ const translations = {
     canvasViewControls: "画布视图控制",
     settings: "设置",
     language: "语言",
+    appVersion: "版本",
+    checkUpdates: "检查更新",
+    updateNow: "更新",
+    updateChecking: "检查中...",
+    updateAvailable: "可更新",
+    updateCurrent: "已最新",
+    updateUnavailable: "不可用",
+    updateRunning: "更新中...",
+    updateDone: "已更新，刷新画布后生效。",
+    updateFailed: "更新失败。",
     projectOptions: "项目选项",
     switchCanvas: "切换画布",
     currentCanvas: "当前",
@@ -178,10 +213,16 @@ const translations = {
     textPlaceholder: "文字",
     quickEditPlaceholder: "描述你想怎么改这张图",
     expandPlaceholder: "描述要向画面边缘外扩展什么内容",
-    moveObjectPlaceholder: "描述要移动哪个对象，以及移动到哪里",
     quickEditEmpty: "先描述你想怎么改。",
     expandEmpty: "先描述要扩展什么内容。",
-    moveObjectEmpty: "先描述要移动哪个对象。",
+    expandTitle: "扩图",
+    expandScale: "Scale",
+    expandPreset: "Preset",
+    expandPresetGeneral: "General",
+    expandPresetPhoto: "Photo",
+    expandPresetPoster: "Poster",
+    expandPresetProduct: "Product",
+    expandOriginalRatio: "Original ratio",
     cropApply: "应用",
     editTextPlaceholder: "描述要替换或修改的文字",
     editTextEmpty: "先描述你想改哪些字。",
@@ -206,16 +247,16 @@ const translations = {
     chatNotBound: "请先把画布绑定到 Codex thread。",
     uploadDone: "图片已上传。",
     uploadFailed: "图片上传失败。",
+    downloadFailed: "下载失败。",
     actions: {
       "quick-edit": "快捷编辑",
       "remove-bg": "去背景",
       "expand": "扩图",
-      "upscale": "高清放大",
-      "multi-angles": "多角度",
-      "move-object": "移动对象",
       "crop": "裁剪",
       "edit-elements": "编辑元素",
       "reset-layer-group": "重置组",
+      "layer-up": "上移一层",
+      "layer-down": "下移一层",
       "group-layer-group": "成组",
       "edit-text": "编辑文字",
       "send-to-chat": "发送到对话",
@@ -225,12 +266,11 @@ const translations = {
       "quick-edit": "快捷编辑",
       "remove-bg": "去背景",
       "expand": "扩图",
-      "upscale": "高清放大",
-      "multi-angles": "多角度",
-      "move-object": "移动对象",
       "crop": "裁剪",
       "edit-elements": "编辑元素",
       "reset-layer-group": "重置组",
+      "layer-up": "上移一层",
+      "layer-down": "下移一层",
       "group-layer-group": "成组",
       "edit-text": "编辑文字",
       "send-to-chat": "发送到对话",
@@ -275,6 +315,7 @@ let quickEditObjectId = null;
 let quickEditAction = null;
 let activeTextRecognitionId = null;
 let editTextItems = [];
+let expandConfig = { scale: "1", preset: "general", ratio: "original", frame: null, sourceStart: null };
 const runningJobs = new Map();
 let searchTimer = null;
 let searchRequestId = 0;
@@ -287,15 +328,19 @@ let promptHistoryMode = "prompts";
 let versionBrowserGroups = [];
 let versionDiffOverlay = null;
 let versionDiffHeatmapToken = 0;
-const composerImageActions = new Set(["quick-edit", "expand", "move-object", "edit-text"]);
-const immediateImageJobActions = new Set(["remove-bg", "edit-elements", "upscale", "multi-angles"]);
-const groupSelectionActions = new Set(["reset-layer-group", "group-layer-group"]);
+let appUpdateInfo = null;
+let appUpdateBusy = false;
+const composerImageActions = new Set(["quick-edit", "expand", "edit-text"]);
+const immediateImageJobActions = new Set(["remove-bg", "edit-elements"]);
+const groupSelectionActions = new Set(["reset-layer-group", "layer-up", "layer-down", "group-layer-group"]);
+const undoStack = [];
+const maxUndoStackSize = 50;
+let undoInProgress = false;
 const singleSelectionActions = new Set([
   ...composerImageActions,
   ...immediateImageJobActions,
   "crop",
-  "send-to-chat",
-  "download"
+  "send-to-chat"
 ]);
 
 initPromptHistoryUi();
@@ -303,6 +348,7 @@ applyLanguage();
 renderColorPalette();
 await loadProjects();
 await loadState();
+refreshAppUpdateStatus({ checkRemote: true }).catch(() => {});
 setInterval(loadState, 2000);
 
 projectTitle.addEventListener("keydown", (event) => {
@@ -348,6 +394,16 @@ settingsMenu.addEventListener("click", (event) => {
   setLanguage(button.dataset.language);
 });
 
+appUpdateButton?.addEventListener("click", (event) => {
+  event.preventDefault();
+  if (appUpdateBusy) return;
+  if (appUpdateInfo?.updateAvailable) {
+    runAppUpdate();
+  } else {
+    refreshAppUpdateStatus({ checkRemote: true, showToastOnError: true });
+  }
+});
+
 toolDock.addEventListener("click", (event) => {
   const button = event.target.closest("[data-tool]");
   if (!button) return;
@@ -367,6 +423,20 @@ colorPalette.addEventListener("click", (event) => {
   if (!button) return;
   event.preventDefault();
   setActiveColor(button.dataset.color);
+});
+
+quickEditColorPalette?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-color]");
+  if (!button) return;
+  event.preventDefault();
+  setActiveColor(button.dataset.color);
+});
+
+quickEditMarkupControls?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-quick-edit-tool]");
+  if (!button) return;
+  event.preventDefault();
+  setActiveTool(button.dataset.quickEditTool);
 });
 
 canvasSearch.input.addEventListener("input", scheduleCanvasSearch);
@@ -439,6 +509,10 @@ document.addEventListener("click", (event) => {
       resetSelectedLayerGroup();
       return;
     }
+    if (action === "layer-up" || action === "layer-down") {
+      moveSelectedLayerInGroup(action === "layer-up" ? "up" : "down");
+      return;
+    }
     if (action === "group-layer-group") {
       toggleSelectedLayerGroupLock();
       return;
@@ -452,6 +526,12 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
+  if (isUndoShortcut(event)) {
+    if (isNativeUndoTarget(event.target)) return;
+    event.preventDefault();
+    undoLastCanvasAction();
+    return;
+  }
   if (!selectedIds.size && !selectedId) return;
   if (["Backspace", "Delete"].includes(event.key)) {
     if (isDeleteEditingTarget(event.target)) return;
@@ -506,8 +586,9 @@ document.addEventListener("pointerdown", (event) => {
     projectMenu.hidden = true;
   }
   if (isSettingsEvent || isPromptHistoryEvent || isCanvasSearchEvent) return;
-  if (!selectedId && selectedIds.size === 0) return;
-  if (event.target.closest(".canvas-object, .selection-toolbar, .quick-edit-composer, .color-palette, .prompt-history-panel, .prompt-history-button, .canvas-search")) return;
+  if (!quickEditObjectId && !selectedId && selectedIds.size === 0) return;
+  if (event.target.closest(".canvas-object, .selection-toolbar, .quick-edit-composer, .color-palette, .tool-dock, .prompt-history-panel, .prompt-history-button, .canvas-search")) return;
+  closeQuickEdit({ keepPrompt: true });
   selectObject(null);
 });
 
@@ -517,6 +598,25 @@ quickEditComposer.addEventListener("submit", (event) => {
 });
 
 quickEditCancel.addEventListener("click", () => closeQuickEdit());
+
+expandScale?.addEventListener("change", () => {
+  expandConfig.scale = expandScale.value || "1";
+  expandConfig.frame = null;
+  updateExpandPreview();
+});
+
+expandPreset?.addEventListener("change", () => {
+  expandConfig.preset = expandPreset.value || "general";
+});
+
+expandRatios?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-expand-ratio]");
+  if (!button) return;
+  expandConfig.ratio = button.dataset.expandRatio || "original";
+  expandConfig.frame = null;
+  updateExpandRatioButtons();
+  updateExpandPreview();
+});
 
 quickEditPrompt.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
@@ -847,7 +947,7 @@ function renderVersionGroups(groups) {
       if (object.src) {
         const thumb = document.createElement("img");
         thumb.className = "version-group-thumb";
-        thumb.src = assetUrl(object.src);
+        thumb.src = assetUrl(object.src, object);
         thumb.alt = "";
         thumb.loading = "lazy";
         button.append(thumb);
@@ -984,7 +1084,7 @@ async function copyPromptToClipboard(prompt) {
 }
 
 async function loadState() {
-  if (drag || resize || marquee || isComposerActive()) return;
+  if (drag || resize || marquee || editingTextId || isComposerActive()) return;
   const response = await fetch(apiPath("/api/state"));
   state = await response.json();
   selectedIds = new Set([...selectedIds].filter((id) => state.objects.some((object) => object.id === id)));
@@ -1048,19 +1148,21 @@ function renderProjectMenu() {
     pathLabel.textContent = project.id === currentProjectId ? t("currentCanvas") : project.projectDir;
     button.append(pathLabel);
 
-    button.addEventListener("click", () => switchProject(project.id));
+    button.addEventListener("click", () => switchProject(project));
     projectMenu.append(button);
   }
 }
 
-function switchProject(projectId) {
+function switchProject(project) {
+  const projectId = project?.id || "";
   if (!projectId || projectId === currentProjectId) {
     projectMenu.hidden = true;
     return;
   }
   const url = new URL(window.location.href);
   url.searchParams.set("project", projectId);
-  if (runtimeCapabilityToken) url.searchParams.set("token", runtimeCapabilityToken);
+  if (project.chatThreadId) url.searchParams.set("threadId", project.chatThreadId);
+  else url.searchParams.delete("threadId");
   window.location.href = `${url.pathname}${url.search}`;
 }
 
@@ -1301,7 +1403,8 @@ function render() {
     const objectType = object.type || "image";
     const isSelectedObject = visibleSelection.has(object.id) && !selectedGroupId;
     const isSelectedGroupMember = selectedGroupId && object.layerGroupId === selectedGroupId;
-    element.className = `canvas-object ${objectType}-object${object.hasAlpha ? " alpha-image-object" : ""}${isSelectedObject ? " selected" : ""}${isSelectedGroupMember ? " layer-group-member-selected" : ""}`;
+    const isFillingBackground = object.layerGroupKind === "background" && object.layerGroupBackgroundStatus === "filling";
+    element.className = `canvas-object ${objectType}-object${object.hasAlpha ? " alpha-image-object" : ""}${isSelectedObject ? " selected" : ""}${isSelectedGroupMember ? " layer-group-member-selected" : ""}${isFillingBackground ? " layer-background-filling" : ""}`;
     element.style.left = `${object.x}px`;
     element.style.top = `${object.y}px`;
     element.style.width = `${object.width}px`;
@@ -1340,6 +1443,14 @@ function render() {
     }
 
     element.addEventListener("pointerdown", (event) => {
+      if (activeTool === "pencil") {
+        startDrawing(event);
+        return;
+      }
+      if (activeTool === "text") {
+        createTextObject(event);
+        return;
+      }
       const textTarget = event.target.closest(".text-content");
       if (object.type === "text" && editingTextId === object.id && textTarget) {
         if (event.detail >= 2) return;
@@ -1362,15 +1473,36 @@ function render() {
     });
     objectLayer.append(element);
   }
+  const selectedMemberGroupId = selectedObjectLayerGroupId();
   if (selectedGroupId && hasUserSelection) {
     objectLayer.append(renderLayerGroupSelection(selectedGroupId));
+  } else if (selectedMemberGroupId && hasUserSelection) {
+    const status = renderLayerGroupBackgroundStatus(selectedMemberGroupId);
+    if (status) objectLayer.append(status);
   }
   if (versionDiffOverlay) {
     const overlay = renderVersionDiffOverlay();
     if (overlay) objectLayer.append(overlay);
   }
+  const expandPreview = renderExpandPreviewFrame();
+  if (expandPreview) objectLayer.append(expandPreview);
 
   updateSelectionUi();
+}
+
+function renderExpandPreviewFrame() {
+  if (quickEditAction !== "expand" || quickEditComposer.hidden || !quickEditObjectId) return null;
+  const object = state.objects.find((item) => item.id === quickEditObjectId);
+  if (!object || (object.type || "image") !== "image") return null;
+  const rect = expandPreviewRect(object);
+  const frame = document.createElement("div");
+  frame.className = "expand-preview-frame";
+  frame.style.left = `${rect.x}px`;
+  frame.style.top = `${rect.y}px`;
+  frame.style.width = `${rect.width}px`;
+  frame.style.height = `${rect.height}px`;
+  frame.setAttribute("aria-hidden", "true");
+  return frame;
 }
 
 function renderVersionDiffOverlay() {
@@ -1483,7 +1615,7 @@ function loadDiffImage(object) {
     image.decoding = "async";
     image.onload = () => resolve(image);
     image.onerror = reject;
-    image.src = assetUrl(object.src);
+    image.src = assetUrl(object.src, object);
     if (image.complete && image.naturalWidth > 0) resolve(image);
   });
 }
@@ -1539,7 +1671,7 @@ function renderLayerGroupSelection(groupId) {
 
   const label = document.createElement("div");
   label.className = "layer-group-label";
-  label.textContent = `${layerGroupLabel(groupId)} · ${layerGroupMembers(groupId).length} layers`;
+  label.textContent = `${layerGroupLabel(groupId)} · ${layerGroupMembers(groupId).length} layers${layerGroupBackgroundLabel(groupId)}`;
   if (anchor) {
     label.addEventListener("pointerdown", (event) => startDrag(event, anchor, { forceGroup: true }));
   }
@@ -1547,9 +1679,35 @@ function renderLayerGroupSelection(groupId) {
   return element;
 }
 
+function renderLayerGroupBackgroundStatus(groupId) {
+  const status = layerGroupBackgroundStatus(groupId);
+  if (!status || status === "ready") return null;
+  const bounds = layerGroupBounds(groupId);
+  const element = document.createElement("div");
+  element.className = `layer-group-status layer-group-status-${status}`;
+  element.dataset.layerGroupId = groupId;
+  element.style.left = `${bounds.x}px`;
+  element.style.top = `${bounds.y}px`;
+  element.style.width = `${bounds.width}px`;
+  element.style.height = `${bounds.height}px`;
+
+  const label = document.createElement("div");
+  label.className = "layer-group-status-label";
+  const spinner = document.createElement("span");
+  spinner.className = "layer-group-status-spinner";
+  spinner.setAttribute("aria-hidden", "true");
+  const text = document.createElement("span");
+  text.textContent = status === "failed"
+    ? (language === "zh" ? "背景补全失败" : "Background fill failed")
+    : (language === "zh" ? "背景补全中" : "Filling background");
+  label.append(spinner, text);
+  element.append(label);
+  return element;
+}
+
 function updateLayerGroupSelectionElement(groupId) {
   if (!groupId) return;
-  const element = objectLayer.querySelector(`.layer-group-selection[data-layer-group-id="${CSS.escape(groupId)}"]`);
+  const element = objectLayer.querySelector(`.layer-group-selection[data-layer-group-id="${CSS.escape(groupId)}"], .layer-group-status[data-layer-group-id="${CSS.escape(groupId)}"]`);
   if (!element) return;
   const bounds = layerGroupBounds(groupId);
   element.style.left = `${bounds.x}px`;
@@ -1617,7 +1775,7 @@ function renderJobObject(object) {
   if (object.src) {
     const image = document.createElement("img");
     image.className = "job-preview-image";
-    image.src = assetUrl(object.src);
+    image.src = assetUrl(object.src, object);
     image.alt = "";
     image.draggable = false;
     shell.append(image);
@@ -1628,6 +1786,11 @@ function renderJobObject(object) {
     badge.className = "job-failed-badge";
     badge.textContent = "!";
     shell.append(badge);
+
+    const message = document.createElement("div");
+    message.className = "job-error-message";
+    message.textContent = object.error || "Image job failed.";
+    shell.append(message);
   } else {
     const ripple = document.createElement("div");
     ripple.className = "job-ripple";
@@ -1645,7 +1808,7 @@ function renderImageObject(object) {
   frame.className = "image-content";
 
   const image = document.createElement("img");
-  image.src = assetUrl(object.src);
+  image.src = assetUrl(object.src, object);
   image.alt = object.name || "Canvas image";
   image.draggable = false;
   applyImageCrop(image, object);
@@ -1775,6 +1938,10 @@ function startDrag(event, object, options = {}) {
   event.preventDefault();
   event.stopPropagation();
   const element = event.currentTarget;
+  const isExpandPreviewDrag = quickEditAction === "expand"
+    && quickEditObjectId === object.id
+    && !quickEditComposer.hidden
+    && !options.forceGroup;
   const isMultiSelectionDrag = !options.forceGroup && selectedIds.size > 1 && selectedIds.has(object.id);
   const useLayerGroup = object.layerGroupId && (options.forceGroup || object.layerGroupLocked);
   const groupMembers = useLayerGroup ? layerGroupMembers(object.layerGroupId) : [];
@@ -1793,6 +1960,9 @@ function startDrag(event, object, options = {}) {
   drag = {
     id: object.id,
     groupId: useLayerGroup ? object.layerGroupId : null,
+    expandPreview: isExpandPreviewDrag ? {
+      frame: expandPreviewRect(object)
+    } : null,
     multiIds: isMultiSelectionDrag ? multiMembers.map((item) => item.id) : [],
     multiMembers: multiMembers.map((item) => ({ id: item.id, x: item.x, y: item.y })),
     members: groupMembers.map((item) => ({ id: item.id, x: item.x, y: item.y })),
@@ -1819,7 +1989,15 @@ function moveDrag(event) {
   if (!drag) return;
   const dx = Math.round((event.clientX - drag.startX) / viewport.zoom);
   const dy = Math.round((event.clientY - drag.startY) / viewport.zoom);
-  if (drag.multiMembers?.length) {
+  if (drag.expandPreview) {
+    const object = state.objects.find((item) => item.id === drag.id);
+    if (!object) return;
+    const frame = drag.expandPreview.frame;
+    object.x = clamp(Math.round(drag.objectX + dx), frame.x, frame.x + frame.width - object.width);
+    object.y = clamp(Math.round(drag.objectY + dy), frame.y, frame.y + frame.height - object.height);
+    drag.element.style.left = `${object.x}px`;
+    drag.element.style.top = `${object.y}px`;
+  } else if (drag.multiMembers?.length) {
     for (const memberStart of drag.multiMembers) {
       const member = state.objects.find((item) => item.id === memberStart.id);
       if (!member) continue;
@@ -1853,7 +2031,16 @@ function moveDrag(event) {
   }
   updateLayerGroupSelectionElement(drag.groupId || selectedLayerGroupId());
   updateVersionDiffOverlayElement();
+  updateExpandPreviewElement();
   updateSelectionUi();
+}
+
+function updateExpandPreviewElement() {
+  const element = objectLayer.querySelector(".expand-preview-frame");
+  if (!element) return;
+  const nextElement = renderExpandPreviewFrame();
+  if (nextElement) element.replaceWith(nextElement);
+  else element.remove();
 }
 
 function updateVersionDiffOverlayElement() {
@@ -1882,7 +2069,10 @@ async function endDrag(event) {
     }
   }
   drag = null;
-  if (activeDrag.multiMembers?.length) {
+  if (activeDrag.expandPreview) {
+    updateExpandPreviewPosition();
+    updateSelectionUi();
+  } else if (activeDrag.multiMembers?.length) {
     await Promise.all(activeDrag.multiIds.map((id) => {
       const member = state.objects.find((item) => item.id === id);
       if (!member) return Promise.resolve();
@@ -2056,29 +2246,75 @@ async function applyCropSession(event) {
 
   const box = clampCropBox(cropSession.box, object);
   const previousCrop = normalizedCrop(object) || { x: 0, y: 0, width: 1, height: 1 };
-  const nextCrop = normalizeCropPatch({
+  const crop = normalizeCropPatch({
     x: previousCrop.x + previousCrop.width * (box.x / object.width),
     y: previousCrop.y + previousCrop.height * (box.y / object.height),
     width: previousCrop.width * (box.width / object.width),
     height: previousCrop.height * (box.height / object.height)
   });
-  const patch = {
-    x: object.x + box.x,
-    y: object.y + box.y,
-    width: box.width,
-    height: box.height,
-    crop: nextCrop
-  };
-  Object.assign(object, patch);
-  cropSession = null;
-  cropDrag = null;
-  render();
-  await fetch(apiPath(`/api/objects/${object.id}`), {
-    method: "PATCH",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(patch)
-  }).catch(() => {});
-  await loadState();
+
+  try {
+    const dataUrl = await renderCroppedImageDataUrl(object, crop);
+    const croppedWidth = Math.max(1, Math.round(box.width));
+    const croppedHeight = Math.max(1, Math.round(box.height));
+    const response = await fetch(apiPath("/api/images"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        dataUrl,
+        name: croppedImageName(object),
+        prompt: `Cropped from ${object.name || object.id}`,
+        layoutMode: "canvas-row",
+        sourceObjectId: object.id,
+        x: Math.round(object.x + object.width + 72),
+        y: Math.round(object.y),
+        width: croppedWidth,
+        height: croppedHeight
+      })
+    });
+    const croppedObject = await response.json();
+    if (!response.ok) throw new Error(croppedObject.error || t("jobFailed"));
+    cropSession = null;
+    cropDrag = null;
+    setLocalSelection([croppedObject.id], { fromUser: true });
+    await loadState();
+  } catch (error) {
+    showToast(error?.message || t("jobFailed"));
+  }
+}
+
+async function renderCroppedImageDataUrl(object, crop) {
+  const image = await loadImageForCanvas(assetUrl(object.src, object));
+  const sourceWidth = image.naturalWidth || image.width;
+  const sourceHeight = image.naturalHeight || image.height;
+  const sourceX = Math.round(crop.x * sourceWidth);
+  const sourceY = Math.round(crop.y * sourceHeight);
+  const sourceCropWidth = Math.max(1, Math.round(crop.width * sourceWidth));
+  const sourceCropHeight = Math.max(1, Math.round(crop.height * sourceHeight));
+  const canvas = document.createElement("canvas");
+  canvas.width = sourceCropWidth;
+  canvas.height = sourceCropHeight;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error(t("jobFailed"));
+  context.drawImage(image, sourceX, sourceY, sourceCropWidth, sourceCropHeight, 0, 0, sourceCropWidth, sourceCropHeight);
+  return canvas.toDataURL("image/png");
+}
+
+function loadImageForCanvas(src) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.decoding = "async";
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error(t("jobFailed")));
+    image.src = src;
+  });
+}
+
+function croppedImageName(object) {
+  const name = String(object.name || "cropped-image").trim() || "cropped-image";
+  const withoutExtension = name.replace(/\.[a-z0-9]{2,5}$/i, "");
+  return `${withoutExtension}-crop.png`;
 }
 
 function normalizeCropPatch(crop) {
@@ -2332,14 +2568,26 @@ function updateSelectionUi() {
   const groupId = selectedLayerGroupId();
   const isGroupSelection = Boolean(groupId);
 
+  if (quickEditObjectId) {
+    const quickEditObject = state.objects.find((item) => item.id === quickEditObjectId);
+    if (!quickEditObject || (quickEditObject.type || "image") !== "image") {
+      hideSelectionToolbar();
+      closeQuickEdit({ keepPrompt: true });
+      return;
+    }
+    hideSelectionToolbar();
+    updateQuickEditPosition();
+    return;
+  }
+
   if (cropSession?.objectId === selectedId) {
-    toolbar.hidden = true;
+    hideSelectionToolbar();
     closeQuickEdit({ keepPrompt: true });
     return;
   }
 
   if (selectedIds.size > 1 || !object || object.type !== "image" || !hasUserSelection) {
-    toolbar.hidden = true;
+    hideSelectionToolbar();
     closeQuickEdit({ keepPrompt: true });
     return;
   }
@@ -2361,6 +2609,17 @@ function updateSelectionUi() {
   const left = clamp(objectCenter - toolbarRect.width / 2, 16, Math.max(16, boardRect.width - toolbarRect.width - 16));
   toolbar.style.transform = `translate(${left}px, ${top}px)`;
   updateQuickEditPosition();
+}
+
+function hideSelectionToolbar() {
+  toolbar.hidden = true;
+  toolbar.classList.remove("has-layer-group-actions");
+  const groupBreak = toolbar.querySelector("[data-toolbar-group-break]");
+  if (groupBreak) groupBreak.hidden = true;
+  toolbar.querySelectorAll("[data-action]").forEach((button) => {
+    if (groupSelectionActions.has(button.dataset.action)) button.hidden = true;
+    button.disabled = false;
+  });
 }
 
 function startPan(event) {
@@ -2499,6 +2758,9 @@ async function deleteSelectedObject() {
   const previousSelection = state.selection;
   const previousSelectedIds = new Set(selectedIds);
   const previousSelectedId = selectedId;
+  const deletedEntriesFor = (deleteIds) => state.objects
+    .map((object, index) => ({ object: cloneCanvasObject(object), index }))
+    .filter((entry) => deleteIds.includes(entry.object.id));
   const restoreDeletedState = (error) => {
     state.objects = previousObjects;
     state.selection = previousSelection;
@@ -2510,27 +2772,90 @@ async function deleteSelectedObject() {
   const groupId = ids.length === 1 ? selectedLayerGroupId() : null;
   if (groupId) {
     const members = layerGroupMembers(groupId);
+    const memberIds = members.map((object) => object.id);
+    const undoEntries = deletedEntriesFor(memberIds);
     setLocalSelection([]);
     editingTextId = null;
     state.objects = state.objects.filter((object) => object.layerGroupId !== groupId);
     state.selection = null;
     render();
     try {
-      await deleteObjectsById(members.map((object) => object.id));
+      await deleteObjectsById(memberIds);
+      pushUndoAction({
+        type: "delete",
+        entries: undoEntries,
+        selection: previousSelection,
+        selectedId: previousSelectedId,
+        selectedIds: [...previousSelectedIds]
+      });
     } catch (error) {
       restoreDeletedState(error);
     }
     return;
   }
+  const undoEntries = deletedEntriesFor(ids);
   setLocalSelection([]);
   editingTextId = null;
   state.objects = state.objects.filter((object) => !ids.includes(object.id));
   render();
   try {
     await deleteObjectsById(ids);
+    pushUndoAction({
+      type: "delete",
+      entries: undoEntries,
+      selection: previousSelection,
+      selectedId: previousSelectedId,
+      selectedIds: [...previousSelectedIds]
+    });
   } catch (error) {
     restoreDeletedState(error);
   }
+}
+
+function pushUndoAction(action) {
+  if (!action?.type || !Array.isArray(action.entries) || action.entries.length === 0) return;
+  undoStack.push(action);
+  if (undoStack.length > maxUndoStackSize) undoStack.shift();
+}
+
+async function undoLastCanvasAction() {
+  if (undoInProgress || undoStack.length === 0) return;
+  const action = undoStack.pop();
+  undoInProgress = true;
+  try {
+    if (action.type !== "delete") return;
+    const response = await fetch(apiPath("/api/objects/restore"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        objects: action.entries,
+        selection: action.selection || action.selectedId || null
+      })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.error || t("jobFailed"));
+    const stateResponse = await fetch(apiPath("/api/state"));
+    state = await stateResponse.json();
+    const restoredIds = new Set((payload.objects || []).map((object) => object.id));
+    const nextSelectedIds = (action.selectedIds || []).filter((id) => restoredIds.has(id));
+    if (nextSelectedIds.length > 0) {
+      setLocalSelection(nextSelectedIds, { fromUser: true });
+    } else if (action.selectedId && restoredIds.has(action.selectedId)) {
+      setLocalSelection([action.selectedId], { fromUser: true });
+    } else {
+      setLocalSelection([]);
+    }
+    render();
+  } catch (error) {
+    undoStack.push(action);
+    showToast(error?.message || t("jobFailed"));
+  } finally {
+    undoInProgress = false;
+  }
+}
+
+function cloneCanvasObject(object) {
+  return JSON.parse(JSON.stringify(object));
 }
 
 async function deleteObjectsById(ids) {
@@ -2651,7 +2976,8 @@ async function startImageJob(action, options = {}) {
       body: JSON.stringify({
         action,
         objectId: object.id,
-        prompt: options.prompt || ""
+        prompt: options.prompt || "",
+        ...(action === "expand" && options.expand ? { expand: options.expand } : {})
       })
     });
     const job = await response.json();
@@ -2698,19 +3024,22 @@ function openImageActionComposer(action) {
   quickEditAction = action;
   quickEditObjectId = object.id;
   quickEditPrompt.placeholder = composerPlaceholder(action);
-  configureComposerMode(action);
+  configureComposerMode(action, object);
   quickEditComposer.hidden = false;
+  updateColorPalette();
   frameObjectForQuickEdit(object, action);
   updateSelectionUi();
   updateQuickEditPosition();
   if (action === "edit-text") {
     startTextRecognition(object.id);
+  } else if (action === "expand") {
+    window.requestAnimationFrame(() => expandScale?.focus());
   } else {
     window.requestAnimationFrame(() => quickEditPrompt.focus());
   }
 }
 
-function closeQuickEdit({ keepPrompt = false, cancelTextSession = true } = {}) {
+function closeQuickEdit({ keepPrompt = false, cancelTextSession = true, restoreExpandPreview = true } = {}) {
   const textRecognitionId = quickEditAction === "edit-text" ? activeTextRecognitionId : null;
   if (cancelTextSession && textRecognitionId) {
     if (textRecognitionId.startsWith("text_")) {
@@ -2718,6 +3047,9 @@ function closeQuickEdit({ keepPrompt = false, cancelTextSession = true } = {}) {
     } else {
       pendingTextRecognitionCancels.add(textRecognitionId);
     }
+  }
+  if (restoreExpandPreview && quickEditAction === "expand") {
+    restoreExpandPreviewSource();
   }
   quickEditComposer.hidden = true;
   quickEditObjectId = null;
@@ -2727,8 +3059,13 @@ function closeQuickEdit({ keepPrompt = false, cancelTextSession = true } = {}) {
   editTextList.replaceChildren();
   editTextStatus.textContent = "";
   quickEditRun.disabled = false;
-  quickEditComposer.classList.remove("edit-text-mode", "quick-edit-mode");
+  quickEditComposer.classList.remove("edit-text-mode", "quick-edit-mode", "expand-mode");
+  expandConfig.frame = null;
+  expandConfig.sourceStart = null;
+  expandConfig.placement = null;
   if (!keepPrompt) quickEditPrompt.value = "";
+  updateColorPalette();
+  updateExpandPreview();
 }
 
 async function submitQuickEdit() {
@@ -2737,17 +3074,31 @@ async function submitQuickEdit() {
     await submitEditText();
     return;
   }
+  await flushEditingTextObject();
   const prompt = quickEditPrompt.value.trim();
-  if (!prompt) {
+  if (!prompt && action !== "expand") {
     showToast(composerEmptyMessage(action));
     quickEditPrompt.focus();
     return;
   }
   const objectId = quickEditObjectId;
   if (!objectId) return;
+  const expandOptions = action === "expand" ? currentExpandOptions() : null;
   setLocalSelection([objectId], { fromUser: true });
   closeQuickEdit();
-  await startImageJob(action, { prompt });
+  await startImageJob(action, {
+    prompt,
+    expand: expandOptions
+  });
+}
+
+async function flushEditingTextObject() {
+  if (!editingTextId) return;
+  const id = editingTextId;
+  const element = objectLayer.querySelector(`[data-id="${CSS.escape(id)}"] .text-content`);
+  editingTextId = null;
+  if (!element) return;
+  await saveTextObject(id, element.textContent || t("textPlaceholder"));
 }
 
 async function submitEditText() {
@@ -2790,13 +3141,28 @@ async function submitEditText() {
   }
 }
 
-function configureComposerMode(action) {
+function configureComposerMode(action, object = null) {
   const isEditText = action === "edit-text";
+  const isExpand = action === "expand";
   quickEditComposer.classList.toggle("edit-text-mode", isEditText);
-  quickEditComposer.classList.toggle("quick-edit-mode", !isEditText);
+  quickEditComposer.classList.toggle("expand-mode", isExpand);
+  quickEditComposer.classList.toggle("quick-edit-mode", !isEditText && !isExpand);
   editTextPanel.hidden = !isEditText;
-  quickEditPrompt.hidden = isEditText;
+  expandPanel.hidden = !isExpand;
+  quickEditPrompt.hidden = isEditText || isExpand;
   editTextPanel.querySelector(".edit-text-title").textContent = t("editTextTitle");
+  if (isExpand) {
+    quickEditPrompt.value = "";
+    activeTextRecognitionId = null;
+    editTextItems = [];
+    editTextList.replaceChildren();
+    editTextStatus.textContent = "";
+    quickEditRun.disabled = false;
+    initializeExpandPreview(object);
+    syncExpandControls();
+    updateExpandPreview();
+    return;
+  }
   if (isEditText) {
     quickEditPrompt.value = "";
     editTextItems = [];
@@ -2807,6 +3173,7 @@ function configureComposerMode(action) {
     editTextList.replaceChildren();
     editTextStatus.textContent = "";
     quickEditRun.disabled = false;
+    updateExpandPreview();
   }
 }
 
@@ -2941,17 +3308,84 @@ function updateEditTextRunState() {
   quickEditRun.disabled = !editTextItems.some((item) => String(item.editedText || "").trim() && String(item.editedText || "").trim() !== item.text);
 }
 
+function syncExpandControls() {
+  if (expandScale) expandScale.value = expandConfig.scale || "1";
+  if (expandPreset) expandPreset.value = expandConfig.preset || "general";
+  updateExpandRatioButtons();
+}
+
+function updateExpandRatioButtons() {
+  expandRatios?.querySelectorAll("[data-expand-ratio]").forEach((button) => {
+    const active = button.dataset.expandRatio === expandConfig.ratio;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-checked", active ? "true" : "false");
+  });
+}
+
+function updateExpandPreviewPosition() {
+  const object = state?.objects?.find((item) => item.id === quickEditObjectId);
+  if (!object || !expandConfig.frame) return;
+  expandConfig.placement = expandPlacementForObject(object, expandConfig.frame);
+}
+
+function currentExpandOptions() {
+  const object = state?.objects?.find((item) => item.id === quickEditObjectId);
+  const frame = object ? expandPreviewRect(object) : expandConfig.frame;
+  return {
+    scale: expandConfig.scale || "1",
+    preset: expandConfig.preset || "general",
+    ratio: expandConfig.ratio || "original",
+    placement: object && frame ? expandPlacementForObject(object, frame) : expandConfig.placement || null
+  };
+}
+
+function expandPlacementForObject(object, frame) {
+  return {
+    x: Number(((object.x - frame.x) / Math.max(1, frame.width)).toFixed(5)),
+    y: Number(((object.y - frame.y) / Math.max(1, frame.height)).toFixed(5)),
+    width: Number((object.width / Math.max(1, frame.width)).toFixed(5)),
+    height: Number((object.height / Math.max(1, frame.height)).toFixed(5))
+  };
+}
+
+function restoreExpandPreviewSource() {
+  const start = expandConfig.sourceStart;
+  if (!start?.id) return;
+  const object = state?.objects?.find((item) => item.id === start.id);
+  if (!object) return;
+  object.x = start.x;
+  object.y = start.y;
+  const element = objectLayer.querySelector(`[data-id="${CSS.escape(object.id)}"]`);
+  if (element) {
+    element.style.left = `${object.x}px`;
+    element.style.top = `${object.y}px`;
+  }
+}
+
+function updateExpandPreview() {
+  if (quickEditAction === "expand" && quickEditObjectId && !quickEditComposer.hidden) {
+    const object = state?.objects?.find((item) => item.id === quickEditObjectId);
+    if (object) {
+      if (!expandConfig.frame) expandConfig.frame = expandPreviewRect(object);
+      updateExpandPreviewPosition();
+      frameObjectForQuickEdit(object, "expand");
+    }
+  }
+  objectLayer.querySelector(".expand-preview-frame")?.remove();
+  const frame = renderExpandPreviewFrame();
+  if (frame) objectLayer.append(frame);
+  updateQuickEditPosition();
+}
+
 function composerPlaceholder(action) {
   if (action === "edit-text") return t("editTextPlaceholder");
   if (action === "expand") return t("expandPlaceholder");
-  if (action === "move-object") return t("moveObjectPlaceholder");
   return t("quickEditPlaceholder");
 }
 
 function composerEmptyMessage(action) {
   if (action === "edit-text") return t("editTextEmpty");
   if (action === "expand") return t("expandEmpty");
-  if (action === "move-object") return t("moveObjectEmpty");
   return t("quickEditEmpty");
 }
 
@@ -3031,6 +3465,16 @@ function isShortcutEditingTarget(target) {
   return Boolean(target.closest("button, [role='button'], .selection-toolbar, .quick-edit-composer, .settings-menu, .color-palette, .prompt-history-panel, .canvas-search"));
 }
 
+function isUndoShortcut(event) {
+  if (event.defaultPrevented || event.altKey || event.shiftKey) return false;
+  if (event.key.toLowerCase() !== "z") return false;
+  return event.metaKey || event.ctrlKey;
+}
+
+function isNativeUndoTarget(target) {
+  return isEditableTarget(target) || Boolean(target.closest(".quick-edit-composer, .prompt-history-panel, .canvas-search"));
+}
+
 function isDeleteEditingTarget(target) {
   if (target.closest("input, textarea")) return true;
   const editableText = target.closest(".text-content[contenteditable='true']");
@@ -3041,6 +3485,10 @@ function setActiveTool(tool) {
   activeTool = tool || "select";
   toolDock.querySelectorAll("[data-tool]").forEach((button) => {
     button.classList.toggle("active", button.dataset.tool === activeTool);
+  });
+  quickEditMarkupControls?.querySelectorAll("[data-quick-edit-tool]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.quickEditTool === activeTool);
+    button.setAttribute("aria-pressed", String(button.dataset.quickEditTool === activeTool));
   });
   board.classList.toggle("tool-pencil", activeTool === "pencil");
   board.classList.toggle("tool-text", activeTool === "text");
@@ -3053,7 +3501,13 @@ function loadToolColor() {
 }
 
 function renderColorPalette() {
-  colorPalette.replaceChildren();
+  renderColorPaletteInto(colorPalette);
+  if (quickEditColorPalette) renderColorPaletteInto(quickEditColorPalette);
+  updateColorPalette();
+}
+
+function renderColorPaletteInto(container) {
+  container.replaceChildren();
   for (const color of toolColors) {
     const button = document.createElement("button");
     button.type = "button";
@@ -3062,16 +3516,17 @@ function renderColorPalette() {
     button.style.setProperty("--swatch-color", color);
     button.title = color;
     button.setAttribute("aria-label", `Use color ${color}`);
-    colorPalette.append(button);
+    container.append(button);
   }
-  updateColorPalette();
 }
 
 function updateColorPalette() {
-  colorPalette.hidden = !(activeTool === "pencil" || activeTool === "text");
-  colorPalette.querySelectorAll("[data-color]").forEach((button) => {
-    button.classList.toggle("active", button.dataset.color === activeColor);
-  });
+  colorPalette.hidden = Boolean(quickEditObjectId) || !(activeTool === "pencil" || activeTool === "text");
+  for (const palette of [colorPalette, quickEditColorPalette].filter(Boolean)) {
+    palette.querySelectorAll("[data-color]").forEach((button) => {
+      button.classList.toggle("active", button.dataset.color === activeColor);
+    });
+  }
 }
 
 async function setActiveColor(color) {
@@ -3113,6 +3568,79 @@ function setLanguage(nextLanguage) {
   applyLanguage();
 }
 
+async function refreshAppUpdateStatus({ checkRemote = false, showToastOnError = false } = {}) {
+  appUpdateBusy = true;
+  renderAppUpdateStatus({ label: t("updateChecking"), disabled: true });
+  try {
+    const response = await fetch(apiPath(`/api/app-update${checkRemote ? "?check=1" : ""}`));
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || t("updateFailed"));
+    appUpdateInfo = payload;
+    renderAppUpdateStatus();
+  } catch (error) {
+    appUpdateInfo = null;
+    renderAppUpdateStatus({ label: t("updateUnavailable"), disabled: false });
+    if (showToastOnError) showToast(error?.message || t("updateFailed"));
+  } finally {
+    appUpdateBusy = false;
+  }
+}
+
+async function runAppUpdate() {
+  appUpdateBusy = true;
+  renderAppUpdateStatus({ label: t("updateRunning"), disabled: true });
+  try {
+    const response = await fetch(apiPath("/api/app-update"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({})
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || t("updateFailed"));
+    appUpdateInfo = payload;
+    renderAppUpdateStatus();
+    showToast(t("updateDone"));
+  } catch (error) {
+    renderAppUpdateStatus({ label: t("updateFailed"), disabled: false });
+    showToast(error?.message || t("updateFailed"));
+  } finally {
+    appUpdateBusy = false;
+  }
+}
+
+function renderAppUpdateStatus(override = null) {
+  if (!appUpdateButton || !appVersionValue || !appUpdateStatus || !appUpdateLabel) return;
+  const version = appUpdateInfo?.pluginVersion || appUpdateInfo?.version || "...";
+  appVersionValue.textContent = version;
+  appUpdateButton.disabled = Boolean(override?.disabled);
+
+  if (override) {
+    appUpdateLabel.textContent = t("checkUpdates");
+    appUpdateStatus.textContent = override.label || "";
+    return;
+  }
+
+  if (!appUpdateInfo) {
+    appUpdateLabel.textContent = t("checkUpdates");
+    appUpdateStatus.textContent = "";
+    return;
+  }
+
+  if (!appUpdateInfo.canUpdate) {
+    appUpdateLabel.textContent = t("checkUpdates");
+    appUpdateStatus.textContent = t("updateUnavailable");
+    return;
+  }
+
+  if (appUpdateInfo.updateAvailable) {
+    appUpdateLabel.textContent = t("updateNow");
+    appUpdateStatus.textContent = t("updateAvailable");
+  } else {
+    appUpdateLabel.textContent = t("checkUpdates");
+    appUpdateStatus.textContent = t("updateCurrent");
+  }
+}
+
 function applyLanguage() {
   document.documentElement.lang = language === "zh" ? "zh-CN" : "en";
   document.querySelectorAll("[data-i18n]").forEach((element) => {
@@ -3149,6 +3677,7 @@ function applyLanguage() {
   settingsMenu.querySelector("[data-settings-row='language']")?.setAttribute("aria-label", t("language"));
   const currentLanguage = settingsMenu.querySelector("[data-language-current]");
   if (currentLanguage) currentLanguage.textContent = language === "zh" ? "简体中文" : "English";
+  renderAppUpdateStatus();
   renderProjectMenu();
   updatePromptHistoryLabels();
 
@@ -3172,6 +3701,14 @@ function applyLanguage() {
     button.dataset.tooltip = label;
     button.title = label;
     button.setAttribute("aria-label", label);
+  });
+
+  document.querySelectorAll("[data-quick-edit-tool]").forEach((button) => {
+    const label = toolLabel(button.dataset.quickEditTool);
+    button.dataset.tooltip = label;
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    button.setAttribute("aria-pressed", String(button.dataset.quickEditTool === activeTool));
   });
 
   document.querySelectorAll("[data-view-action]").forEach((button) => {
@@ -3337,6 +3874,31 @@ function applyViewport() {
 
 function frameObjectForQuickEdit(object, action = "quick-edit") {
   const boardRect = board.getBoundingClientRect();
+  if (action === "expand") {
+    const preview = expandPreviewRect(object);
+    const panelWidth = Math.min(220, Math.max(180, boardRect.width - 48));
+    const sideGap = 18;
+    const sideMargins = 56;
+    const bottomReserve = 120;
+    const availableWidth = Math.max(140, boardRect.width - panelWidth - sideGap - sideMargins);
+    const availableHeight = Math.max(140, boardRect.height - 96 - bottomReserve);
+    const targetZoom = clamp(
+      Math.min(availableWidth / preview.width, availableHeight / preview.height),
+      0.08,
+      0.9
+    );
+    const previewScreenWidth = preview.width * targetZoom;
+    const previewScreenHeight = preview.height * targetZoom;
+    const previewLeft = Math.max(24, Math.round((boardRect.width - panelWidth - sideGap - previewScreenWidth) / 2));
+    const previewTop = Math.max(72, Math.round((boardRect.height - bottomReserve - previewScreenHeight) / 2));
+    viewport.zoom = targetZoom;
+    viewport.x = Math.round(previewLeft - preview.x * targetZoom);
+    viewport.y = Math.round(previewTop - preview.y * targetZoom);
+    applyViewport();
+    scheduleViewportSave();
+    return;
+  }
+
   if (action === "edit-text") {
     const panelWidth = Math.min(240, Math.max(180, boardRect.width - 48));
     const sideGap = 16;
@@ -3424,6 +3986,59 @@ function boundsForObjects(objects) {
   };
 }
 
+function expandPreviewRect(object) {
+  if (expandConfig.frame && quickEditAction === "expand" && quickEditObjectId === object.id) {
+    return { ...expandConfig.frame };
+  }
+  const size = expandTargetSize(object.width, object.height, expandConfig.ratio, Number(expandConfig.scale) || 1);
+  return {
+    x: Math.round(object.x + (object.width - size.width) / 2),
+    y: Math.round(object.y + (object.height - size.height) / 2),
+    width: size.width,
+    height: size.height
+  };
+}
+
+function initializeExpandPreview(object) {
+  if (!object) {
+    expandConfig.frame = null;
+    expandConfig.sourceStart = null;
+    return;
+  }
+  const previousFrame = expandConfig.frame;
+  expandConfig.frame = null;
+  const frame = expandPreviewRect(object);
+  expandConfig.frame = previousFrame || frame;
+  expandConfig.sourceStart = {
+    id: object.id,
+    x: object.x,
+    y: object.y
+  };
+  expandConfig.placement = expandPlacementForObject(object, expandConfig.frame);
+}
+
+function expandTargetSize(width, height, ratio, scale = 1) {
+  const targetRatio = ratio === "original" ? width / Math.max(1, height) : ratioToNumber(ratio);
+  let targetWidth = width;
+  let targetHeight = height;
+  const currentRatio = width / Math.max(1, height);
+  if (currentRatio < targetRatio) {
+    targetWidth = height * targetRatio;
+  } else if (currentRatio > targetRatio) {
+    targetHeight = width / targetRatio;
+  }
+  return {
+    width: Math.max(1, Math.round(Math.max(width, targetWidth * scale))),
+    height: Math.max(1, Math.round(Math.max(height, targetHeight * scale)))
+  };
+}
+
+function ratioToNumber(ratio) {
+  const [left, right] = String(ratio || "1:1").split(":").map(Number);
+  if (!Number.isFinite(left) || !Number.isFinite(right) || left <= 0 || right <= 0) return 1;
+  return left / right;
+}
+
 function selectedLayerGroupId() {
   const groupId = selectedObjectLayerGroupId();
   return groupId && isLayerGroupLocked(groupId) ? groupId : null;
@@ -3456,6 +4071,19 @@ function layerGroupLabel(groupId) {
   return member?.layerGroupName || "Layer group";
 }
 
+function layerGroupBackgroundLabel(groupId) {
+  const status = layerGroupBackgroundStatus(groupId);
+  if (!status || status === "ready") return "";
+  if (status === "filling") return language === "zh" ? " · 背景补全中" : " · BG filling";
+  if (status === "failed") return language === "zh" ? " · 背景补全失败" : " · BG failed";
+  return "";
+}
+
+function layerGroupBackgroundStatus(groupId) {
+  const background = layerGroupMembers(groupId).find((item) => item.layerGroupKind === "background");
+  return background?.layerGroupBackgroundStatus || "";
+}
+
 function layerGroupOrigin(groupId) {
   const members = layerGroupMembers(groupId);
   const anchor = members.find((item) => item.layerGroupKind === "background")
@@ -3470,12 +4098,16 @@ function layerGroupOrigin(groupId) {
 
 function updateToolbarForSelection(isGroupSelection) {
   const selectedGroupMemberId = selectedObjectLayerGroupId();
+  toolbar.classList.toggle("has-layer-group-actions", Boolean(selectedGroupMemberId));
+  const groupBreak = toolbar.querySelector("[data-toolbar-group-break]");
+  if (groupBreak) groupBreak.hidden = !selectedGroupMemberId;
   toolbar.querySelectorAll("[data-action]").forEach((button) => {
     const action = button.dataset.action;
     if (groupSelectionActions.has(action)) button.hidden = !selectedGroupMemberId;
     if (singleSelectionActions.has(action)) button.hidden = isGroupSelection;
   });
   updateGroupActionButton(isGroupSelection);
+  updateLayerOrderButtons();
 }
 
 function updateGroupActionButton(isGroupSelection) {
@@ -3491,6 +4123,16 @@ function updateGroupActionButton(isGroupSelection) {
   button.setAttribute("aria-label", label);
   const span = button.querySelector("span:not(.context-icon)");
   if (span) span.textContent = label;
+}
+
+function updateLayerOrderButtons() {
+  const groupId = selectedObjectLayerGroupId();
+  const members = layerGroupMembers(groupId);
+  const index = members.findIndex((member) => member.id === selectedId);
+  const downButton = toolbar.querySelector('[data-action="layer-down"]');
+  const upButton = toolbar.querySelector('[data-action="layer-up"]');
+  if (downButton) downButton.disabled = index <= 0;
+  if (upButton) upButton.disabled = index < 0 || index >= members.length - 1;
 }
 
 function worldToScreen(x, y) {
@@ -3514,16 +4156,17 @@ function clamp(value, min, max) {
 function apiPath(pathname) {
   const url = new URL(pathname, window.location.origin);
   if (currentProjectId) url.searchParams.set("project", currentProjectId);
-  if (runtimeCapabilityToken) url.searchParams.set("token", runtimeCapabilityToken);
+  if (currentThreadId) url.searchParams.set("threadId", currentThreadId);
   return `${url.pathname}${url.search}`;
 }
 
-function assetUrl(src) {
+function assetUrl(src, object = null) {
   if (!src) return "";
   try {
     const url = new URL(src, window.location.origin);
     if (url.origin === window.location.origin && url.pathname.startsWith("/assets/") && currentProjectId) {
       url.searchParams.set("project", currentProjectId);
+      if (Number.isFinite(object?.assetVersion)) url.searchParams.set("v", String(object.assetVersion));
       return `${url.pathname}${url.search}`;
     }
   } catch {
@@ -3536,21 +4179,95 @@ function basename(filePath) {
   return String(filePath || "").split(/[\\/]/).filter(Boolean).at(-1) || "";
 }
 
-function downloadSelectedImage() {
+async function downloadSelectedImage() {
   const object = state.objects.find((item) => item.id === selectedId);
   if (!object || (object.type || "image") !== "image" || !object.src) return;
+  const groupId = selectedObjectLayerGroupId();
+  let href;
+  let suggestedName;
+  let mimeType;
+  if (groupId) {
+    href = apiPath(`/api/layer-groups/${encodeURIComponent(groupId)}/psd`);
+    suggestedName = `${downloadStem(layerGroupLabel(groupId))}.psd`;
+    mimeType = "image/vnd.adobe.photoshop";
+  } else {
+    href = assetUrl(object.src, object);
+    suggestedName = downloadName(object);
+    mimeType = mimeTypeForDownloadName(suggestedName);
+  }
+
+  try {
+    await saveUrlWithPicker(href, suggestedName, mimeType);
+  } catch (error) {
+    if (error?.name === "AbortError") return;
+    showToast(error?.message || t("downloadFailed"));
+  }
+}
+
+async function saveUrlWithPicker(href, suggestedName, mimeType) {
+  if (!("showSaveFilePicker" in window)) {
+    fallbackAnchorDownload(href, suggestedName);
+    return;
+  }
+
+  const response = await fetch(href);
+  if (!response.ok) throw new Error(t("downloadFailed"));
+  const blob = await response.blob();
+  const pickerOptions = {
+    suggestedName,
+    types: downloadPickerTypes(suggestedName, mimeType)
+  };
+  const handle = await window.showSaveFilePicker(pickerOptions);
+  const writable = await handle.createWritable();
+  await writable.write(blob);
+  await writable.close();
+}
+
+function fallbackAnchorDownload(href, suggestedName) {
   const link = document.createElement("a");
-  link.href = assetUrl(object.src);
-  link.download = downloadName(object);
+  link.href = href;
+  link.download = suggestedName;
   document.body.append(link);
   link.click();
   link.remove();
+}
+
+function downloadPickerTypes(name, mimeType) {
+  const extension = downloadExtension(name);
+  return [{
+    description: extension === ".psd" ? "Photoshop document" : "Image",
+    accept: {
+      [mimeType || "application/octet-stream"]: [extension]
+    }
+  }];
+}
+
+function mimeTypeForDownloadName(name) {
+  const extension = downloadExtension(name);
+  if (extension === ".jpg" || extension === ".jpeg") return "image/jpeg";
+  if (extension === ".webp") return "image/webp";
+  if (extension === ".gif") return "image/gif";
+  if (extension === ".psd") return "image/vnd.adobe.photoshop";
+  return "image/png";
+}
+
+function downloadExtension(name) {
+  const match = String(name || "").match(/(\.[a-z0-9]{2,5})$/i);
+  return match ? match[1].toLowerCase() : ".png";
 }
 
 function downloadName(object) {
   const name = String(object.name || "canvas-image").trim() || "canvas-image";
   const hasExt = /\.[a-z0-9]{2,5}$/i.test(name);
   return hasExt ? name : `${name}.png`;
+}
+
+function downloadStem(name) {
+  return String(name || "canvas-image")
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80) || "canvas-image";
 }
 
 async function resetSelectedLayerGroup() {
@@ -3586,6 +4303,28 @@ async function toggleSelectedLayerGroupLock() {
   }
   render();
   await patchLayerGroupMembersSequentially(members, () => ({ layerGroupLocked: nextLocked }));
+}
+
+async function moveSelectedLayerInGroup(direction) {
+  const groupId = selectedObjectLayerGroupId();
+  if (!groupId || !selectedId) return;
+  const members = layerGroupMembers(groupId);
+  const currentIndex = members.findIndex((member) => member.id === selectedId);
+  const nextIndex = currentIndex + (direction === "up" ? 1 : -1);
+  if (currentIndex < 0 || nextIndex < 0 || nextIndex >= members.length) return;
+
+  try {
+    const response = await fetch(apiPath(`/api/layer-groups/${encodeURIComponent(groupId)}/reorder`), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ objectId: selectedId, direction })
+    });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || `${labelAction(direction === "up" ? "layer-up" : "layer-down")} ${t("jobFailed")}`);
+    await loadState();
+  } catch (error) {
+    showToast(error?.message || t("jobFailed"));
+  }
 }
 
 async function patchLayerGroupMembersSequentially(members, patchForMember) {
@@ -3642,6 +4381,42 @@ function updateQuickEditPosition() {
       return { left, top, index, overlap: rectOverlapArea(rect, objectBox) };
     }).sort((a, b) => a.overlap - b.overlap || a.index - b.index);
 
+    quickEditComposer.style.transform = `translate(${candidates[0].left}px, ${candidates[0].top}px)`;
+    return;
+  }
+
+  if (quickEditAction === "expand") {
+    const preview = expandPreviewRect(object);
+    const previewTopLeft = worldToScreen(preview.x, preview.y);
+    const previewBottomRight = worldToScreen(preview.x + preview.width, preview.y + preview.height);
+    const previewCenter = (previewTopLeft.x + previewBottomRight.x) / 2;
+    const gap = 12;
+    const margin = 16;
+    const maxTop = Math.max(margin, boardRect.height - composerRect.height - 88);
+    const maxLeft = Math.max(margin, boardRect.width - composerRect.width - margin);
+    const previewBox = {
+      left: previewTopLeft.x,
+      top: previewTopLeft.y,
+      right: previewBottomRight.x,
+      bottom: previewBottomRight.y
+    };
+    const candidates = [
+      { left: previewBottomRight.x + gap, top: previewTopLeft.y },
+      { left: previewBottomRight.x + gap, top: previewBottomRight.y - composerRect.height },
+      { left: previewTopLeft.x - composerRect.width - gap, top: previewTopLeft.y },
+      { left: previewTopLeft.x - composerRect.width - gap, top: previewBottomRight.y - composerRect.height },
+      { left: previewCenter - composerRect.width / 2, top: previewBottomRight.y + gap }
+    ].map((candidate, index) => {
+      const left = clamp(candidate.left, margin, maxLeft);
+      const top = clamp(candidate.top, margin, maxTop);
+      const rect = {
+        left,
+        top,
+        right: left + composerRect.width,
+        bottom: top + composerRect.height
+      };
+      return { left, top, index, overlap: rectOverlapArea(rect, previewBox) };
+    }).sort((a, b) => a.overlap - b.overlap || a.index - b.index);
     quickEditComposer.style.transform = `translate(${candidates[0].left}px, ${candidates[0].top}px)`;
     return;
   }

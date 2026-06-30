@@ -24,6 +24,7 @@
     "setup:image-deps": "node ./bin/agent-canvas.mjs setup-image-deps",
     "setup:deps": "node ./bin/agent-canvas.mjs setup-deps",
     "install:personal": "node ./scripts/install-personal-plugin.mjs",
+    "install:dev-cache": "node ./scripts/link-dev-plugin-cache.mjs",
     "doctor:ocr": "node ./bin/agent-canvas.mjs doctor-ocr --json",
     "doctor:image-deps": "node ./bin/agent-canvas.mjs doctor-image-deps --json",
     "doctor:deps": "node ./bin/agent-canvas.mjs doctor-deps --json",
@@ -46,5 +47,9 @@
   "license": "MIT",
   "engines": {
     "node": ">=18.18"
+  },
+  "dependencies": {
+    "ag-psd": "^31.0.0",
+    "pngjs": "^7.0.0"
   }
 }

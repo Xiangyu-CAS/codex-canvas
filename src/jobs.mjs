@@ -13,13 +13,20 @@ import { recognizeTextLocal } from "./local-ocr.mjs";
 const execFileAsync = promisify(execFile);
 const jobs = new Map();
 const textRecognitionJobs = new Map();
-const supportedActions = new Set(["remove-bg", "quick-edit", "expand", "upscale", "multi-angles", "move-object", "edit-elements"]);
+const supportedActions = new Set(["remove-bg", "quick-edit", "expand", "edit-elements"]);
 const ignoredGeneratedImagePaths = new Map();
 const globalIgnoredGeneratedImageScope = "__global__";
 const outputPollMs = 1000;
 const jobTimeoutMs = 5 * 60_000;
 const backgroundCompletionTimeoutMs = 5 * 60_000;
 const chromaKeyColor = "#ff00ff";
+const quickEditAnnotationPromptSuffix = [
+  "",
+  "The attached image may include temporary user annotations drawn or typed on top of the source image.",
+  "Use those annotations as edit guidance and region references together with the user's request.",
+  "Treat annotation text as explicit edit instructions for the nearby marked region, not as text to preserve in the final image.",
+  "Do not keep annotation strokes, boxes, or label text in the final image. Remove the temporary marks and restore the edited areas naturally."
+].join("\n");
 
 function normalizeCanvasId(value) {
   const canvasId = typeof value === "string" ? value.trim() : "";
@@ -50,6 +57,13 @@ export async function createImageJob(projectDir, input, options = {}) {
     throw error;
   }
 
+  const quickEditAnnotations = action === "quick-edit"
+    ? await collectQuickEditAnnotations(projectDir, object, storeOptions)
+    : null;
+  const expandOptions = action === "expand"
+    ? normalizeExpandOptions(input.expand || input.options || {}, object)
+    : null;
+
   const id = `job_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
   const jobDir = path.join(jobsDirFor(projectDir, canvasId), id);
   const outputDir = path.join(jobDir, "outputs");
@@ -63,7 +77,13 @@ export async function createImageJob(projectDir, input, options = {}) {
     status: "queued",
     objectId: object.id,
     sourceObjectId: object.id,
+    sourceImagePath: imagePath,
     imagePath,
+    expandOptions,
+    expandInputPath: null,
+    quickEditAnnotations,
+    annotatedImagePath: null,
+    annotationManifestPath: null,
     prompt: typeof input.prompt === "string" ? input.prompt.trim().slice(0, 4000) : "",
     outputDir,
     logPath,
@@ -86,8 +106,8 @@ export async function createImageJob(projectDir, input, options = {}) {
     status: "running",
     name: actionLabel(action),
     sourceObjectId: object.id,
-    width: object.width,
-    height: object.height
+    width: expandOptions?.targetWidth || object.width,
+    height: expandOptions?.targetHeight || object.height
   }, storeOptions);
   job.placeholder = placeholder;
   job.placeholderId = placeholder.id;
@@ -284,14 +304,15 @@ async function runJob(projectDir, job, startedAtMs) {
   job.startedAt = new Date().toISOString();
   await fs.mkdir(job.outputDir, { recursive: true });
   await appendJobLog(job, `Agent-Canvas job started: ${job.action}`);
+  const codexInput = await prepareCodexInputForJob(job);
 
   const codexJob = await startCodexImageJob({
     projectDir,
     action: job.action,
-    imagePath: job.imagePath,
+    imagePath: codexInput.imagePath,
     outputDir: job.outputDir,
     logPath: job.logPath,
-    prompt: job.prompt
+    prompt: codexInput.prompt
   });
 
   await appendJobLog(job, `Codex child started: ${codexJob.executable}`);
@@ -560,6 +581,309 @@ function timeoutAfter(timeoutMs, onTimeout) {
   });
 }
 
+async function prepareCodexInputForJob(job) {
+  if (job.action === "expand") {
+    const inputsDir = path.join(path.dirname(job.outputDir), "inputs");
+    const expandInputPath = path.join(inputsDir, "expand-padded-input.png");
+    await fs.mkdir(inputsDir, { recursive: true });
+    const scriptPath = path.join(pluginRoot, "scripts", "prepare_expand_canvas.py");
+    await fs.access(scriptPath);
+    const args = [
+      scriptPath,
+      "--source", job.sourceImagePath || job.imagePath,
+      "--out", expandInputPath,
+      "--ratio", job.expandOptions?.ratio || "original",
+      "--scale", String(job.expandOptions?.scale || 1),
+      "--force"
+    ];
+    if (Number.isFinite(job.expandOptions?.placement?.x)) {
+      args.push("--source-left-ratio", String(job.expandOptions.placement.x));
+    }
+    if (Number.isFinite(job.expandOptions?.placement?.y)) {
+      args.push("--source-top-ratio", String(job.expandOptions.placement.y));
+    }
+    await runPython(args);
+    job.expandInputPath = expandInputPath;
+    await appendJobLog(job, `Expand padded input prepared: ${expandInputPath}`);
+    return {
+      imagePath: expandInputPath,
+      prompt: buildExpandPrompt(job)
+    };
+  }
+
+  if (job.action !== "quick-edit" || !job.quickEditAnnotations?.items?.length) {
+    return {
+      imagePath: job.imagePath,
+      prompt: job.prompt
+    };
+  }
+
+  const annotationsDir = path.join(path.dirname(job.outputDir), "inputs");
+  const manifestPath = path.join(annotationsDir, "quick-edit-annotations.json");
+  const annotatedImagePath = path.join(annotationsDir, "quick-edit-annotated.png");
+  await fs.mkdir(annotationsDir, { recursive: true });
+  await fs.writeFile(manifestPath, `${JSON.stringify(job.quickEditAnnotations, null, 2)}\n`);
+
+  const scriptPath = path.join(pluginRoot, "scripts", "compose_annotations.py");
+  await fs.access(scriptPath);
+  await runPython([
+    scriptPath,
+    "--source", job.sourceImagePath || job.imagePath,
+    "--annotations", manifestPath,
+    "--out", annotatedImagePath,
+    "--force"
+  ]);
+
+  job.annotationManifestPath = manifestPath;
+  job.annotatedImagePath = annotatedImagePath;
+  await appendJobLog(job, `Quick Edit annotations composed: ${annotatedImagePath}`);
+  return {
+    imagePath: annotatedImagePath,
+    prompt: appendQuickEditAnnotationSuffix(job.prompt, job.quickEditAnnotations)
+  };
+}
+
+function normalizeExpandOptions(input, object) {
+  const ratio = normalizeExpandRatio(input?.ratio);
+  const preset = normalizeExpandPreset(input?.preset);
+  const scale = normalizeExpandScale(input?.scale);
+  const sourceWidth = Math.max(1, Math.round(Number.isFinite(object?.naturalWidth) ? object.naturalWidth : object?.width || 1));
+  const sourceHeight = Math.max(1, Math.round(Number.isFinite(object?.naturalHeight) ? object.naturalHeight : object?.height || 1));
+  const ratioValue = ratio === "original" ? sourceWidth / sourceHeight : ratioToNumber(ratio);
+  const base = expandTargetSize(sourceWidth, sourceHeight, ratioValue, scale);
+  const displayScale = Math.min(
+    (Number.isFinite(object?.width) ? object.width : sourceWidth) / sourceWidth,
+    (Number.isFinite(object?.height) ? object.height : sourceHeight) / sourceHeight
+  );
+  return {
+    ratio,
+    preset,
+    scale,
+    placement: normalizeExpandPlacement(input?.placement),
+    sourceWidth,
+    sourceHeight,
+    targetWidth: Math.max(1, Math.round(base.width * displayScale)),
+    targetHeight: Math.max(1, Math.round(base.height * displayScale)),
+    naturalTargetWidth: base.width,
+    naturalTargetHeight: base.height
+  };
+}
+
+function normalizeExpandPlacement(value) {
+  if (!value || typeof value !== "object") return null;
+  const x = clampUnitNumber(value.x);
+  const y = clampUnitNumber(value.y);
+  const width = clampUnitNumber(value.width);
+  const height = clampUnitNumber(value.height);
+  if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null;
+  return {
+    x: Math.min(x, Math.max(0, 1 - width)),
+    y: Math.min(y, Math.max(0, 1 - height)),
+    width,
+    height
+  };
+}
+
+function clampUnitNumber(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return NaN;
+  return Math.min(1, Math.max(0, number));
+}
+
+function normalizeExpandRatio(value) {
+  const ratio = String(value || "original").trim().toLowerCase();
+  const allowed = new Set(["original", "1:1", "3:4", "2:3", "9:16", "4:3", "3:2", "16:9", "4:5", "5:4"]);
+  return allowed.has(ratio) ? ratio : "original";
+}
+
+function normalizeExpandPreset(value) {
+  const preset = String(value || "general").trim().toLowerCase();
+  return ["general", "photo", "poster", "product"].includes(preset) ? preset : "general";
+}
+
+function normalizeExpandScale(value) {
+  const normalized = String(value || "1").trim().toLowerCase().replace(/x$/, "");
+  const scale = Number(normalized);
+  if (!Number.isFinite(scale)) return 1;
+  return Math.min(4, Math.max(1, scale));
+}
+
+function ratioToNumber(ratio) {
+  const [left, right] = String(ratio).split(":").map(Number);
+  if (!Number.isFinite(left) || !Number.isFinite(right) || left <= 0 || right <= 0) return 1;
+  return left / right;
+}
+
+function expandTargetSize(sourceWidth, sourceHeight, ratio, scale) {
+  let width = sourceWidth;
+  let height = sourceHeight;
+  const currentRatio = width / Math.max(1, height);
+  if (currentRatio < ratio) {
+    width = height * ratio;
+  } else if (currentRatio > ratio) {
+    height = width / ratio;
+  }
+  return {
+    width: Math.max(sourceWidth, Math.ceil(width * scale)),
+    height: Math.max(sourceHeight, Math.ceil(height * scale))
+  };
+}
+
+function buildExpandPrompt(job) {
+  const options = job.expandOptions || {};
+  const presetText = options.preset && options.preset !== "general"
+    ? `Preset: ${options.preset}.`
+    : "Preset: general.";
+  const instruction = job.prompt || "Expand the image naturally beyond its current frame.";
+  return [
+    instruction,
+    "",
+    "The attached image is a padded outpaint input prepared by Agent-Canvas.",
+    "The original source image is pasted inside the padded canvas at the user-chosen position and must remain visually unchanged.",
+    "Fill and complete the padded surrounding area so the final image becomes one coherent full-frame image.",
+    "Do not leave blurred padding, blank margins, checkerboards, or artificial borders in the final output.",
+    "Preserve the original subject identity, visible text, perspective, lighting, colors, and design intent.",
+    `Target ratio: ${options.ratio || "original"}. Scale: ${options.scale || 1}x. ${presetText}`,
+    "",
+    `Save the final expanded PNG at the requested output directory.`
+  ].join("\n");
+}
+
+function appendQuickEditAnnotationSuffix(prompt, annotations = null) {
+  const base = typeof prompt === "string" ? prompt.trim() : "";
+  const textSummary = quickEditAnnotationTextSummary(annotations);
+  return `${base || "Improve the image according to the user's selected Quick Edit request."}${quickEditAnnotationPromptSuffix}${textSummary}`;
+}
+
+function quickEditAnnotationTextSummary(annotations) {
+  const items = Array.isArray(annotations?.items) ? annotations.items : [];
+  const textItems = items
+    .filter((item) => item?.type === "text" && typeof item.text === "string" && item.text.trim())
+    .map((item) => item.text.trim())
+    .slice(0, 8);
+  if (!textItems.length) return "";
+
+  return [
+    "",
+    "",
+    "Text annotations captured by Agent-Canvas:",
+    ...textItems.map((text, index) => `${index + 1}. ${text}`)
+  ].join("\n");
+}
+
+async function collectQuickEditAnnotations(projectDir, imageObject, options = {}) {
+  const state = await readState(projectDir, options);
+  const imageRect = objectRect(imageObject);
+  const sourceSize = sourceSizeForAnnotations(imageObject);
+  const items = [];
+
+  for (const object of state.objects) {
+    if (!object || object.id === imageObject.id) continue;
+    const type = object.type || "image";
+    if (type !== "drawing" && type !== "text") continue;
+    if (!rectsIntersect(imageRect, objectRect(object))) continue;
+
+    if (type === "drawing") {
+      const drawing = normalizeDrawingAnnotation(object, imageObject, sourceSize);
+      if (drawing) items.push(drawing);
+      continue;
+    }
+
+    const text = normalizeTextAnnotation(object, imageObject, sourceSize);
+    if (text) items.push(text);
+  }
+
+  return items.length > 0
+    ? {
+      sourceObjectId: imageObject.id,
+      sourceSize,
+      items
+    }
+    : null;
+}
+
+function sourceSizeForAnnotations(object) {
+  return {
+    width: Math.max(1, Math.round(Number.isFinite(object.naturalWidth) ? object.naturalWidth : object.width || 1)),
+    height: Math.max(1, Math.round(Number.isFinite(object.naturalHeight) ? object.naturalHeight : object.height || 1))
+  };
+}
+
+function normalizeDrawingAnnotation(object, imageObject, sourceSize) {
+  const points = Array.isArray(object.points)
+    ? object.points
+      .filter((point) => Number.isFinite(point?.x) && Number.isFinite(point?.y))
+      .map((point) => canvasPointToSourcePoint({
+        x: object.x + point.x,
+        y: object.y + point.y
+      }, imageObject, sourceSize))
+    : [];
+  const visiblePoints = points.filter((point) => point.x >= 0 && point.x <= sourceSize.width && point.y >= 0 && point.y <= sourceSize.height);
+  if (points.length < 2 || visiblePoints.length === 0) return null;
+
+  const scale = annotationScale(imageObject, sourceSize);
+  return {
+    id: object.id,
+    type: "drawing",
+    stroke: object.stroke || "#202124",
+    strokeWidth: Math.max(1, Math.round((Number.isFinite(object.strokeWidth) ? object.strokeWidth : 4) * scale)),
+    points
+  };
+}
+
+function normalizeTextAnnotation(object, imageObject, sourceSize) {
+  const text = String(object.text || "").trim();
+  if (!text) return null;
+  const topLeft = canvasPointToSourcePoint({ x: object.x, y: object.y }, imageObject, sourceSize);
+  const bottomRight = canvasPointToSourcePoint({ x: object.x + object.width, y: object.y + object.height }, imageObject, sourceSize);
+  const width = Math.max(1, Math.round(bottomRight.x - topLeft.x));
+  const height = Math.max(1, Math.round(bottomRight.y - topLeft.y));
+  const scale = annotationScale(imageObject, sourceSize);
+
+  return {
+    id: object.id,
+    type: "text",
+    text,
+    x: Math.round(topLeft.x),
+    y: Math.round(topLeft.y),
+    width,
+    height,
+    fontSize: Math.max(6, Math.round((Number.isFinite(object.fontSize) ? object.fontSize : 28) * scale)),
+    color: object.color || "#202124"
+  };
+}
+
+function canvasPointToSourcePoint(point, imageObject, sourceSize) {
+  const scaleX = sourceSize.width / Math.max(1, imageObject.width || 1);
+  const scaleY = sourceSize.height / Math.max(1, imageObject.height || 1);
+  return {
+    x: Math.round((point.x - imageObject.x) * scaleX),
+    y: Math.round((point.y - imageObject.y) * scaleY)
+  };
+}
+
+function annotationScale(imageObject, sourceSize) {
+  const scaleX = sourceSize.width / Math.max(1, imageObject.width || 1);
+  const scaleY = sourceSize.height / Math.max(1, imageObject.height || 1);
+  return (scaleX + scaleY) / 2;
+}
+
+function objectRect(object) {
+  return {
+    x: Number.isFinite(object.x) ? object.x : 0,
+    y: Number.isFinite(object.y) ? object.y : 0,
+    width: Number.isFinite(object.width) ? Math.max(1, object.width) : 1,
+    height: Number.isFinite(object.height) ? Math.max(1, object.height) : 1
+  };
+}
+
+function rectsIntersect(a, b) {
+  return a.x < b.x + b.width
+    && a.x + a.width > b.x
+    && a.y < b.y + b.height
+    && a.y + a.height > b.y;
+}
+
 async function collectAndPlaceResult(projectDir, job, startedAtMs, { final, detectedImagePath = null }) {
   if (job.status === "done") return true;
 
@@ -645,8 +969,7 @@ async function splitElementLayers(job, segmentationPath) {
   const manifestPath = path.join(layersDir, "elements-manifest.json");
   await fs.mkdir(layersDir, { recursive: true });
   const existingLayer = await findOutputImage(layersDir, 0);
-  const existingManifest = await readJsonFile(manifestPath);
-  if (existingLayer && existingManifest?.backgroundCompleted && await isStableFile(existingLayer)) return existingLayer;
+  if (existingLayer && await isStableFile(existingLayer)) return existingLayer;
 
   const scriptPath = path.join(pluginRoot, "scripts", "split_elements.py");
   await fs.access(scriptPath);
@@ -658,24 +981,31 @@ async function splitElementLayers(job, segmentationPath) {
     "--out-dir", layersDir,
     "--max-layers", "24",
     "--palette-size", "32",
+    "--boundary-trim", "2",
+    "--boundary-trim-margin", "16",
+    "--boundary-flood", "8",
+    "--boundary-flood-color-distance", "30",
+    "--mask-grow", "6",
+    "--mask-grow-color-distance", "8",
     "--force"
   ]);
 
-  let manifest = await readJsonFile(manifestPath);
-  if (manifest) {
-    manifest = await completeElementBackground(job, manifest, layersDir);
-  }
+  const manifest = await readJsonFile(manifestPath);
   const firstLayer = await findOutputImage(layersDir, 0);
   if (!firstLayer) throw new Error("Edit Elements did not produce any transparent PNG layers.");
   if (!await isPngRgba(firstLayer)) throw new Error("Edit Elements did not produce four-channel RGBA PNG layers.");
-  await appendJobLog(job, `Edit Elements alpha layers verified: ${manifest?.exportedLayers || "unknown"} layer(s) in ${layersDir}`);
+  await appendJobLog(job, `Edit Elements alpha layers verified: ${manifest?.exportedLayers || "unknown"} layer(s) in ${layersDir}; background completion will continue after placement.`);
   return firstLayer;
 }
 
-async function completeElementBackground(job, manifest, layersDir) {
+async function completeElementBackground(job, manifest, layersDir, backgroundObject) {
   const backgroundLayer = (manifest.layers || []).find((layer) => layer?.kind === "background" && layer.path);
   if (!backgroundLayer) {
     await appendJobLog(job, "Edit Elements did not produce a background layer to complete.");
+    return manifest;
+  }
+  if (!backgroundObject?.assetPath) {
+    await appendJobLog(job, "Edit Elements background object has no local asset path; skipping background completion replacement.");
     return manifest;
   }
 
@@ -723,6 +1053,7 @@ async function completeElementBackground(job, manifest, layersDir) {
     await rememberGeneratedImages(startedAtMs, job);
     await prepareCompletedBackground(job.imagePath, completedPath, backgroundPath);
     if (!await isPngRgba(backgroundPath)) throw new Error("Completed Edit Elements background is not a four-channel RGBA PNG.");
+    await fs.copyFile(backgroundPath, backgroundObject.assetPath);
 
     const width = Number(manifest?.sourceSize?.width) || 1;
     const height = Number(manifest?.sourceSize?.height) || 1;
@@ -739,6 +1070,10 @@ async function completeElementBackground(job, manifest, layersDir) {
       ...(manifest.layers || []).filter((layer) => layer !== backgroundLayer)
     ];
     await fs.writeFile(path.join(layersDir, "elements-manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+    await updateObject(job.projectDir, backgroundObject.id, {
+      assetVersion: Date.now(),
+      layerGroupBackgroundStatus: "ready"
+    }, { canvasId: job.canvasId || null });
     await appendJobLog(job, `Completed Edit Elements background integrated: ${backgroundPath}`);
     return manifest;
   } finally {
@@ -979,6 +1314,8 @@ function publicJob(job) {
     durationMs: job.durationMs,
     outputDetectedAt: job.outputDetectedAt,
     detectedOutputPath: job.detectedOutputPath,
+    expandOptions: job.expandOptions || null,
+    expandInputPath: job.expandInputPath || null,
     textInventoryPath: job.textInventoryPath,
     codexSessionId: job.codexSessionId,
     imported: job.imported,
@@ -1034,9 +1371,6 @@ async function requireImageObject(projectDir, objectId, options = {}) {
 function jobPrompt(job) {
   if (job.action === "quick-edit") return `Canvas Quick Edit: ${job.prompt || "edited image"}`;
   if (job.action === "expand") return `Canvas Expand: ${job.prompt || "expanded image"}`;
-  if (job.action === "upscale") return "Canvas Upscale result";
-  if (job.action === "multi-angles") return "Canvas Multi-Angles result";
-  if (job.action === "move-object") return `Canvas Move Object: ${job.prompt || "moved object"}`;
   if (job.action === "edit-text") return "Canvas Edit Text result";
   if (job.action === "edit-elements") return "Canvas Edit Elements layer";
   if (job.action === "remove-bg") return "Canvas Remove BG result";
@@ -1075,9 +1409,6 @@ function buildEditTextPrompt(changes) {
 function actionLabel(action) {
   if (action === "quick-edit") return "Quick Edit";
   if (action === "expand") return "Expand";
-  if (action === "upscale") return "Upscale";
-  if (action === "multi-angles") return "Multi-Angles";
-  if (action === "move-object") return "Move Object";
   if (action === "edit-text") return "Edit Text";
   if (action === "edit-elements") return "Edit Elements";
   if (action === "remove-bg") return "Remove BG";
@@ -1149,9 +1480,9 @@ async function placeImportedElementLayers(projectDir, job) {
       layerGroupId: groupId,
       layerGroupName: groupName,
       layerGroupSourceObjectId: job.sourceObjectId,
-      layerGroupIndex: Number.isFinite(layer?.index) ? layer.index : order + 1,
+      layerGroupIndex: layerGroupIndexFor(layer, order),
       layerGroupKind: layer?.kind || "object",
-      layerGroupLocked: true,
+      layerGroupLocked: false,
       layerGroupOriginalX: job.placeholder.x,
       layerGroupOriginalY: job.placeholder.y,
       layerGroupOriginalWidth: job.placeholder.width,
@@ -1172,6 +1503,9 @@ async function placeImportedElementLayers(projectDir, job) {
         patch.layerGroupOriginalLayerHeight = patch.height;
       }
     }
+    if (layer?.kind === "background") {
+      patch.layerGroupBackgroundStatus = manifest?.backgroundCompleted ? "ready" : "filling";
+    }
     positioned.push(await updateObject(projectDir, imported.id, patch, storeOptions));
   }
 
@@ -1180,6 +1514,27 @@ async function placeImportedElementLayers(projectDir, job) {
     await deleteObject(projectDir, job.placeholderId, storeOptions).catch(() => {});
   }
   await reorderLayerGroupObjects(projectDir, storeOptions, groupId);
+  const backgroundObject = positioned.find((object) => object.layerGroupKind === "background");
+  if (backgroundObject && !manifest?.backgroundCompleted) {
+    startElementBackgroundCompletion(projectDir, job, manifest, backgroundObject);
+  }
+}
+
+function layerGroupIndexFor(layer, importedOrder) {
+  if (layer?.kind === "background") return 0;
+  return Number.isFinite(layer?.index) && layer.index >= 1
+    ? Math.round(layer.index)
+    : importedOrder + 1;
+}
+
+function startElementBackgroundCompletion(projectDir, job, manifest, backgroundObject) {
+  const layersDir = path.join(job.outputDir, "elements");
+  completeElementBackground(job, manifest, layersDir, backgroundObject).catch(async (error) => {
+    await appendJobLog(job, `Edit Elements background completion failed after layers were placed: ${error?.message || String(error)}`);
+    await updateObject(projectDir, backgroundObject.id, {
+      layerGroupBackgroundStatus: "failed"
+    }, { canvasId: job.canvasId || null }).catch(() => {});
+  });
 }
 
 export async function placeImportedElementLayersForTest(projectDir, job) {

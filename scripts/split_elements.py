@@ -43,7 +43,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-area-ratio", type=float, default=0.00035, help="Minimum region area as a ratio of image area.")
     parser.add_argument("--min-area-px", type=int, default=48, help="Absolute minimum region area in pixels.")
     parser.add_argument("--pad", type=int, default=2, help="Transparent padding around cropped layer bounds.")
-    parser.add_argument("--edge-feather", type=float, default=0.35, help="Mask edge feather radius in pixels.")
+    parser.add_argument("--edge-feather", type=float, default=0, help="Mask edge feather radius in pixels.")
+    parser.add_argument("--boundary-trim", type=int, default=2, help="Trim likely background contamination from this many pixels inside object boundaries.")
+    parser.add_argument("--boundary-trim-margin", type=float, default=16, help="Minimum RGB-distance advantage for outside color before trimming boundary pixels.")
+    parser.add_argument("--boundary-flood", type=int, default=0, help="Flood-fill likely outside-color contamination this many pixels inward from object boundaries.")
+    parser.add_argument("--boundary-flood-color-distance", type=float, default=30, help="Maximum local RGB distance to nearby outside pixels for boundary flood trimming.")
+    parser.add_argument("--mask-grow", type=int, default=2, help="Grow foreground masks by this many pixels before extracting layers.")
+    parser.add_argument("--mask-grow-color-distance", type=float, default=86, help="Maximum local RGB distance for accepting grown edge pixels; 0 disables color gating.")
     parser.add_argument("--color-merge-distance", type=float, default=48, help="Global RGB distance for merging generated near-colors into one mask color.")
     parser.add_argument("--component-merge-gap-ratio", type=float, default=0.035, help="Auto gap threshold, as a ratio of max image dimension, for merging nearby disconnected same-color components.")
     parser.add_argument("--component-merge-gap-px", type=int, default=0, help="Override pixel gap threshold for merging nearby disconnected same-color components; 0 means auto.")
@@ -76,6 +82,18 @@ def validate_args(args: argparse.Namespace) -> None:
         die("--pad must be between 0 and 128.")
     if args.edge_feather < 0 or args.edge_feather > 8:
         die("--edge-feather must be between 0 and 8.")
+    if args.boundary_trim < 0 or args.boundary_trim > 16:
+        die("--boundary-trim must be between 0 and 16.")
+    if args.boundary_trim_margin < 0 or args.boundary_trim_margin > 128:
+        die("--boundary-trim-margin must be between 0 and 128.")
+    if args.boundary_flood < 0 or args.boundary_flood > 32:
+        die("--boundary-flood must be between 0 and 32.")
+    if args.boundary_flood_color_distance < 0 or args.boundary_flood_color_distance > 255:
+        die("--boundary-flood-color-distance must be between 0 and 255.")
+    if args.mask_grow < 0 or args.mask_grow > 64:
+        die("--mask-grow must be between 0 and 64.")
+    if args.mask_grow_color_distance < 0 or args.mask_grow_color_distance > 255:
+        die("--mask-grow-color-distance must be between 0 and 255.")
     if args.color_merge_distance < 0 or args.color_merge_distance > 160:
         die("--color-merge-distance must be between 0 and 160.")
     if args.component_merge_gap_ratio < 0 or args.component_merge_gap_ratio > 0.25:
@@ -124,6 +142,15 @@ def region_bounds(mask):
     return int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1
 
 
+def expand_bbox(bbox: tuple[int, int, int, int], width: int, height: int, pad: int) -> tuple[int, int, int, int]:
+    return (
+        max(0, bbox[0] - pad),
+        max(0, bbox[1] - pad),
+        min(width, bbox[2] + pad),
+        min(height, bbox[3] + pad),
+    )
+
+
 def bbox_area(bbox: tuple[int, int, int, int]) -> int:
     return max(0, bbox[2] - bbox[0]) * max(0, bbox[3] - bbox[1])
 
@@ -149,6 +176,28 @@ def bbox_gap(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> int:
     horizontal = max(0, max(a[0], b[0]) - min(a[2], b[2]))
     vertical = max(0, max(a[1], b[1]) - min(a[3], b[3]))
     return max(horizontal, vertical)
+
+
+def is_thin_artifact(area: int, bbox: tuple[int, int, int, int], total_area: int) -> bool:
+    width = max(1, bbox[2] - bbox[0])
+    height = max(1, bbox[3] - bbox[1])
+    shortest = min(width, height)
+    longest = max(width, height)
+    fill_ratio = area / max(1, width * height)
+    small_area = area < max(768, int(total_area * 0.004))
+    return small_area and (shortest <= 3 or (longest / shortest >= 18 and fill_ratio < 0.05))
+
+
+def is_thin_component_cluster(components: list[dict[str, Any]], total_area: int) -> bool:
+    if not components:
+        return False
+    area = sum(int(component.get("area", 0)) for component in components)
+    if area >= max(768, int(total_area * 0.004)):
+        return False
+    return all(
+        is_thin_artifact(int(component.get("area", 0)), tuple(component.get("bbox", (0, 0, 0, 0))), total_area)
+        for component in components
+    )
 
 
 def merge_region_pair(target: dict[str, Any], source: dict[str, Any]) -> None:
@@ -599,6 +648,276 @@ def maybe_fill_dense_object_holes(region: dict[str, Any], total_area: int) -> No
     region["filledHolePixels"] += added
 
 
+def grow_mask(mask, radius: int):
+    """Dilate a binary mask to recover pixels lost by underfilled segmentation edges."""
+
+    np, Image, ImageFilter = load_dependencies()
+    if radius <= 0:
+        return mask
+    alpha = Image.fromarray(mask.astype("uint8") * 255)
+    grown = alpha.filter(ImageFilter.MaxFilter(radius * 2 + 1))
+    return np.array(grown) > 0
+
+
+def nearest_color_distance(source_rgb, reference_mask, candidates, radius: int):
+    np, _, _ = load_dependencies()
+    best = np.full(reference_mask.shape, np.inf, dtype=np.float32)
+    source = source_rgb.astype(np.int32)
+    height, width = reference_mask.shape
+    directions = (
+        (-1, 0), (1, 0), (0, -1), (0, 1),
+        (-1, -1), (1, -1), (-1, 1), (1, 1),
+    )
+    for step in range(1, max(1, radius) + 1):
+        for unit_dx, unit_dy in directions:
+            dx = unit_dx * step
+            dy = unit_dy * step
+            neighbor = np.zeros(reference_mask.shape, dtype=bool)
+            neighbor_rgb = np.zeros(source.shape, dtype=np.int32)
+
+            if dx >= 0:
+                dst_x = slice(dx, width)
+                src_x = slice(0, width - dx)
+            else:
+                dst_x = slice(0, width + dx)
+                src_x = slice(-dx, width)
+            if dy >= 0:
+                dst_y = slice(dy, height)
+                src_y = slice(0, height - dy)
+            else:
+                dst_y = slice(0, height + dy)
+                src_y = slice(-dy, height)
+
+            neighbor[dst_y, dst_x] = reference_mask[src_y, src_x]
+            if not neighbor.any():
+                continue
+            neighbor_rgb[dst_y, dst_x] = source[src_y, src_x]
+            active = candidates & neighbor
+            if not active.any():
+                continue
+            diff = source - neighbor_rgb
+            distance = np.sqrt(np.sum(diff * diff, axis=2))
+            best[active] = np.minimum(best[active], distance[active])
+
+    return best
+
+
+def color_continuity_mask(source_rgb, anchor_mask, candidates, max_distance: float, radius: int):
+    if max_distance <= 0:
+        return candidates
+    best = nearest_color_distance(source_rgb, anchor_mask, candidates, radius)
+    return candidates & (best <= max_distance)
+
+
+def trim_boundary_contamination(regions: list[dict[str, Any]], source_rgba, radius: int, margin: float) -> None:
+    """Remove boundary pixels that match nearby outside colors better than object interior.
+
+    This targets common segmentation-map halo: the generated mask slightly includes
+    background or adjacent-object pixels along an object's edge. The test is local and
+    content-agnostic, so it does not depend on object names or poster-specific colors.
+    """
+
+    np, _, _ = load_dependencies()
+    if radius <= 0 or not regions:
+        return
+
+    source_rgb_full = np.array(source_rgba.convert("RGB"))
+    source_alpha_full = np.array(source_rgba.getchannel("A")) > 0
+    full_width, full_height = source_rgba.size
+    for region in regions:
+        bbox = region["bbox"]
+        if not bbox:
+            continue
+        left, top, right, bottom = expand_bbox(tuple(bbox), full_width, full_height, radius + 4)
+        mask = region["mask"][top:bottom, left:right]
+        area = int(mask.sum())
+        if area <= 0:
+            continue
+        source_rgb = source_rgb_full[top:bottom, left:right]
+        source_alpha = source_alpha_full[top:bottom, left:right]
+
+        boundary = mask & grow_mask(~mask, radius)
+        if not boundary.any():
+            continue
+        core = mask & ~grow_mask(~mask, radius + 2)
+        if int(core.sum()) < max(32, int(area * 0.08)):
+            continue
+        outside = grow_mask(mask, radius + 2) & ~mask & source_alpha
+        if not outside.any():
+            continue
+
+        outside_distance = nearest_color_distance(source_rgb, outside, boundary, radius + 2)
+        inside_distance = nearest_color_distance(source_rgb, core, boundary, radius + 2)
+        trim = boundary & np.isfinite(outside_distance) & np.isfinite(inside_distance)
+        trim &= (outside_distance + margin < inside_distance)
+        trim &= outside_distance <= max(10.0, margin * 2.5)
+        trim_pixels = int(trim.sum())
+        if trim_pixels <= 0:
+            continue
+        if trim_pixels > max(int(area * 0.12), 4096):
+            continue
+
+        clean_crop = mask & ~trim
+        clean_area = int(clean_crop.sum())
+        if clean_area < max(16, int(area * 0.82)):
+            continue
+        clean = region["mask"].copy()
+        clean[top:bottom, left:right] = clean_crop
+        new_bbox = region_bounds(clean)
+        if not new_bbox:
+            continue
+        region["mask"] = clean
+        region["area"] = clean_area
+        region["bbox"] = new_bbox
+        region["boundaryTrimPixels"] = trim_pixels
+
+
+def should_flood_trim_region(region: dict[str, Any], total_area: int) -> bool:
+    bbox = region["bbox"]
+    width = max(1, bbox[2] - bbox[0])
+    height = max(1, bbox[3] - bbox[1])
+    shortest = min(width, height)
+    longest = max(width, height)
+    box_area = max(1, width * height)
+    fill_ratio = int(region["area"]) / box_area
+    aspect = longest / shortest
+
+    if box_area < max(2048, int(total_area * 0.004)):
+        return False
+    if fill_ratio < 0.24:
+        return False
+    if fill_ratio < 0.78 and aspect >= 2.35:
+        return False
+    if fill_ratio < 0.90 and aspect >= 4.0:
+        return False
+    if fill_ratio < 0.44 and aspect >= 2.6:
+        return False
+    if shortest < 64 and aspect >= 2.0:
+        return False
+    return True
+
+
+def flood_trim_boundary_contamination(regions: list[dict[str, Any]], source_rgba, radius: int, color_distance_threshold: float, total_area: int) -> None:
+    """Flood inward from object edges through pixels that look like nearby outside.
+
+    This catches wider halo bands than pointwise boundary trimming while stopping at
+    local color discontinuities. It is intentionally limited to an inner boundary band
+    so true object interiors and printed details are not reconsidered globally.
+    """
+
+    np, _, _ = load_dependencies()
+    if radius <= 0 or color_distance_threshold <= 0 or not regions:
+        return
+
+    source_rgb_full = np.array(source_rgba.convert("RGB"))
+    source_alpha_full = np.array(source_rgba.getchannel("A")) > 0
+    full_width, full_height = source_rgba.size
+    for region in regions:
+        if not should_flood_trim_region(region, total_area):
+            region["boundaryFloodSkipped"] = True
+            continue
+        bbox = region["bbox"]
+        if not bbox:
+            continue
+        left, top, right, bottom = expand_bbox(tuple(bbox), full_width, full_height, radius + 4)
+        mask = region["mask"][top:bottom, left:right]
+        area = int(mask.sum())
+        if area <= 0:
+            continue
+        source_rgb = source_rgb_full[top:bottom, left:right]
+        source_alpha = source_alpha_full[top:bottom, left:right]
+        band = mask & grow_mask(~mask, radius)
+        if not band.any():
+            continue
+        outside = grow_mask(mask, 1) & ~mask & source_alpha
+        if not outside.any():
+            continue
+
+        outside_distance = nearest_color_distance(source_rgb, outside, band, max(1, radius))
+        traversable = band & np.isfinite(outside_distance) & (outside_distance <= color_distance_threshold)
+        if not traversable.any():
+            continue
+
+        trim = traversable & grow_mask(outside, 1)
+        previous_count = -1
+        for _ in range(radius):
+            count = int(trim.sum())
+            if count == previous_count:
+                break
+            previous_count = count
+            trim = traversable & grow_mask(trim, 1)
+
+        trim_pixels = int(trim.sum())
+        if trim_pixels <= 0:
+            continue
+        if trim_pixels > max(int(area * 0.16), 8192):
+            continue
+        clean_crop = mask & ~trim
+        clean_area = int(clean_crop.sum())
+        if clean_area < max(16, int(area * 0.78)):
+            continue
+        clean = region["mask"].copy()
+        clean[top:bottom, left:right] = clean_crop
+        new_bbox = region_bounds(clean)
+        if not new_bbox:
+            continue
+        region["mask"] = clean
+        region["area"] = clean_area
+        region["bbox"] = new_bbox
+        region["boundaryFloodTrimPixels"] = trim_pixels
+
+
+def grow_foreground_region_masks(regions: list[dict[str, Any]], radius: int, source_rgba, color_distance_threshold: float) -> None:
+    """Add a small safety band to foreground masks without case-specific logic.
+
+    Generated segmentation maps are often slightly inside the real object boundary.
+    Growing only foreground masks moves those edge pixels back into editable layers
+    instead of leaving them stranded in the residual background. Original mask pixels
+    keep priority. The grown safety band is allowed to overlap when two objects both
+    reach the same previously-unassigned edge pixel; those pixels come from the same
+    source image, so stacked reconstruction remains stable while dragged-out elements
+    keep less-eroded edges.
+    """
+
+    np, _, _ = load_dependencies()
+    if radius <= 0 or not regions:
+        return
+
+    source_rgb = np.array(source_rgba.convert("RGB"))
+    original_masks = [region["mask"].copy() for region in regions]
+    original_union = np.zeros(original_masks[0].shape, dtype=bool)
+    for mask in original_masks:
+        original_union |= mask
+
+    proposals = []
+    rejected = []
+    for mask in original_masks:
+        candidates = grow_mask(mask, radius) & ~original_union
+        boundary = mask & grow_mask(~mask, 1)
+        accepted = color_continuity_mask(source_rgb, boundary, candidates, color_distance_threshold, radius)
+        proposals.append(accepted)
+        rejected.append(int(candidates.sum()) - int(accepted.sum()))
+
+    proposal_count = np.zeros(original_masks[0].shape, dtype="uint16")
+    for proposal in proposals:
+        proposal_count += proposal.astype("uint16")
+
+    shared = proposal_count > 1
+    shared_pixels = int(shared.sum())
+    for region, original_mask, proposal, rejected_pixels in zip(regions, original_masks, proposals, rejected):
+        clean = original_mask | proposal
+        grown_pixels = int(proposal.sum())
+        if grown_pixels <= 0:
+            continue
+        region["mask"] = clean
+        region["area"] = int(clean.sum())
+        region["bbox"] = region_bounds(clean)
+        region["maskGrowPixels"] = int(grown_pixels)
+        region["maskGrowSharedPixels"] = int((proposal & shared).sum())
+        region["maskGrowConflictPixels"] = int(shared_pixels)
+        region["maskGrowRejectedPixels"] = int(rejected_pixels)
+
+
 def safe_layer_name(index: int, color: tuple[int, int, int] | None) -> str:
     if color is None:
         return f"element-{index:02d}-background.png"
@@ -743,6 +1062,10 @@ def split_elements(args: argparse.Namespace) -> dict[str, Any]:
                 clean_area = int(cluster["area"])
                 if clean_area < min_area:
                     continue
+                if is_thin_artifact(clean_area, tuple(cluster["bbox"]), total_area):
+                    continue
+                if is_thin_component_cluster(cluster.get("components", []), total_area):
+                    continue
                 regions.append({
                     "color": color,
                     "area": clean_area,
@@ -758,6 +1081,8 @@ def split_elements(args: argparse.Namespace) -> dict[str, Any]:
             if clean_area < min_area:
                 continue
             bbox = tuple(component["bbox"])
+            if is_thin_artifact(clean_area, bbox, total_area):
+                continue
             regions.append({
                 "color": color,
                 "area": clean_area,
@@ -779,8 +1104,11 @@ def split_elements(args: argparse.Namespace) -> dict[str, Any]:
         for region in regions:
             maybe_fill_dense_object_holes(region, total_area)
 
+    trim_boundary_contamination(regions, source_rgba, args.boundary_trim, args.boundary_trim_margin)
+    flood_trim_boundary_contamination(regions, source_rgba, args.boundary_flood, args.boundary_flood_color_distance, total_area)
     regions.sort(key=lambda item: (-item["area"], item["bbox"][1], item["bbox"][0]))
     selected = regions[:args.max_layers]
+    grow_foreground_region_masks(selected, args.mask_grow, source_rgba, args.mask_grow_color_distance)
     layers = []
     for index, region in enumerate(selected, 1):
         output_path = out_dir / safe_layer_name(index, region["color"])
@@ -792,6 +1120,13 @@ def split_elements(args: argparse.Namespace) -> dict[str, Any]:
             "mergedColors": region.get("mergedColors", []),
             "mergedAreas": region.get("mergedAreas", []),
             "filledHolePixels": region.get("filledHolePixels", 0),
+            "boundaryTrimPixels": region.get("boundaryTrimPixels", 0),
+            "boundaryFloodTrimPixels": region.get("boundaryFloodTrimPixels", 0),
+            "boundaryFloodSkipped": region.get("boundaryFloodSkipped", False),
+            "maskGrowPixels": region.get("maskGrowPixels", 0),
+            "maskGrowSharedPixels": region.get("maskGrowSharedPixels", 0),
+            "maskGrowConflictPixels": region.get("maskGrowConflictPixels", 0),
+            "maskGrowRejectedPixels": region.get("maskGrowRejectedPixels", 0),
             "areaPixels": region["area"],
             "components": region["components"][:64],
         })
@@ -830,8 +1165,14 @@ def split_elements(args: argparse.Namespace) -> dict[str, Any]:
         "paletteSize": args.palette_size,
         "colorMergeDistance": args.color_merge_distance,
         "componentMergeGapPixels": component_merge_gap_px,
+        "boundaryTrimPixels": args.boundary_trim,
+        "boundaryTrimMargin": args.boundary_trim_margin,
+        "boundaryFloodPixels": args.boundary_flood,
+        "boundaryFloodColorDistance": args.boundary_flood_color_distance,
+        "maskGrowPixels": args.mask_grow,
+        "maskGrowColorDistance": args.mask_grow_color_distance,
         "minAreaPixels": min_area,
-        "mode": "strict-mask",
+        "mode": "edge-safe-trim-overlap-mask",
         "mergeContained": bool(args.merge_contained and not args.no_merge_contained),
         "fillObjectHoles": bool(args.fill_object_holes),
         "backgroundLayer": not args.no_residual_layer,

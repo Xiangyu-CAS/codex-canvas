@@ -45,6 +45,24 @@
                   <path d="M9 6l6 6l-6 6"></path>
                 </svg>
               </button>
+              <div class="settings-menu-row settings-version-row">
+                <svg class="settings-row-icon settings-row-svg" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M20 7h-9"></path>
+                  <path d="M14 17H5"></path>
+                  <circle cx="17" cy="17" r="3"></circle>
+                  <circle cx="7" cy="7" r="3"></circle>
+                </svg>
+                <span data-i18n="appVersion">Version</span>
+                <span id="appVersionValue" class="settings-row-value">...</span>
+              </div>
+              <button id="appUpdateButton" class="settings-menu-row" type="button">
+                <svg class="settings-row-icon settings-row-svg" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M20 11a8.1 8.1 0 0 0 -15.5 -2m-.5 -5v5h5"></path>
+                  <path d="M4 13a8.1 8.1 0 0 0 15.5 2m.5 5v-5h-5"></path>
+                </svg>
+                <span id="appUpdateLabel" data-i18n="checkUpdates">Check updates</span>
+                <span id="appUpdateStatus" class="settings-row-value"></span>
+              </button>
             </div>
             <div class="settings-submenu" data-settings-submenu="language">
               <button data-language="en">
@@ -99,42 +117,6 @@
                 </svg>
                 <span>Expand</span>
               </button>
-              <button data-action="upscale" data-tooltip="Upscale" title="Upscale" aria-label="Upscale">
-                <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M4 14v5a1 1 0 0 0 1 1h5" />
-                  <path d="M20 10V5a1 1 0 0 0-1-1h-5" />
-                  <path d="M14 10l6-6" />
-                  <path d="M4 20l6-6" />
-                  <path d="M8 8h8v8H8z" />
-                </svg>
-                <span>Upscale</span>
-              </button>
-              <button data-action="multi-angles" data-tooltip="Multi-Angles" title="Multi-Angles" aria-label="Multi-Angles">
-                <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M12 3l7 4v8l-7 4-7-4V7z" />
-                  <path d="M12 11l7-4" />
-                  <path d="M12 11v8" />
-                  <path d="M12 11L5 7" />
-                  <path d="M3 5l2 2-2 2" />
-                  <path d="M21 5l-2 2 2 2" />
-                </svg>
-                <span>Multi-Angles</span>
-              </button>
-              <button data-action="move-object" data-tooltip="Move Object" title="Move Object" aria-label="Move Object">
-                <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M12 2v20" />
-                  <path d="M2 12h20" />
-                  <path d="M12 2l3 3" />
-                  <path d="M12 2L9 5" />
-                  <path d="M12 22l3-3" />
-                  <path d="M12 22l-3-3" />
-                  <path d="M2 12l3-3" />
-                  <path d="M2 12l3 3" />
-                  <path d="M22 12l-3-3" />
-                  <path d="M22 12l-3 3" />
-                </svg>
-                <span>Move Object</span>
-              </button>
               <button data-action="crop" data-tooltip="Crop" title="Crop" aria-label="Crop">
                 <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M6 2v14a2 2 0 0 0 2 2h14" />
@@ -150,6 +132,7 @@
                 </svg>
                 <span>Edit Elements</span>
               </button>
+              <span class="toolbar-row-break" data-toolbar-group-break hidden aria-hidden="true"></span>
               <button data-action="reset-layer-group" data-tooltip="Reset group" title="Reset group" aria-label="Reset group" hidden>
                 <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M3.05 11a9 9 0 1 1 2.64 6.36" />
@@ -157,6 +140,20 @@
                   <path d="M8 11a4 4 0 1 0 1.17-2.83" />
                 </svg>
                 <span>Reset group</span>
+              </button>
+              <button data-action="layer-down" data-tooltip="Layer down" title="Layer down" aria-label="Layer down" hidden>
+                <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 5v14" />
+                  <path d="m18 13 -6 6 -6 -6" />
+                </svg>
+                <span>Layer down</span>
+              </button>
+              <button data-action="layer-up" data-tooltip="Layer up" title="Layer up" aria-label="Layer up" hidden>
+                <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 19V5" />
+                  <path d="m6 11 6 -6 6 6" />
+                </svg>
+                <span>Layer up</span>
               </button>
               <button data-action="group-layer-group" data-tooltip="Group" title="Group" aria-label="Group" hidden>
                 <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -195,7 +192,57 @@
                 <div id="editTextList" class="edit-text-list"></div>
                 <div id="editTextStatus" class="edit-text-status"></div>
               </div>
+              <div id="expandPanel" class="expand-panel" hidden>
+                <div class="expand-title" data-i18n="expandTitle">Expand</div>
+                <label class="expand-field">
+                  <span data-i18n="expandScale">Scale</span>
+                  <select id="expandScale" aria-label="Expand scale">
+                    <option value="1">1x</option>
+                    <option value="1.5">1.5x</option>
+                    <option value="2">2x</option>
+                    <option value="3">3x</option>
+                  </select>
+                </label>
+                <label class="expand-field">
+                  <span data-i18n="expandPreset">Preset</span>
+                  <select id="expandPreset" aria-label="Expand preset">
+                    <option value="general" data-i18n="expandPresetGeneral">General</option>
+                    <option value="photo" data-i18n="expandPresetPhoto">Photo</option>
+                    <option value="poster" data-i18n="expandPresetPoster">Poster</option>
+                    <option value="product" data-i18n="expandPresetProduct">Product</option>
+                  </select>
+                </label>
+                <div id="expandRatios" class="expand-ratios" role="radiogroup" aria-label="Expand ratio">
+                  <button type="button" class="active" data-expand-ratio="original" role="radio" aria-checked="true" data-i18n="expandOriginalRatio">Original ratio</button>
+                  <button type="button" data-expand-ratio="1:1" role="radio" aria-checked="false">1:1</button>
+                  <button type="button" data-expand-ratio="3:4" role="radio" aria-checked="false">3:4</button>
+                  <button type="button" data-expand-ratio="2:3" role="radio" aria-checked="false">2:3</button>
+                  <button type="button" data-expand-ratio="9:16" role="radio" aria-checked="false">9:16</button>
+                  <button type="button" data-expand-ratio="4:3" role="radio" aria-checked="false">4:3</button>
+                  <button type="button" data-expand-ratio="3:2" role="radio" aria-checked="false">3:2</button>
+                  <button type="button" data-expand-ratio="16:9" role="radio" aria-checked="false">16:9</button>
+                  <button type="button" data-expand-ratio="4:5" role="radio" aria-checked="false">4:5</button>
+                  <button type="button" data-expand-ratio="5:4" role="radio" aria-checked="false">5:4</button>
+                </div>
+              </div>
               <textarea id="quickEditPrompt" rows="2" autocomplete="off" spellcheck="true" data-i18n-placeholder="quickEditPlaceholder" placeholder="Describe your edit here"></textarea>
+              <div id="quickEditMarkupControls" class="quick-edit-markup-controls" aria-label="Markup tools">
+                <div id="quickEditColorPalette" class="quick-edit-color-palette" aria-label="Markup colors"></div>
+                <div class="quick-edit-markup-tools">
+                  <button type="button" title="Pencil" aria-label="Pencil" data-tooltip="Pencil" data-quick-edit-tool="pencil">
+                    <svg class="quick-edit-tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4"></path>
+                      <path d="M13.5 6.5l4 4"></path>
+                    </svg>
+                  </button>
+                  <button type="button" title="Text" aria-label="Text" data-tooltip="Text" data-quick-edit-tool="text">
+                    <svg class="quick-edit-tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M6 4l12 0"></path>
+                      <path d="M12 4l0 16"></path>
+                    </svg>
+                  </button>
+                </div>
+              </div>
               <div class="quick-edit-actions">
                 <button type="button" id="quickEditCancel" class="secondary-action" data-i18n="cancel">Cancel</button>
                 <button type="submit" id="quickEditRun" data-i18n="run">Run</button>

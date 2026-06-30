@@ -40,7 +40,7 @@ Agent-Canvas 可以按四个模块设计：
 - MCP 工具：提供 `open_canvas`、`add_image`、`collect_recent_images`、`canvas_status`、`search_canvas`、`prompt_history`、`version_groups`、`start_image_job`、`send_to_chat`，方便 Codex 在会话中打开画布、收录图片、搜索资产、提示词和版本分组、触发稳定 action 和读取状态。`start_image_job` 使用 `quick-edit`、`remove-bg` 等稳定图片 action id；`send_to_chat` 使用稳定 `send-to-chat` action id，提示词由后端固定生成。
 - 画布 UI：提供 Lovart 风格的浅色无限画布、底部浮动工具栏、图片选择态、非破坏性裁剪和浮动编辑工具栏。
 - 单端口多画布页：默认统一使用 `127.0.0.1:43217`。再次在新 Codex 会话或新项目中打开 `/canvas` 时，现有服务会注册新的项目画布，并返回带 `?project=<id>` 的 URL；同一 workspace 会按 Codex thread 隔离为不同 canvas，左上角项目菜单可以在已注册画布页之间切换。
-- AI 图片操作：`Quick Edit`、`Remove BG`、`Expand`、`Upscale`、`Multi-Angles`、`Move Object`、`Edit Text`、`Edit Elements` 通过稳定 action id 创建后台 job，由后端映射到对应 Agent-Canvas operation skill 和 Codex/ImageGen 执行，再把结果回填到源图右侧。`Expand` 会按用户描述对选中图像做扩图/outpaint；`Upscale` 会保真增强选中图像；`Multi-Angles` 会生成同一主体的多个角度图；`Move Object` 会按用户指令移动图内对象并修补原位置；`Edit Elements` 会生成实例分割图，本地拆出透明对象/文字图层和补全背景，并作为锁定图层组放回画布。
+- AI 图片操作：`Quick Edit`、`Remove BG`、`Expand`、`Edit Text`、`Edit Elements` 通过稳定 action id 创建后台 job，由后端映射到对应 Agent-Canvas operation skill 和 Codex/ImageGen 执行，再把结果回填到源图右侧。`Expand` 会按用户描述对选中图像做扩图/outpaint；`Edit Elements` 会生成实例分割图，本地拆出透明对象/文字图层和补全背景，并作为锁定图层组放回画布。
 - Canvas-to-chat：已 smoke test 跑通 Codex app-server `turn/start` 携带 `localImage` 的路径；发送必须绑定明确的 Codex thread，每个 thread 使用独立 canvas，可通过 `--thread-id`、MCP `open_canvas.threadId` 或 `/api/chat-binding` 写入；详见 [`docs/CANVAS_TO_CHAT.md`](docs/CANVAS_TO_CHAT.md)。
 
 基础运行：
@@ -164,6 +164,14 @@ npm run install:personal
 ```
 
 安装器只会创建或更新指向当前仓库的 symlink/junction；如果 `~/plugins/agent-canvas` 已经是普通文件或目录，命令会拒绝覆盖并提示先移除该路径。测试或临时安装可以设置 `AGENT_CANVAS_PERSONAL_HOME=/path/to/home npm run install:personal`，这样会写入该目录下的 `plugins/agent-canvas` 和 `.agents/plugins/marketplace.json`，不影响真实用户目录。
+
+Codex 可能会把 personal plugin 复制到自己的版本化 cache 目录中运行。开发机如果需要让已安装插件实时使用当前源码，可以额外运行：
+
+```bash
+npm run install:dev-cache
+```
+
+该命令会把当前版本的 `~/.codex/plugins/cache/personal/agent-canvas/<plugin-version>` 改成指向当前仓库的 symlink/junction；如果原 cache 目录已经存在，会先改名为 `.backup-<timestamp>` 备份。这个命令只用于本地开发同步，不建议普通用户使用。普通用户应通过 `git pull --ff-only` 或重新安装发布版本来更新。
 
 发布前可以检查插件包内容：
 
