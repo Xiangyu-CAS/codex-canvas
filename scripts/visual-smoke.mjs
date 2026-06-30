@@ -221,15 +221,95 @@ async function assertDiscoveryVersionBrowser(page, versionIds) {
   await page.locator("[data-discovery-mode='versions']").click();
   await waitForVisible(page, ".version-group", "version groups should render in discovery panel");
   await waitForVisible(page, ".version-group-thumb", "version group thumbnails should render");
+  await assertVersionPanelFits(page);
   const thumbnailCount = await page.locator(".version-group-thumb").count();
   assert(thumbnailCount >= versionIds.length, "version browser should show thumbnails for grouped image versions");
   await waitForImageDecoded(page, ".version-group-thumb");
+  await page.locator(".version-group-overlay").first().click();
+  await waitForHidden(page, ".prompt-history-panel", "discovery panel should close after annotating a version group");
+  await waitForVisible(page, ".version-diff-overlay", "version annotation overlay should render");
+  await assertVersionDiffOverlay(page, versionIds);
+  await assertVersionDiffOverlayFollowsDrag(page, versionIds);
+  await clearVersionDiffOverlay(page);
+
+  await page.locator(".prompt-history-button").click();
+  await waitForVisible(page, ".prompt-history-panel:not([hidden])", "discovery panel should reopen after annotation");
+  await page.locator("[data-discovery-mode='versions']").click();
+  await waitForVisible(page, ".version-group-compare", "version comparison control should render after reopening");
   await page.locator(".version-group-compare").first().click();
   await waitForHidden(page, ".prompt-history-panel", "discovery panel should close after comparing a version group");
   for (const versionId of versionIds) {
     await assertLocatorClassContains(page, `.canvas-object[data-id="${versionId}"]`, "selected");
   }
   await assertMultiSelectionDragMovesEverySelectedObject(page, versionIds);
+}
+
+async function assertVersionDiffOverlay(page, versionIds) {
+  const snapshot = await page.evaluate((ids) => {
+    const overlay = document.querySelector(".version-diff-overlay");
+    const boxes = [...document.querySelectorAll(".version-diff-box")];
+    const lines = [...document.querySelectorAll(".version-diff-connector line")];
+    const selected = ids.map((id) => document.querySelector(`.canvas-object[data-id="${id}"]`)?.classList.contains("selected") || false);
+    const rectSnapshot = (element) => {
+      const rect = element?.getBoundingClientRect();
+      if (!rect) return null;
+      return {
+        left: Math.round(rect.left),
+        top: Math.round(rect.top),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height)
+      };
+    };
+    return {
+      overlayRect: rectSnapshot(overlay),
+      boxRects: boxes.map(rectSnapshot),
+      connectorLineCount: lines.length,
+      overlayIds: (overlay?.dataset.versionDiffIds || "").split(",").filter(Boolean),
+      labelText: overlay?.querySelector(".version-diff-label")?.textContent || "",
+      selected
+    };
+  }, versionIds);
+
+  assertRectVisible(snapshot.overlayRect, "version annotation overlay");
+  assertDeepEqual([...snapshot.overlayIds].sort(), [...versionIds].sort(), "version annotation overlay should track the compared version ids");
+  assert(snapshot.boxRects.length === versionIds.length, "version annotation overlay should draw one box for each compared version");
+  assert(snapshot.connectorLineCount === versionIds.length - 1, "version annotation overlay should connect adjacent compared versions");
+  for (const rect of snapshot.boxRects) {
+    assertRectVisible(rect, "version annotation box");
+  }
+  assert(snapshot.labelText.includes("Version review"), "version annotation overlay should include a review label");
+  assert(snapshot.selected.every(Boolean), "version annotation overlay should keep all compared versions selected");
+}
+
+async function assertVersionDiffOverlayFollowsDrag(page, versionIds) {
+  const before = await page.locator(".version-diff-overlay").boundingBox();
+  assertRectVisible(before, "version annotation overlay before drag");
+  await assertMultiSelectionDragMovesEverySelectedObject(page, versionIds);
+
+  await page.waitForFunction((before) => {
+    const overlay = document.querySelector(".version-diff-overlay");
+    if (!overlay) return false;
+    const rect = overlay.getBoundingClientRect();
+    return Math.abs(rect.left - before.x) > 8 || Math.abs(rect.top - before.y) > 8;
+  }, before, { timeout: 5000 });
+  await assertVersionDiffOverlay(page, versionIds);
+}
+
+async function clearVersionDiffOverlay(page) {
+  const board = await page.locator("#board").boundingBox();
+  assertRectVisible(board, "#board before clearing version annotation overlay");
+  await page.mouse.click(board.x + 24, board.y + 24);
+  await waitForHidden(page, ".version-diff-overlay", "version annotation overlay should clear after clicking blank canvas");
+}
+
+async function assertVersionPanelFits(page) {
+  const overflow = await page.evaluate(() => {
+    const targets = [...document.querySelectorAll(".version-group-header, .version-group-actions, .version-group-action")];
+    return targets
+      .filter((element) => element.scrollWidth > element.clientWidth + 1 || element.scrollHeight > element.clientHeight + 1)
+      .map((element) => element.className || element.tagName);
+  });
+  assertDeepEqual(overflow, [], "version browser controls should fit without internal overflow");
 }
 
 async function assertMultiSelectionDragMovesEverySelectedObject(page, versionIds) {

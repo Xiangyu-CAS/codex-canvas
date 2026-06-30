@@ -36,7 +36,7 @@ Agent-Canvas 可以按四个模块设计：
 - `agent-canvas collect`：扫描项目内和 `~/.codex/generated_images` 中最近生成的图片并导入画布，作为 `imagegen` 输出路径不明确时的兜底收集器。
 - `agent-canvas search`：按名称、prompt、文本、来源路径和图层组元数据搜索画布对象，用于快速定位项目资产。
 - `agent-canvas prompts`：列出最近使用过的唯一 prompt，支持按文本过滤，用于复用项目提示词。
-- `agent-canvas versions` 和画布内 discovery 面板：按 `sourceObjectId`、`batchId`、`layoutMode` 或 `prompt` 分组查看画布对象版本历史，在面板中预览缩略图，并可在画布中框选同组版本做并排比较。
+- `agent-canvas versions` 和画布内 discovery 面板：按 `sourceObjectId`、`batchId`、`layoutMode` 或 `prompt` 分组查看画布对象版本历史，在面板中预览缩略图，并可在画布中框选同组版本做并排比较或绘制临时标注叠层。
 - MCP 工具：提供 `open_canvas`、`add_image`、`collect_recent_images`、`canvas_status`、`search_canvas`、`prompt_history`、`version_groups`、`start_image_job`、`send_to_chat`，方便 Codex 在会话中打开画布、收录图片、搜索资产、提示词和版本分组、触发稳定 action 和读取状态。
 - 画布 UI：提供 Lovart 风格的浅色无限画布、底部浮动工具栏、图片选择态和浮动编辑工具栏。
 - 单端口多画布页：默认统一使用 `127.0.0.1:43217`。再次在新 Codex 会话或新项目中打开 `/canvas` 时，现有服务会注册新的项目画布，并返回带 `?project=<id>` 的 URL；同一 workspace 会按 Codex thread 隔离为不同 canvas，左上角项目菜单可以在已注册画布页之间切换。
@@ -125,7 +125,7 @@ npm run smoke:visual
 npm run visual:regression
 ```
 
-`visual:regression` 会把固定桌面/移动端的 discovery、选中工具栏、版本比较和 Edit Text 截图与 `scripts/reference-screenshots/` 中的基线 PNG 比较；需要刷新基线时运行 `npm run visual:regression -- --update`。
+`visual:regression` 会把固定桌面/移动端的 discovery、选中工具栏、版本比较、版本标注叠层和 Edit Text 截图与 `scripts/reference-screenshots/` 中的基线 PNG 比较；需要刷新基线时运行 `npm run visual:regression -- --update`。
 
 ## Codex 插件安装
 

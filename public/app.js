@@ -63,6 +63,8 @@ const translations = {
     versionGroupPrompt: "Prompt",
     versionGroupCount: "objects",
     versionGroupCompare: "Compare",
+    versionGroupAnnotate: "Annotate",
+    versionDiffLabel: "Version review",
     textPlaceholder: "Text",
     quickEditPlaceholder: "Describe your edit here",
     quickEditEmpty: "Describe the edit first.",
@@ -154,6 +156,8 @@ const translations = {
     versionGroupPrompt: "提示词",
     versionGroupCount: "个对象",
     versionGroupCompare: "比较",
+    versionGroupAnnotate: "标注",
+    versionDiffLabel: "版本复核",
     textPlaceholder: "文字",
     quickEditPlaceholder: "描述你想怎么改这张图",
     quickEditEmpty: "先描述你想怎么改。",
@@ -247,6 +251,7 @@ let versionBrowserFetchToken = 0;
 let promptHistorySearchTimer = null;
 let promptHistoryMode = "prompts";
 let versionBrowserGroups = [];
+let versionDiffOverlay = null;
 
 initPromptHistoryUi();
 applyLanguage();
@@ -580,6 +585,13 @@ function initPromptHistoryUi() {
       return;
     }
 
+    const annotate = event.target.closest("[data-version-group-overlay-index]");
+    if (annotate) {
+      event.preventDefault();
+      annotateVersionGroup(Number(annotate.dataset.versionGroupOverlayIndex));
+      return;
+    }
+
     const compare = event.target.closest("[data-version-group-index]");
     if (compare) {
       event.preventDefault();
@@ -756,12 +768,24 @@ function renderVersionGroups(groups) {
     count.textContent = `${group.count || 0} ${t("versionGroupCount")}`;
     header.append(count);
 
+    const actions = document.createElement("div");
+    actions.className = "version-group-actions";
+
     const compare = document.createElement("button");
     compare.type = "button";
-    compare.className = "version-group-compare";
+    compare.className = "version-group-action version-group-compare";
     compare.dataset.versionGroupIndex = String(index);
     compare.textContent = t("versionGroupCompare");
-    header.append(compare);
+    actions.append(compare);
+
+    const annotate = document.createElement("button");
+    annotate.type = "button";
+    annotate.className = "version-group-action version-group-overlay";
+    annotate.dataset.versionGroupOverlayIndex = String(index);
+    annotate.textContent = t("versionGroupAnnotate");
+    annotate.disabled = !(Array.isArray(group.objects) && group.objects.length >= 2);
+    actions.append(annotate);
+    header.append(actions);
     section.append(header);
 
     const objects = Array.isArray(group.objects) ? group.objects : [];
@@ -803,15 +827,10 @@ function renderVersionGroups(groups) {
 }
 
 function compareVersionGroup(index) {
-  const group = versionBrowserGroups[index];
-  const ids = (Array.isArray(group?.objects) ? group.objects : [])
-    .map((object) => object.id)
-    .filter(Boolean);
-  const objects = ids
-    .map((id) => state?.objects.find((object) => object.id === id))
-    .filter(Boolean);
+  const objects = canvasObjectsForVersionGroup(index);
   if (!objects.length) return;
 
+  versionDiffOverlay = null;
   closePromptHistoryPanel();
   closeQuickEdit({ keepPrompt: true });
   setLocalSelection(objects.map((object) => object.id), { fromUser: true });
@@ -823,6 +842,35 @@ function compareVersionGroup(index) {
     minZoom: 0.12,
     maxZoom: 1
   });
+}
+
+function annotateVersionGroup(index) {
+  const objects = canvasObjectsForVersionGroup(index);
+  if (objects.length < 2) return;
+
+  closePromptHistoryPanel();
+  closeQuickEdit({ keepPrompt: true });
+  const ids = objects.map((object) => object.id);
+  setLocalSelection(ids, { fromUser: true });
+  versionDiffOverlay = { ids };
+  render();
+  frameWorldBounds(boundsForObjects(objects), {
+    paddingX: 104,
+    paddingTop: 112,
+    paddingBottom: 156,
+    minZoom: 0.12,
+    maxZoom: 1
+  });
+}
+
+function canvasObjectsForVersionGroup(index) {
+  const group = versionBrowserGroups[index];
+  const ids = (Array.isArray(group?.objects) ? group.objects : [])
+    .map((object) => object.id)
+    .filter(Boolean);
+  return ids
+    .map((id) => state?.objects.find((object) => object.id === id))
+    .filter(Boolean);
 }
 
 function versionGroupTitle(group) {
@@ -1268,8 +1316,78 @@ function render() {
   if (selectedGroupId && hasUserSelection) {
     objectLayer.append(renderLayerGroupSelection(selectedGroupId));
   }
+  if (versionDiffOverlay) {
+    const overlay = renderVersionDiffOverlay();
+    if (overlay) objectLayer.append(overlay);
+  }
 
   updateSelectionUi();
+}
+
+function renderVersionDiffOverlay() {
+  const objects = (versionDiffOverlay?.ids || [])
+    .map((id) => state.objects.find((object) => object.id === id))
+    .filter(Boolean);
+  if (objects.length < 2) {
+    versionDiffOverlay = null;
+    return null;
+  }
+
+  const rawBounds = boundsForObjects(objects);
+  const padding = 12;
+  const bounds = {
+    x: rawBounds.x - padding,
+    y: rawBounds.y - padding,
+    width: rawBounds.width + padding * 2,
+    height: rawBounds.height + padding * 2
+  };
+  const element = document.createElement("div");
+  element.className = "version-diff-overlay";
+  element.dataset.versionDiffIds = objects.map((object) => object.id).join(",");
+  element.style.left = `${bounds.x}px`;
+  element.style.top = `${bounds.y}px`;
+  element.style.width = `${bounds.width}px`;
+  element.style.height = `${bounds.height}px`;
+
+  const connector = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  connector.classList.add("version-diff-connector");
+  connector.setAttribute("viewBox", `0 0 ${bounds.width} ${bounds.height}`);
+  connector.setAttribute("width", "100%");
+  connector.setAttribute("height", "100%");
+  connector.setAttribute("aria-hidden", "true");
+  for (let index = 1; index < objects.length; index += 1) {
+    const previous = objects[index - 1];
+    const current = objects[index];
+    const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    line.setAttribute("x1", String(previous.x + previous.width / 2 - bounds.x));
+    line.setAttribute("y1", String(previous.y + previous.height / 2 - bounds.y));
+    line.setAttribute("x2", String(current.x + current.width / 2 - bounds.x));
+    line.setAttribute("y2", String(current.y + current.height / 2 - bounds.y));
+    connector.append(line);
+  }
+  element.append(connector);
+
+  const label = document.createElement("div");
+  label.className = "version-diff-label";
+  label.textContent = `${t("versionDiffLabel")} · ${objects.length} ${t("versionGroupCount")}`;
+  element.append(label);
+
+  objects.forEach((object, index) => {
+    const box = document.createElement("div");
+    box.className = "version-diff-box";
+    box.style.left = `${object.x - bounds.x}px`;
+    box.style.top = `${object.y - bounds.y}px`;
+    box.style.width = `${object.width}px`;
+    box.style.height = `${object.height}px`;
+
+    const badge = document.createElement("span");
+    badge.className = "version-diff-index";
+    badge.textContent = String(index + 1);
+    box.append(badge);
+    element.append(box);
+  });
+
+  return element;
 }
 
 function renderLayerGroupSelection(groupId) {
@@ -1481,7 +1599,16 @@ function moveDrag(event) {
     drag.element.style.top = `${object.y}px`;
   }
   updateLayerGroupSelectionElement(drag.groupId || selectedLayerGroupId());
+  updateVersionDiffOverlayElement();
   updateSelectionUi();
+}
+
+function updateVersionDiffOverlayElement() {
+  const element = objectLayer.querySelector(".version-diff-overlay");
+  if (!element) return;
+  const nextElement = renderVersionDiffOverlay();
+  if (nextElement) element.replaceWith(nextElement);
+  else element.remove();
 }
 
 async function endDrag(event) {
@@ -1658,10 +1785,19 @@ async function selectObject(id, { fromUser = false, renderNow = true } = {}) {
 
 function setLocalSelection(ids, { fromUser = true } = {}) {
   const nextIds = ids.filter(Boolean);
+  if (versionDiffOverlay && !sameIdSet(nextIds, versionDiffOverlay.ids || [])) {
+    versionDiffOverlay = null;
+  }
   selectedIds = new Set(nextIds);
   selectedId = nextIds.length === 1 ? nextIds[0] : null;
   hasUserSelection = nextIds.length > 0 && fromUser;
   if (state) state.selection = selectedId;
+}
+
+function sameIdSet(left, right) {
+  if (left.length !== right.length) return false;
+  const leftSet = new Set(left);
+  return right.every((id) => leftSet.has(id));
 }
 
 function selectedObjectIds() {

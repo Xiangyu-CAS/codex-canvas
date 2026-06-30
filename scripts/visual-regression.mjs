@@ -16,7 +16,7 @@ const viewports = [
   { name: "desktop", width: 1280, height: 800, deviceScaleFactor: 1 },
   { name: "mobile", width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 2 }
 ];
-const screenshotCases = ["discovery", "selected", "compare", "text-edit"];
+const screenshotCases = ["discovery", "selected", "compare", "overlay", "text-edit"];
 let visualProjectRegistryPath = null;
 
 async function main() {
@@ -128,6 +128,15 @@ async function captureReferenceViewport(browser, viewport, screenshotCase) {
       await page.locator(".version-group-compare").first().click();
       await waitForHidden(page, ".prompt-history-panel", "discovery panel should close after compare");
       await waitForSelectedCount(page, 2, "compare should select the grouped versions");
+    } else if (screenshotCase === "overlay") {
+      await page.locator(".prompt-history-button").click();
+      await waitForVisible(page, ".prompt-history-panel:not([hidden])", "discovery panel should be visible");
+      await page.locator("[data-discovery-mode='versions']").click();
+      await waitForVisible(page, ".version-group-overlay", "version annotation control should be visible");
+      await page.locator(".version-group-overlay").first().click();
+      await waitForHidden(page, ".prompt-history-panel", "discovery panel should close after annotation");
+      await waitForSelectedCount(page, 2, "annotation should select the grouped versions");
+      await waitForVisible(page, ".version-diff-overlay", "version annotation overlay should be visible");
     } else {
       await page.locator(".prompt-history-button").click();
       await waitForVisible(page, ".prompt-history-panel:not([hidden])", "discovery panel should be visible");
