@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import { watch } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import crypto from "node:crypto";
 import { collectRecentImages } from "./collector.mjs";
 import { sendImageToBoundChat } from "./codex-chat.mjs";
@@ -275,7 +274,7 @@ async function sendFile(response, filePath) {
     });
     response.end(buffer);
   } catch {
-    sendJson(response, 404, { error: `File not found: ${pathToFileURL(filePath).href}` });
+    sendJson(response, 404, { error: "File not found." });
   }
 }
 

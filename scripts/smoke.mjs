@@ -37,6 +37,7 @@ async function main() {
     ["port numeric boundaries", testPortNumericBoundaries],
     ["http query numeric boundaries", testHttpQueryNumericBoundaries],
     ["http json boundaries", testHttpJsonBoundaries],
+    ["http file response boundaries", testHttpFileResponseBoundaries],
     ["http project registration boundaries", testHttpProjectRegistrationBoundaries],
     ["frontend action contract", testFrontendActionContract],
     ["thread migration asset paths", testThreadMigrationAssetPaths],
@@ -669,6 +670,29 @@ async function testHttpJsonBoundaries() {
     const badPathBody = await badPath.json();
     assertEqual(badPath.status, 400, "malformed URL encoding should return a client error");
     assertEqual(badPathBody.error, "Request path must use valid URL encoding.", "malformed URL encoding should return a useful error");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+async function testHttpFileResponseBoundaries() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-http-files-"));
+  const { server, url } = await createServer({ projectDir, port: 0, autoCollect: false });
+  const base = url.replace(/\?.*/, "");
+  const search = new URL(url).search;
+  try {
+    for (const pathname of ["missing-static.js", "assets/missing-image.png"]) {
+      const response = await fetch(`${base}${pathname}${search}`);
+      const body = await response.json();
+      assertEqual(response.status, 404, `missing ${pathname} should return not found`);
+      assertEqual(body.error, "File not found.", `missing ${pathname} should not disclose filesystem paths`);
+      if (/file:|\/Users\/|\\\\Users\\\\|agent-canvas-http-files/.test(JSON.stringify(body))) {
+        throw new Error(`missing ${pathname} response should not include local filesystem paths.`);
+      }
+    }
+
+    const traversal = await fetch(`${base}%2e%2e%2fpackage.json${search}`);
+    assertEqual(traversal.status, 403, "static path traversal attempts should remain forbidden");
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
