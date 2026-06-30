@@ -354,7 +354,7 @@ toolDock.addEventListener("click", (event) => {
 });
 
 imageUploadInput.addEventListener("change", () => {
-  const files = [...imageUploadInput.files].filter((file) => file.type.startsWith("image/"));
+  const files = [...imageUploadInput.files].filter(isUploadImageCandidate);
   imageUploadInput.value = "";
   if (!files.length) return;
   uploadImageFiles(files);
@@ -2513,9 +2513,10 @@ async function deleteObjectsById(ids) {
 async function uploadImageFiles(files) {
   let nextX = null;
   let lastObject = null;
+  let lastError = null;
 
-  try {
-    for (const file of files) {
+  for (const file of files) {
+    try {
       const dataUrl = await readFileAsDataUrl(file);
       const naturalSize = await readImageFileSize(dataUrl);
       const displaySize = displaySizeForUpload(naturalSize);
@@ -2539,16 +2540,23 @@ async function uploadImageFiles(files) {
       const object = await response.json();
       if (!response.ok) throw new Error(object.error || t("uploadFailed"));
       lastObject = object;
+    } catch (error) {
+      lastError = error;
     }
-
-    if (lastObject) {
-      setLocalSelection([lastObject.id], { fromUser: true });
-      await loadState();
-      showToast(t("uploadDone"));
-    }
-  } catch (error) {
-    showToast(error?.message || t("uploadFailed"));
   }
+
+  if (lastObject) {
+    setLocalSelection([lastObject.id], { fromUser: true });
+    await loadState();
+  }
+
+  if (lastError) showToast(lastError?.message || t("uploadFailed"));
+  else if (lastObject) showToast(t("uploadDone"));
+}
+
+function isUploadImageCandidate(file) {
+  if (String(file.type || "").startsWith("image/")) return true;
+  return /\.(png|jpe?g|webp|gif|avif)$/i.test(file.name || "");
 }
 
 function readFileAsDataUrl(file) {
@@ -2563,8 +2571,16 @@ function readFileAsDataUrl(file) {
 function readImageFileSize(dataUrl) {
   return new Promise((resolve) => {
     const image = new Image();
-    image.onload = () => resolve({ width: image.naturalWidth, height: image.naturalHeight });
-    image.onerror = () => resolve(null);
+    let settled = false;
+    const finish = (size) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      resolve(size);
+    };
+    const timeout = window.setTimeout(() => finish(null), 1500);
+    image.onload = () => finish({ width: image.naturalWidth, height: image.naturalHeight });
+    image.onerror = () => finish(null);
     image.src = dataUrl;
   });
 }

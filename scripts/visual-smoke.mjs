@@ -47,6 +47,8 @@ async function main() {
     }
     await runEditElementsLayerSmoke(browser);
     results.push("edit-elements-layers");
+    await runUploadPartialFailureSmoke(browser);
+    results.push("upload-partial-failure");
   } finally {
     await browser.close();
   }
@@ -454,6 +456,93 @@ async function runEditElementsLayerSmoke(browser) {
     });
     await assertVisibleControlsDoNotOverlap(page, viewport);
     assertDeepEqual(consoleErrors.filter((message) => !/favicon/i.test(message)), [], "Edit Elements visual smoke should not emit console errors");
+  } finally {
+    await context.close();
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+async function runUploadPartialFailureSmoke(browser) {
+  const projectDir = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-canvas-visual-upload-"));
+  const { server, url } = await createServer({ projectDir, port: 0, autoCollect: false });
+  const context = await browser.newContext({
+    viewport: { width: 900, height: 620 }
+  });
+  const page = await context.newPage();
+  const consoleErrors = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+  try {
+    await page.goto(url, { waitUntil: "networkidle" });
+    await waitForVisible(page, "#board", "board should be visible before upload");
+    await page.evaluate(() => {
+      window.__agentCanvasUploadSeen = [];
+      document.querySelector("#imageUploadInput")?.addEventListener("change", (event) => {
+        window.__agentCanvasUploadSeen = [...event.target.files].map((file) => ({
+          name: file.name,
+          type: file.type,
+          size: file.size
+        }));
+      }, { capture: true, once: true });
+    });
+    await page.locator("#imageUploadInput").setInputFiles([
+      {
+        name: "valid-upload.png",
+        mimeType: "image/png",
+        buffer: Buffer.from(pngOne, "base64")
+      },
+      {
+        name: "fake-upload.png",
+        mimeType: "image/png",
+        buffer: Buffer.from("not a real png")
+      }
+    ]);
+    await page.waitForFunction(() => {
+      return fetch(`/api/state${window.location.search}`)
+        .then((response) => response.json())
+        .then((state) => state.objects.length === 1);
+    }, null, { timeout: 5000 }).catch(async (error) => {
+      const debug = await page.evaluate(() => ({
+        seen: window.__agentCanvasUploadSeen || [],
+        toast: document.querySelector("#toast")?.textContent || ""
+      }));
+      throw new Error(`partial upload should persist one valid image before refreshing UI: ${error.message}; debug=${JSON.stringify(debug)}`);
+    });
+    await waitForVisible(page, ".canvas-object", "valid upload should render even when a later file fails").catch(async (error) => {
+      const debug = await page.evaluate(() => ({
+        seen: window.__agentCanvasUploadSeen || [],
+        toast: document.querySelector("#toast")?.textContent || "",
+        domObjects: document.querySelectorAll(".canvas-object").length,
+        objectLayerHtml: document.querySelector("#objects")?.innerHTML || "",
+        stateObjects: window.state?.objects?.length ?? null,
+        selectedId: window.selectedId ?? null
+      }));
+      throw new Error(`${error.message}; debug=${JSON.stringify(debug)}`);
+    });
+    await waitForImageDecoded(page, ".canvas-object img");
+    const upload = await page.evaluate(() => {
+      const objects = [...document.querySelectorAll(".canvas-object")];
+      return fetch(`/api/state${window.location.search}`)
+        .then((response) => response.json())
+        .then((state) => ({
+          domObjects: objects.length,
+          storedObjects: state.objects.length,
+          selectedCount: objects.filter((element) => element.classList.contains("selected")).length,
+          toast: document.querySelector("#toast")?.textContent || ""
+        }));
+    });
+    assert(upload.domObjects === 1, "partial upload failure should still render the successful image");
+    assert(upload.storedObjects === 1, "partial upload failure should persist only the supported image");
+    assert(upload.selectedCount === 1, "partial upload failure should select the successful image");
+    assert(upload.toast.includes("supported image data"), "partial upload failure should show the rejected image error");
+    assertDeepEqual(
+      consoleErrors.filter((message) => !/favicon/i.test(message) && !/400 \(Bad Request\)/i.test(message)),
+      [],
+      "upload partial failure smoke should not emit unexpected console errors"
+    );
   } finally {
     await context.close();
     await new Promise((resolve) => server.close(resolve));
