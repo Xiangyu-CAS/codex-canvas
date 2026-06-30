@@ -243,6 +243,73 @@ function promptForAction({ action, outputDir, userPrompt }) {
     ].join("\n");
   }
 
+  if (action === "upscale") {
+    return [
+      "Use the canvas-upscale skill and the imagegen skill to enhance the attached image.",
+      "Optimize for latency: do not inspect unrelated repository files, do not produce variants, and do not run broad filesystem searches before generation.",
+      "",
+      "Task: upscale and enhance the selected image.",
+      userPrompt ? `User guidance: ${userPrompt}` : "User guidance: preserve the image faithfully while improving production quality.",
+      "Increase apparent resolution, sharpness, and detail while preserving the source image's subject identity, composition, aspect ratio, visible text, colors, and design intent.",
+      "Do not redesign, crop, reframe, add new objects, remove objects, or change text content.",
+      "Treat this as a faithful image enhancement/edit, not a new unrelated generation.",
+      "",
+      `Save or copy the final upscaled image into this exact directory: ${outputDir}`,
+      "Use a descriptive filename ending in .png, such as upscale-result.png.",
+      "As soon as the generated PNG exists, copy it into the output directory and finish.",
+      "Do not modify source files outside that output directory.",
+      "Do not ask follow-up questions. Do not perform extra visual QA unless generation clearly failed.",
+      "",
+      "Finish with a concise message containing the saved output path."
+    ].join("\n");
+  }
+
+  if (action === "multi-angles") {
+    return [
+      "Use the canvas-multi-angles skill and the imagegen skill to create alternate views of the attached image.",
+      "Optimize for latency: do not inspect unrelated repository files, do not run broad filesystem searches, and keep the output count bounded.",
+      "",
+      "Task: generate a small set of alternate angle/view images for the selected subject or composition.",
+      userPrompt ? `User guidance: ${userPrompt}` : "User guidance: create the most useful consistent angle set for the selected subject.",
+      "Create 3 to 4 coherent PNG outputs that show useful alternate views such as front, three-quarter, side, and back/top when applicable.",
+      "Preserve subject identity, product/design details, visible markings, material, color palette, and overall design intent across every view.",
+      "Do not invent unrelated products or redesign the subject. Keep each output as a single finished image, not a contact sheet, grid, label sheet, or comparison board.",
+      "If the source is a flat UI/design rather than a physical object, create perspective/mockup angle variants while preserving the design content.",
+      "",
+      `Save or copy every final angle image into this exact directory: ${outputDir}`,
+      "Use descriptive filenames ending in .png, such as multi-angles-front.png and multi-angles-side.png.",
+      "As soon as the generated PNG files exist, copy them into the output directory and finish.",
+      "Do not modify source files outside that output directory.",
+      "Do not ask follow-up questions. Do not perform extra visual QA unless generation clearly failed.",
+      "",
+      "Finish with a concise message containing the saved output paths."
+    ].join("\n");
+  }
+
+  if (action === "move-object") {
+    return [
+      "Use the canvas-move-object skill and the imagegen skill to edit the attached image.",
+      "Optimize for latency: do not inspect unrelated repository files, do not produce variants, and do not run broad filesystem searches before generation.",
+      "",
+      "Task: move an object within the selected image according to this user instruction:",
+      userPrompt || "Move the requested object to a more suitable location while preserving the image.",
+      "",
+      "Move only the object or visual element requested by the instruction.",
+      "Preserve the moved object's identity, proportions, lighting, perspective, and visible details.",
+      "Fill the object's original location plausibly from surrounding content, and keep all unrelated subjects, text, layout, colors, and design intent unchanged.",
+      "Do not crop, zoom, restyle, replace the object, or create a new unrelated composition.",
+      "Treat this as a localized image edit, not a new unrelated generation.",
+      "",
+      `Save or copy the final image into this exact directory: ${outputDir}`,
+      "Use a descriptive filename ending in .png, such as move-object-result.png.",
+      "As soon as the generated PNG exists, copy it into the output directory and finish.",
+      "Do not modify source files outside that output directory.",
+      "Do not ask follow-up questions. Do not perform extra visual QA unless generation clearly failed.",
+      "",
+      "Finish with a concise message containing the saved output path."
+    ].join("\n");
+  }
+
   if (action === "edit-text") {
     return [
       "Use the canvas-edit-text skill and the imagegen skill to edit the attached image.",

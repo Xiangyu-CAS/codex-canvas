@@ -68,8 +68,10 @@ const translations = {
     textPlaceholder: "Text",
     quickEditPlaceholder: "Describe your edit here",
     expandPlaceholder: "Describe what should extend beyond the image edges",
+    moveObjectPlaceholder: "Describe which object to move and where",
     quickEditEmpty: "Describe the edit first.",
     expandEmpty: "Describe what to extend first.",
+    moveObjectEmpty: "Describe which object to move first.",
     cropApply: "Apply",
     editTextPlaceholder: "Describe the text change here",
     editTextEmpty: "Describe the text change first.",
@@ -98,6 +100,9 @@ const translations = {
       "quick-edit": "Quick Edit",
       "remove-bg": "Remove BG",
       "expand": "Expand",
+      "upscale": "Upscale",
+      "multi-angles": "Multi-Angles",
+      "move-object": "Move Object",
       "crop": "Crop",
       "edit-elements": "Edit Elements",
       "reset-layer-group": "Reset group",
@@ -110,6 +115,9 @@ const translations = {
       "quick-edit": "Quick Edit",
       "remove-bg": "Remove BG",
       "expand": "Expand",
+      "upscale": "Upscale",
+      "multi-angles": "Multi-Angles",
+      "move-object": "Move Object",
       "crop": "Crop",
       "edit-elements": "Edit Elements",
       "reset-layer-group": "Reset group",
@@ -168,8 +176,10 @@ const translations = {
     textPlaceholder: "文字",
     quickEditPlaceholder: "描述你想怎么改这张图",
     expandPlaceholder: "描述要向画面边缘外扩展什么内容",
+    moveObjectPlaceholder: "描述要移动哪个对象，以及移动到哪里",
     quickEditEmpty: "先描述你想怎么改。",
     expandEmpty: "先描述要扩展什么内容。",
+    moveObjectEmpty: "先描述要移动哪个对象。",
     cropApply: "应用",
     editTextPlaceholder: "描述要替换或修改的文字",
     editTextEmpty: "先描述你想改哪些字。",
@@ -198,6 +208,9 @@ const translations = {
       "quick-edit": "快捷编辑",
       "remove-bg": "去背景",
       "expand": "扩图",
+      "upscale": "高清放大",
+      "multi-angles": "多角度",
+      "move-object": "移动对象",
       "crop": "裁剪",
       "edit-elements": "编辑元素",
       "reset-layer-group": "重置组",
@@ -210,6 +223,9 @@ const translations = {
       "quick-edit": "快捷编辑",
       "remove-bg": "去背景",
       "expand": "扩图",
+      "upscale": "高清放大",
+      "multi-angles": "多角度",
+      "move-object": "移动对象",
       "crop": "裁剪",
       "edit-elements": "编辑元素",
       "reset-layer-group": "重置组",
@@ -269,6 +285,16 @@ let promptHistoryMode = "prompts";
 let versionBrowserGroups = [];
 let versionDiffOverlay = null;
 let versionDiffHeatmapToken = 0;
+const composerImageActions = new Set(["quick-edit", "expand", "move-object", "edit-text"]);
+const immediateImageJobActions = new Set(["remove-bg", "edit-elements", "upscale", "multi-angles"]);
+const groupSelectionActions = new Set(["reset-layer-group", "group-layer-group"]);
+const singleSelectionActions = new Set([
+  ...composerImageActions,
+  ...immediateImageJobActions,
+  "crop",
+  "send-to-chat",
+  "download"
+]);
 
 initPromptHistoryUi();
 applyLanguage();
@@ -391,7 +417,7 @@ document.addEventListener("click", (event) => {
   if (action) {
     event.stopPropagation();
     updateSelectionUi();
-    if (action === "quick-edit" || action === "edit-text" || action === "expand") {
+    if (composerImageActions.has(action)) {
       openImageActionComposer(action);
       return;
     }
@@ -399,7 +425,7 @@ document.addEventListener("click", (event) => {
       startCropMode();
       return;
     }
-    if (action === "remove-bg" || action === "edit-elements") {
+    if (immediateImageJobActions.has(action)) {
       startImageJob(action);
       return;
     }
@@ -2328,8 +2354,8 @@ function updateSelectionUi() {
   const aboveTop = topLeft.y - toolbarRect.height - 26;
   const belowTop = bottomRight.y + 16;
   const preferredTop = aboveTop >= topSafeArea ? aboveTop : belowTop;
-  const top = clamp(preferredTop, topSafeArea, boardRect.height - toolbarRect.height - 16);
-  const left = clamp(objectCenter - toolbarRect.width / 2, 16, boardRect.width - toolbarRect.width - 16);
+  const top = clamp(preferredTop, topSafeArea, Math.max(topSafeArea, boardRect.height - toolbarRect.height - 16));
+  const left = clamp(objectCenter - toolbarRect.width / 2, 16, Math.max(16, boardRect.width - toolbarRect.width - 16));
   toolbar.style.transform = `translate(${left}px, ${top}px)`;
   updateQuickEditPosition();
 }
@@ -2868,12 +2894,14 @@ function updateEditTextRunState() {
 function composerPlaceholder(action) {
   if (action === "edit-text") return t("editTextPlaceholder");
   if (action === "expand") return t("expandPlaceholder");
+  if (action === "move-object") return t("moveObjectPlaceholder");
   return t("quickEditPlaceholder");
 }
 
 function composerEmptyMessage(action) {
   if (action === "edit-text") return t("editTextEmpty");
   if (action === "expand") return t("expandEmpty");
+  if (action === "move-object") return t("moveObjectEmpty");
   return t("quickEditEmpty");
 }
 
@@ -3391,13 +3419,11 @@ function layerGroupOrigin(groupId) {
 }
 
 function updateToolbarForSelection(isGroupSelection) {
-  const groupOnly = new Set(["reset-layer-group", "group-layer-group"]);
-  const singleOnly = new Set(["quick-edit", "remove-bg", "expand", "crop", "edit-elements", "edit-text", "send-to-chat", "download"]);
   const selectedGroupMemberId = selectedObjectLayerGroupId();
   toolbar.querySelectorAll("[data-action]").forEach((button) => {
     const action = button.dataset.action;
-    if (groupOnly.has(action)) button.hidden = !selectedGroupMemberId;
-    if (singleOnly.has(action)) button.hidden = isGroupSelection;
+    if (groupSelectionActions.has(action)) button.hidden = !selectedGroupMemberId;
+    if (singleSelectionActions.has(action)) button.hidden = isGroupSelection;
   });
   updateGroupActionButton(isGroupSelection);
 }

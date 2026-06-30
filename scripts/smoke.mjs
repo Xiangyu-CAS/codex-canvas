@@ -15,6 +15,7 @@ import { addImage, addObject, deleteObjects, promptHistory, readState, searchObj
 const execFileAsync = promisify(execFile);
 
 const pngOne = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+const stableImageJobActions = ["quick-edit", "remove-bg", "expand", "upscale", "multi-angles", "move-object", "edit-text", "edit-elements"];
 let smokeProjectRegistryPath = null;
 
 async function main() {
@@ -642,6 +643,50 @@ async function testFrontendActionContract() {
   if (/selectionMoreMenu|selection-more-menu|isMoreMenuOpen|data-action=["']more["']/.test(`${html}\n${app}\n${styles}`)) {
     throw new Error("frontend should not keep orphan selection more-menu code without a More action.");
   }
+
+  const frontendImageJobActions = [...domActions].filter((action) => stableImageJobActions.includes(action));
+  for (const action of frontendImageJobActions) {
+    if (!translatedActions.has(action)) {
+      throw new Error(`frontend image action ${action} should have a translated label.`);
+    }
+  }
+  for (const action of ["quick-edit", "remove-bg", "expand", "upscale", "multi-angles", "move-object", "edit-text", "edit-elements"]) {
+    if (!frontendImageJobActions.includes(action)) {
+      throw new Error(`frontend should expose the existing stable ${action} image action.`);
+    }
+  }
+
+  await assertHttpImageJobActionsAccepted();
+}
+
+async function assertHttpImageJobActionsAccepted() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-actions-"));
+  const { server, url } = await createServer({ projectDir, port: 0, autoCollect: false });
+  const base = url.replace(/\?.*/, "");
+  const search = new URL(url).search;
+  try {
+    for (const action of stableImageJobActions) {
+      const response = await postJson(`${base}api/jobs${search}`, {
+        action,
+        objectId: "missing-object"
+      });
+      assertEqual(response.status, 404, `HTTP image job action ${action} should pass stable action validation before object lookup`);
+      if (/Unsupported image job action/.test(response.body.error || "")) {
+        throw new Error(`HTTP image job action ${action} should be accepted as a stable backend action.`);
+      }
+    }
+
+    const unsupported = await postJson(`${base}api/jobs${search}`, {
+      action: "not-a-stable-action",
+      objectId: "missing-object"
+    });
+    assertEqual(unsupported.status, 400, "HTTP image jobs should reject unknown stable action ids");
+    if (!/Unsupported image job action/.test(unsupported.body.error || "")) {
+      throw new Error("HTTP image jobs should return the unsupported-action validation error for unknown actions.");
+    }
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 }
 
 async function testThreadMigrationAssetPaths() {
@@ -996,7 +1041,7 @@ function assertMcpToolSchema(tools = []) {
     }
   }
   const startImageJobActions = byName.get("start_image_job")?.inputSchema?.properties?.action?.enum || [];
-  for (const action of ["quick-edit", "remove-bg", "expand", "edit-text", "edit-elements"]) {
+  for (const action of stableImageJobActions) {
     if (!startImageJobActions.includes(action)) {
       throw new Error(`MCP start_image_job should expose the stable ${action} action.`);
     }

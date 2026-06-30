@@ -1304,6 +1304,7 @@ button {
   position: absolute;
   z-index: 30;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0;
   max-width: calc(100vw - 32px);
@@ -1528,6 +1529,18 @@ button {
 .tool-dock button:hover,
 .canvas-controls button:hover {
   background: #e9e9e7;
+}
+
+@media (max-width: 720px) {
+  .selection-toolbar button {
+    width: 28px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .selection-toolbar button span {
+    display: none;
+  }
 }
 
 .empty-state {
