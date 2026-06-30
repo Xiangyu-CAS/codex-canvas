@@ -475,10 +475,16 @@ async function persistImage(projectDir, input, options = {}) {
 
   if (input.path) {
     const sourcePath = path.resolve(input.path);
+    const stat = await statImageSource(sourcePath);
+    if (!stat.isFile()) {
+      const error = new Error("Image path must point to a file.");
+      error.statusCode = 400;
+      throw error;
+    }
     const ext = normalizeExt(path.extname(sourcePath)) || ".png";
     const name = safeAssetName(input.name || path.basename(sourcePath, ext), ext);
     const assetPath = path.join(assetsDir, name);
-    await fs.copyFile(sourcePath, assetPath);
+    await copyImageSource(sourcePath, assetPath);
     const dimensions = await readImageDimensions(assetPath);
     return {
       name,
@@ -521,6 +527,36 @@ async function persistImage(projectDir, input, options = {}) {
   const error = new Error("add_image requires one of: path, dataUrl, or url");
   error.statusCode = 400;
   throw error;
+}
+
+async function statImageSource(sourcePath) {
+  try {
+    return await fs.stat(sourcePath);
+  } catch (error) {
+    throw classifyImageSourceError(error);
+  }
+}
+
+async function copyImageSource(sourcePath, assetPath) {
+  try {
+    await fs.copyFile(sourcePath, assetPath);
+  } catch (error) {
+    throw classifyImageSourceError(error);
+  }
+}
+
+function classifyImageSourceError(error) {
+  if (error?.code === "ENOENT" || error?.code === "ENOTDIR") {
+    const clientError = new Error("Image path does not exist.");
+    clientError.statusCode = 404;
+    return clientError;
+  }
+  if (error?.code === "EACCES" || error?.code === "EPERM") {
+    const clientError = new Error("Image path is not readable.");
+    clientError.statusCode = 403;
+    return clientError;
+  }
+  return error;
 }
 
 function imageDisplaySize(asset, input) {

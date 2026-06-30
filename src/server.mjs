@@ -63,7 +63,7 @@ export async function createServer({ projectDir, host = "127.0.0.1", port = 4321
 
 async function handleRequest(request, response, context) {
   const requestUrl = new URL(request.url, "http://agent-canvas.local");
-  const pathname = decodeURIComponent(requestUrl.pathname);
+  const pathname = decodePathname(requestUrl.pathname);
 
   if (request.method === "GET" && pathname === "/api/projects") {
     return sendJson(response, 200, { projects: await listProjects(context.registry) });
@@ -268,6 +268,19 @@ function formatBytes(bytes) {
   if (bytes >= 1024 * 1024) return `${Math.round(bytes / (1024 * 1024))} MiB`;
   if (bytes >= 1024) return `${Math.round(bytes / 1024)} KiB`;
   return `${bytes} bytes`;
+}
+
+function decodePathname(pathname) {
+  try {
+    return decodeURIComponent(pathname);
+  } catch (error) {
+    if (error instanceof URIError) {
+      const clientError = new Error("Request path must use valid URL encoding.");
+      clientError.statusCode = 400;
+      throw clientError;
+    }
+    throw error;
+  }
 }
 
 function requireHttpProjectDir(projectDir) {

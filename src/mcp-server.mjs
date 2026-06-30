@@ -70,7 +70,7 @@ async function handle(method, params) {
               { required: ["dataUrl"] }
             ],
             properties: {
-              projectDir: { type: "string" },
+              projectDir: { type: "string", description: "Absolute path to the active Codex project." },
               path: { type: "string", description: "Local image path to copy into the canvas assets folder." },
               url: { type: "string", description: "Remote image URL to place on the canvas." },
               dataUrl: { type: "string", description: "Base64 image data URL." },
@@ -87,7 +87,7 @@ async function handle(method, params) {
             type: "object",
             required: ["projectDir"],
             properties: {
-              projectDir: { type: "string" },
+              projectDir: { type: "string", description: "Absolute path to the active Codex project." },
               threadId: { type: "string", description: "Codex thread id whose canvas status should be read. Pass this explicitly for thread-scoped canvases; omitted means the default project canvas." }
             }
           }
@@ -99,7 +99,7 @@ async function handle(method, params) {
             type: "object",
             required: ["projectDir"],
             properties: {
-              projectDir: { type: "string" },
+              projectDir: { type: "string", description: "Absolute path to the active Codex project." },
               roots: {
                 type: "array",
                 items: { type: "string" },
@@ -123,7 +123,7 @@ async function handle(method, params) {
             type: "object",
             required: ["projectDir", "objectId", "action"],
             properties: {
-              projectDir: { type: "string" },
+              projectDir: { type: "string", description: "Absolute path to the active Codex project." },
               objectId: { type: "string", description: "Canvas image object id to edit." },
               action: {
                 type: "string",
@@ -142,7 +142,7 @@ async function handle(method, params) {
             type: "object",
             required: ["projectDir", "objectId", "threadId"],
             properties: {
-              projectDir: { type: "string" },
+              projectDir: { type: "string", description: "Absolute path to the active Codex project." },
               objectId: { type: "string", description: "Canvas image object id to send." },
               threadId: { type: "string", description: "Codex thread id to receive the selected image." }
             }
@@ -249,12 +249,18 @@ async function handle(method, params) {
 }
 
 function requireProjectDir(args = {}) {
-  if (typeof args.projectDir !== "string" || !args.projectDir.trim()) {
+  const projectDir = typeof args.projectDir === "string" ? args.projectDir.trim() : "";
+  if (!projectDir) {
     const error = new Error("MCP tool call requires projectDir.");
     error.statusCode = 400;
     throw error;
   }
-  return resolveProjectDir(args.projectDir);
+  if (!path.isAbsolute(projectDir)) {
+    const error = new Error("MCP tool call requires an absolute projectDir.");
+    error.statusCode = 400;
+    throw error;
+  }
+  return resolveProjectDir(projectDir);
 }
 
 function textResult(text, data) {

@@ -20,6 +20,7 @@ async function main() {
     ["store concurrency", testStoreConcurrency],
     ["object patch sanitization", testObjectPatchSanitization],
     ["http object patch sanitization", testHttpObjectPatchSanitization],
+    ["http image input boundaries", testHttpImageInputBoundaries],
     ["http json boundaries", testHttpJsonBoundaries],
     ["http project registration boundaries", testHttpProjectRegistrationBoundaries],
     ["frontend action contract", testFrontendActionContract],
@@ -106,6 +107,28 @@ async function testHttpObjectPatchSanitization() {
   }
 }
 
+async function testHttpImageInputBoundaries() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-http-image-"));
+  const { server, url } = await createServer({ projectDir, port: 0, autoCollect: false });
+  const base = url.replace(/\?.*/, "");
+  const search = new URL(url).search;
+  try {
+    const missing = await postJson(`${base}api/images${search}`, {
+      path: path.join(projectDir, "missing.png")
+    });
+    assertEqual(missing.status, 404, "HTTP image import should reject missing local paths as client errors");
+    assertEqual(missing.body.error, "Image path does not exist.", "missing image paths should return a useful error");
+
+    const directory = await postJson(`${base}api/images${search}`, {
+      path: projectDir
+    });
+    assertEqual(directory.status, 400, "HTTP image import should reject directory paths as client errors");
+    assertEqual(directory.body.error, "Image path must point to a file.", "directory image paths should return a useful error");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
 async function testHttpJsonBoundaries() {
   const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-http-json-"));
   const { server, url } = await createServer({
@@ -145,6 +168,11 @@ async function testHttpJsonBoundaries() {
     if (!String(tooLargeBody.error || "").includes("limit")) {
       throw new Error("oversized JSON should describe the body limit.");
     }
+
+    const badPath = await fetch(`${base}%E0%A4%A${search}`);
+    const badPathBody = await badPath.json();
+    assertEqual(badPath.status, 400, "malformed URL encoding should return a client error");
+    assertEqual(badPathBody.error, "Request path must use valid URL encoding.", "malformed URL encoding should return a useful error");
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
@@ -273,6 +301,14 @@ async function testMcpCanvasStatus() {
       }),
       "MCP tool call requires projectDir.",
       "MCP canvas_status should reject missing projectDir instead of using cwd"
+    );
+    await assertRejects(
+      () => client.request("tools/call", {
+        name: "canvas_status",
+        arguments: { projectDir: "relative-project" }
+      }),
+      "MCP tool call requires an absolute projectDir.",
+      "MCP canvas_status should reject relative projectDir instead of resolving against server cwd"
     );
   } finally {
     await client.stop();
