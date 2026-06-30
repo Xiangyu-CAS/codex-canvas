@@ -791,6 +791,7 @@ async function testThreadMigrationAssetPaths() {
 async function testPersistentProjectRegistry() {
   const firstProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-registry-first-"));
   const secondProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-registry-second-"));
+  const reboundProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-registry-rebound-"));
   const registryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-registry-file-"));
   const persistentRegistryPath = path.join(registryRoot, "projects.json");
   const first = await createServer({
@@ -802,6 +803,8 @@ async function testPersistentProjectRegistry() {
   const firstBase = first.url.replace(/\?.*/, "");
   const firstProjectId = new URL(first.url).searchParams.get("project");
   let registered;
+  let reboundOldProjectId;
+  let reboundNewProjectId;
   try {
     registered = await postJson(`${firstBase}api/projects`, {
       projectDir: secondProjectDir,
@@ -809,6 +812,18 @@ async function testPersistentProjectRegistry() {
       threadId: "thread-persisted-registry"
     });
     assertEqual(registered.status, 201, "HTTP project registration should succeed before registry persistence is checked");
+
+    const rebound = await postJson(`${firstBase}api/projects`, {
+      projectDir: reboundProjectDir,
+      autoCollect: false
+    });
+    assertEqual(rebound.status, 201, "HTTP project registration should support a project that will be rebound");
+    reboundOldProjectId = new URL(rebound.body.url).searchParams.get("project");
+    const reboundBinding = await postJson(`${firstBase}api/chat-binding?project=${encodeURIComponent(reboundOldProjectId)}`, {
+      threadId: "thread-persisted-alias"
+    });
+    assertEqual(reboundBinding.status, 200, "HTTP chat binding should succeed before alias persistence is checked");
+    reboundNewProjectId = reboundBinding.body.projectId;
   } finally {
     await new Promise((resolve) => first.server.close(resolve));
   }
@@ -816,6 +831,9 @@ async function testPersistentProjectRegistry() {
   const registryPayload = JSON.parse(await fs.readFile(persistentRegistryPath, "utf8"));
   if (!registryPayload.projects?.some((project) => project.projectDir === secondProjectDir && project.chatThreadId === "thread-persisted-registry")) {
     throw new Error("Persistent project registry should store registered thread-scoped projects.");
+  }
+  if (!registryPayload.aliases?.some((alias) => alias.from === reboundOldProjectId && alias.to === reboundNewProjectId)) {
+    throw new Error("Persistent project registry should store project id aliases created by chat binding.");
   }
 
   const restoredProjectId = new URL(registered.body.url).searchParams.get("project");
@@ -838,6 +856,9 @@ async function testPersistentProjectRegistry() {
 
     const stateResponse = await fetch(`${secondBase}api/state?project=${encodeURIComponent(restoredProjectId)}`);
     assertEqual(stateResponse.status, 200, "Restored project id should route to its canvas state after restart");
+
+    const aliasStateResponse = await fetch(`${secondBase}api/state?project=${encodeURIComponent(reboundOldProjectId)}`);
+    assertEqual(aliasStateResponse.status, 200, "Persisted project id aliases should route old open canvas URLs after restart");
   } finally {
     await new Promise((resolve) => second.server.close(resolve));
   }

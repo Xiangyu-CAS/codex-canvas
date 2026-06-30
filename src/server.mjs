@@ -374,7 +374,7 @@ async function registerProject(registry, projectDir, { autoCollect = true, chatT
 }
 
 async function restorePersistedProjects(registry) {
-  const entries = await readPersistedProjectEntries(registry.persistentRegistryPath);
+  const { projects: entries, aliases } = await readPersistedRegistry(registry.persistentRegistryPath);
   for (const entry of entries) {
     if (!entry || typeof entry !== "object") continue;
     if (typeof entry.projectDir !== "string" || !path.isAbsolute(entry.projectDir)) continue;
@@ -388,17 +388,26 @@ async function restorePersistedProjects(registry) {
       console.error(`Agent-Canvas skipped persisted project ${entry.projectDir}: ${error.message}`);
     });
   }
+  for (const alias of aliases) {
+    if (!alias || typeof alias !== "object") continue;
+    const from = typeof alias.from === "string" ? alias.from : "";
+    const to = typeof alias.to === "string" ? alias.to : "";
+    if (from && to && registry.projects.has(to)) registry.projectAliases.set(from, to);
+  }
 }
 
-async function readPersistedProjectEntries(registryPath) {
+async function readPersistedRegistry(registryPath) {
   try {
     const payload = JSON.parse(await fs.readFile(registryPath, "utf8"));
-    if (Array.isArray(payload)) return payload;
-    return Array.isArray(payload?.projects) ? payload.projects : [];
+    if (Array.isArray(payload)) return { projects: payload, aliases: [] };
+    return {
+      projects: Array.isArray(payload?.projects) ? payload.projects : [],
+      aliases: Array.isArray(payload?.aliases) ? payload.aliases : []
+    };
   } catch (error) {
-    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return [];
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return { projects: [], aliases: [] };
     console.error(`Agent-Canvas could not read project registry ${registryPath}: ${error.message}`);
-    return [];
+    return { projects: [], aliases: [] };
   }
 }
 
@@ -416,7 +425,11 @@ async function persistProjectRegistry(registry) {
   const payload = {
     version: 1,
     updatedAt: new Date().toISOString(),
-    projects
+    projects,
+    aliases: Array.from(registry.projectAliases.entries())
+      .filter(([, to]) => registry.projects.has(to))
+      .map(([from, to]) => ({ from, to }))
+      .sort((a, b) => a.from.localeCompare(b.from))
   };
   await fs.mkdir(path.dirname(registry.persistentRegistryPath), { recursive: true });
   const tempPath = `${registry.persistentRegistryPath}.${process.pid}.${Date.now()}.tmp`;
