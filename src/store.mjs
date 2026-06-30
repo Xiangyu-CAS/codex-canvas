@@ -372,24 +372,24 @@ export async function transformState(projectDir, options = {}, transformer) {
 async function readStateFile(projectDir, options = {}) {
   const canvasId = canvasIdFrom(options);
   const raw = await fs.readFile(statePathFor(projectDir, canvasId), "utf8");
-  return normalizeState(JSON.parse(raw));
+  return normalizeState(JSON.parse(raw), { projectDir, canvasId });
 }
 
 async function writeStateFile(projectDir, state, options = {}) {
   const canvasId = canvasIdFrom(options);
   const statePath = statePathFor(projectDir, canvasId);
   await fs.mkdir(path.dirname(statePath), { recursive: true });
-  const next = normalizeState({ ...state, updatedAt: new Date().toISOString() });
+  const next = normalizeState({ ...state, updatedAt: new Date().toISOString() }, { projectDir, canvasId });
   const tempPath = `${statePath}.${process.pid}.${Date.now()}.${crypto.randomBytes(3).toString("hex")}.tmp`;
   await fs.writeFile(tempPath, `${JSON.stringify(next, null, 2)}\n`);
   await fs.rename(tempPath, statePath);
   return next;
 }
 
-function normalizeState(state = {}) {
+function normalizeState(state = {}, context = {}) {
   const objects = Array.isArray(state.objects)
     ? state.objects
-      .map(normalizePersistedObject)
+      .map((object) => normalizePersistedObject(object, context))
       .filter(Boolean)
     : [];
   const selection = typeof state.selection === "string" && objects.some((object) => object.id === state.selection)
@@ -608,7 +608,7 @@ function sanitizeString(value, fallback = "", limit = 300, trim = true) {
   return (normalized || fallback).slice(0, limit);
 }
 
-function normalizePersistedObject(object) {
+function normalizePersistedObject(object, context = {}) {
   if (!object || typeof object !== "object") return null;
   const id = sanitizeString(object.id, "", 200);
   if (!id) return null;
@@ -640,6 +640,7 @@ function normalizePersistedObject(object) {
     if (crop) normalized.crop = crop;
     else delete normalized.crop;
   }
+  sanitizePersistedAssetFields(normalized, object, context);
   for (const key of [
     "layerGroupIndex",
     "layerGroupOriginalX",
@@ -656,6 +657,64 @@ function normalizePersistedObject(object) {
       : sanitizeCoordinate(object[key]);
   }
   return normalized;
+}
+
+function sanitizePersistedAssetFields(normalized, original, { projectDir, canvasId } = {}) {
+  if (!projectDir) return;
+  const objectType = normalized.type || "image";
+  if (objectType !== "image" && objectType !== "job") return;
+
+  const safeAssetPath = safePersistedAssetPath(original.assetPath, projectDir, canvasId);
+  if (safeAssetPath) {
+    normalized.assetPath = safeAssetPath;
+    if (typeof original.sourcePath === "string" && original.sourcePath.trim()) {
+      normalized.sourcePath = path.resolve(original.sourcePath);
+    } else {
+      normalized.sourcePath = null;
+    }
+    normalized.src = sanitizePersistedImageSrc(original.src, safeAssetPath);
+    return;
+  }
+
+  normalized.assetPath = null;
+  normalized.sourcePath = null;
+  normalized.src = sanitizePersistedImageSrc(original.src, null);
+}
+
+function safePersistedAssetPath(assetPath, projectDir, canvasId) {
+  if (typeof assetPath !== "string" || !assetPath.trim()) return null;
+  const resolved = path.resolve(assetPath);
+  const assetsDir = assetsDirFor(projectDir, canvasId);
+  return isInsidePath(assetsDir, resolved) ? resolved : null;
+}
+
+function sanitizePersistedImageSrc(src, safeAssetPath) {
+  if (typeof src !== "string" || !src.trim()) return safeAssetPath ? `/assets/${encodeURIComponent(path.basename(safeAssetPath))}` : "";
+  const trimmed = src.trim();
+  if (safeAssetPath && isAssetSrc(trimmed)) return trimmed.slice(0, 2000);
+  if (/^https?:\/\//i.test(trimmed)) return trimmed.slice(0, 2000);
+  return safeAssetPath ? `/assets/${encodeURIComponent(path.basename(safeAssetPath))}` : "";
+}
+
+function isAssetSrc(src) {
+  try {
+    const url = new URL(src, "http://agent-canvas.local");
+    return url.origin === "http://agent-canvas.local" && url.pathname.startsWith("/assets/");
+  } catch {
+    return false;
+  }
+}
+
+function isInsidePath(parentPath, childPath) {
+  const parent = comparablePath(parentPath);
+  const child = comparablePath(childPath);
+  const relative = path.relative(parent, child);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function comparablePath(filePath) {
+  const resolved = path.resolve(filePath);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
 export async function updateProjectMeta(projectDir, patch, options = {}) {

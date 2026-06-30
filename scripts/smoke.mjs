@@ -168,6 +168,11 @@ async function testObjectInputSanitization() {
   assertEqual(drawing.points[0].y, -1000000, "addObject should cap drawing point y coordinates");
 
   const corruptProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-object-state-"));
+  const corruptAssetsDir = assetsDirFor(corruptProjectDir);
+  const safePersistedAssetPath = path.join(corruptAssetsDir, "safe-persisted.png");
+  const safePersistedSourcePath = path.join(os.tmpdir(), "safe-persisted-source.png");
+  await fs.mkdir(corruptAssetsDir, { recursive: true });
+  await fs.writeFile(safePersistedAssetPath, Buffer.from(pngOne, "base64"));
   await fs.mkdir(path.dirname(statePathFor(corruptProjectDir)), { recursive: true });
   await fs.writeFile(statePathFor(corruptProjectDir), `${JSON.stringify({
     version: 1,
@@ -176,12 +181,15 @@ async function testObjectInputSanitization() {
     objects: [
       { id: "", type: "text", text: "drop me", width: 10, height: 10 },
       { id: "legacy-text", type: "text", text: "legacy", x: 1e12, y: -1e12, width: -10, height: 999999, fontSize: 999 },
-      { id: "legacy-drawing", type: "drawing", strokeWidth: -4, points: [{ x: 1e12, y: 2 }, { x: null, y: 2 }] }
+      { id: "legacy-drawing", type: "drawing", strokeWidth: -4, points: [{ x: 1e12, y: 2 }, { x: null, y: 2 }] },
+      { id: "unsafe-image", type: "image", src: "file:///private/secret.png", assetPath: "/private/secret.png", sourcePath: "/private/source.png", width: 10, height: 10 },
+      { id: "safe-image", type: "image", src: "/assets/safe-persisted.png", assetPath: safePersistedAssetPath, sourcePath: safePersistedSourcePath, width: 10, height: 10 },
+      { id: "remote-image", type: "image", src: "https://example.invalid/remote.png", assetPath: "/private/remote.png", sourcePath: "/private/remote-source.png", width: 10, height: 10 }
     ],
     selection: "legacy-text"
   }, null, 2)}\n`);
   const corruptState = await readState(corruptProjectDir);
-  assertEqual(corruptState.objects.length, 2, "readState should drop persisted objects without stable ids");
+  assertEqual(corruptState.objects.length, 5, "readState should drop persisted objects without stable ids");
   const legacyText = corruptState.objects.find((object) => object.id === "legacy-text");
   assertEqual(legacyText.x, 1000000, "readState should cap persisted object coordinates");
   assertEqual(legacyText.width, 1, "readState should clamp persisted object dimensions to a visible minimum");
@@ -190,6 +198,18 @@ async function testObjectInputSanitization() {
   const legacyDrawing = corruptState.objects.find((object) => object.id === "legacy-drawing");
   assertEqual(legacyDrawing.strokeWidth, 1, "readState should clamp persisted drawing stroke width");
   assertEqual(legacyDrawing.points.length, 1, "readState should drop malformed persisted drawing points");
+  const unsafeImage = corruptState.objects.find((object) => object.id === "unsafe-image");
+  assertEqual(unsafeImage.assetPath, null, "readState should drop persisted image asset paths outside the canvas assets directory");
+  assertEqual(unsafeImage.sourcePath, null, "readState should drop source paths when the persisted local asset is unsafe");
+  assertEqual(unsafeImage.src, "", "readState should drop local file image URLs from persisted state");
+  const safeImage = corruptState.objects.find((object) => object.id === "safe-image");
+  assertEqual(safeImage.assetPath, path.resolve(safePersistedAssetPath), "readState should preserve canvas-local persisted image assets");
+  assertEqual(safeImage.sourcePath, path.resolve(safePersistedSourcePath), "readState should preserve source paths only when the local asset is trusted");
+  assertEqual(safeImage.src, "/assets/safe-persisted.png", "readState should preserve asset URLs for trusted local assets");
+  const remoteImage = corruptState.objects.find((object) => object.id === "remote-image");
+  assertEqual(remoteImage.assetPath, null, "readState should not trust local asset paths on remote images");
+  assertEqual(remoteImage.sourcePath, null, "readState should not keep source paths for remote-only images");
+  assertEqual(remoteImage.src, "https://example.invalid/remote.png", "readState should preserve remote image URLs");
   assertEqual(corruptState.selection, "legacy-text", "readState should preserve selections that still point at sanitized objects");
 }
 
