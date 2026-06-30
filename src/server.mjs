@@ -1,5 +1,7 @@
 import http from "node:http";
 import fs from "node:fs/promises";
+import { watch } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import crypto from "node:crypto";
@@ -24,8 +26,8 @@ const contentTypes = {
 };
 const defaultMaxJsonBodyBytes = 32 * 1024 * 1024;
 
-export async function createServer({ projectDir, host = "127.0.0.1", port = 43217, autoCollect = true, chatThreadId = null, autoCollectIntervalMs = 5000, maxJsonBodyBytes = defaultMaxJsonBodyBytes, persistentRegistryPath = projectRegistryPath() } = {}) {
-  const registry = createProjectRegistry({ host, port, autoCollectIntervalMs, maxJsonBodyBytes, persistentRegistryPath });
+export async function createServer({ projectDir, host = "127.0.0.1", port = 43217, autoCollect = true, chatThreadId = null, autoCollectIntervalMs = 5000, autoCollectWatchDebounceMs = 250, maxJsonBodyBytes = defaultMaxJsonBodyBytes, persistentRegistryPath = projectRegistryPath() } = {}) {
+  const registry = createProjectRegistry({ host, port, autoCollectIntervalMs, autoCollectWatchDebounceMs, maxJsonBodyBytes, persistentRegistryPath });
   const initialProject = await registerProject(registry, projectDir, { autoCollect, chatThreadId });
   await restorePersistedProjects(registry);
 
@@ -56,7 +58,7 @@ export async function createServer({ projectDir, host = "127.0.0.1", port = 4321
   await persistProjectRegistrySafely(registry);
   server.on("close", () => {
     for (const project of registry.projects.values()) {
-      if (project.collectorTimer) clearInterval(project.collectorTimer);
+      stopAutoCollector(project);
     }
   });
 
@@ -281,11 +283,12 @@ function sendJson(response, status, body) {
   response.end(JSON.stringify(body));
 }
 
-function createProjectRegistry({ host, port, autoCollectIntervalMs, maxJsonBodyBytes, persistentRegistryPath }) {
+function createProjectRegistry({ host, port, autoCollectIntervalMs, autoCollectWatchDebounceMs, maxJsonBodyBytes, persistentRegistryPath }) {
   return {
     host,
     port,
     autoCollectIntervalMs,
+    autoCollectWatchDebounceMs,
     maxJsonBodyBytes,
     persistentRegistryPath,
     baseUrl: `http://${host}:${port}/`,
@@ -336,7 +339,7 @@ async function registerProject(registry, projectDir, { autoCollect = true, chatT
     if (normalizedThreadId) existing.chatThreadId = normalizedThreadId;
     existing.canvasId = canvasId;
     if (registeredAt && !existing.registeredAt) existing.registeredAt = registeredAt;
-    if (autoCollect && !existing.collectorTimer) startAutoCollector(existing, registry.autoCollectIntervalMs);
+    if (autoCollect && !existing.collectorTimer) startAutoCollector(existing, registry);
     return existing;
   }
 
@@ -349,11 +352,13 @@ async function registerProject(registry, projectDir, { autoCollect = true, chatT
     collectSinceMs: Date.now(),
     registeredAt: registeredAt || new Date().toISOString(),
     collectorTimer: null,
+    collectorWatchers: [],
+    collectorWatchDebounceTimer: null,
     collectorRunning: false
   };
   registry.projects.set(id, project);
   registry.defaultProjectId ||= id;
-  if (autoCollect) startAutoCollector(project, registry.autoCollectIntervalMs);
+  if (autoCollect) startAutoCollector(project, registry);
   return project;
 }
 
@@ -424,13 +429,71 @@ async function directoryExists(directoryPath) {
   }
 }
 
-function startAutoCollector(project, intervalMs = 5000) {
+function startAutoCollector(project, registry) {
+  const intervalMs = registry.autoCollectIntervalMs || 5000;
   project.collectorTimer = setInterval(() => {
     runAutoCollectorPass(project).catch((error) => {
       console.error(`Agent-Canvas auto-collect failed for ${project.projectDir}: ${error.message}`);
     });
   }, intervalMs);
   project.collectorTimer.unref?.();
+  startAutoCollectorWatchers(project, registry);
+}
+
+function startAutoCollectorWatchers(project, registry) {
+  stopAutoCollectorWatchers(project);
+  for (const root of autoCollectorWatchRoots(project.projectDir)) {
+    let watcher;
+    try {
+      watcher = watch(root, { persistent: false }, () => scheduleAutoCollectorPass(project, registry.autoCollectWatchDebounceMs));
+    } catch {
+      continue;
+    }
+    watcher.on("error", () => {
+      watcher.close();
+      project.collectorWatchers = project.collectorWatchers.filter((item) => item !== watcher);
+    });
+    watcher.unref?.();
+    project.collectorWatchers.push(watcher);
+  }
+}
+
+function autoCollectorWatchRoots(projectDir) {
+  return [...new Set([
+    path.resolve(projectDir),
+    path.join(os.homedir(), ".codex", "generated_images")
+  ])];
+}
+
+function scheduleAutoCollectorPass(project, debounceMs = 250) {
+  if (!project.autoCollect) return;
+  if (project.collectorWatchDebounceTimer) clearTimeout(project.collectorWatchDebounceTimer);
+  project.collectorWatchDebounceTimer = setTimeout(() => {
+    project.collectorWatchDebounceTimer = null;
+    runAutoCollectorPass(project).catch((error) => {
+      console.error(`Agent-Canvas auto-collect watcher failed for ${project.projectDir}: ${error.message}`);
+    });
+  }, Math.max(25, debounceMs));
+  project.collectorWatchDebounceTimer.unref?.();
+}
+
+function stopAutoCollector(project) {
+  if (project.collectorTimer) clearInterval(project.collectorTimer);
+  project.collectorTimer = null;
+  stopAutoCollectorWatchers(project);
+}
+
+function stopAutoCollectorWatchers(project) {
+  if (project.collectorWatchDebounceTimer) clearTimeout(project.collectorWatchDebounceTimer);
+  project.collectorWatchDebounceTimer = null;
+  for (const watcher of project.collectorWatchers || []) {
+    try {
+      watcher.close();
+    } catch {
+      // Closing a watcher that already emitted an error is harmless.
+    }
+  }
+  project.collectorWatchers = [];
 }
 
 async function runAutoCollectorPass(project) {
@@ -545,7 +608,7 @@ async function bindProjectToThread(registry, project, threadId) {
     if (project.id !== nextId) {
       aliasProjectId(registry, project.id, nextId);
       registry.projects.delete(project.id);
-      if (project.collectorTimer) clearInterval(project.collectorTimer);
+      stopAutoCollector(project);
       if (registry.defaultProjectId === project.id) registry.defaultProjectId = nextId;
     }
     return existing;

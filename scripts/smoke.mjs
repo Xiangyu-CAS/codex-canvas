@@ -31,7 +31,7 @@ async function main() {
     ["thread migration asset paths", testThreadMigrationAssetPaths],
     ["persistent project registry", testPersistentProjectRegistry],
     ["mcp canvas status", testMcpCanvasStatus],
-    ["auto collector watermark", testAutoCollectorWatermark],
+    ["auto collector watcher watermark", testAutoCollectorWatermark],
     ["package optional dependency scripts", testPackageOptionalDependencyScripts],
     ["personal plugin installer", testPersonalPluginInstaller],
     ["cli collect help", testCliCollectHelp],
@@ -485,7 +485,8 @@ async function testAutoCollectorWatermark() {
     projectDir,
     port: 0,
     autoCollect: true,
-    autoCollectIntervalMs: 100
+    autoCollectIntervalMs: 60_000,
+    autoCollectWatchDebounceMs: 50
   });
   const base = url.replace(/\?.*/, "");
   const search = new URL(url).search;
@@ -493,7 +494,7 @@ async function testAutoCollectorWatermark() {
     const staleMtimeMs = Date.now();
     const firstPath = path.join(projectDir, "first.png");
     await fs.writeFile(firstPath, Buffer.from(pngOne, "base64"));
-    await waitForObjectCount(`${base}api/state${search}`, 1, "auto collector should import a new project image");
+    await waitForObjectCount(`${base}api/state${search}`, 1, "auto collector watcher should import a new project image before the polling fallback");
 
     const stalePath = path.join(projectDir, "stale-but-new-file.png");
     await fs.writeFile(stalePath, Buffer.from("not a real png, but a unique image candidate"));

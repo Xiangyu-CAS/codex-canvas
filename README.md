@@ -164,4 +164,4 @@ canvas/
 
 `agent-canvas.json` 保存默认画布对象和选区状态；绑定 Codex thread 后，每个 thread 的画布状态保存在 `canvas/threads/<canvasId>/agent-canvas.json`。`assets/` 保存导入的图片文件，`jobs/` 保存后台 AI 操作的日志、中间产物和输出。
 
-服务启动后会自动扫描项目内和 `~/.codex/generated_images` 中新产生的图片文件，并导入画布。自动扫描会忽略 `canvas/`、`node_modules/`、`.git/` 等目录，并在成功扫描后推进每个项目画布的扫描水位；如果不希望自动收集，可以使用 `--no-auto-collect`。
+服务启动后会监听项目内和 `~/.codex/generated_images` 中新产生的图片文件，并保留周期扫描作为兜底，然后导入画布。自动收集会忽略 `canvas/`、`node_modules/`、`.git/` 等目录，并在成功扫描后推进每个项目画布的扫描水位；如果不希望自动收集，可以使用 `--no-auto-collect`。
