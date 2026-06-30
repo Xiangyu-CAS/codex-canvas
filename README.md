@@ -86,6 +86,8 @@ node ./bin/agent-canvas.mjs import ./example.png --project .
 node ./bin/agent-canvas.mjs collect --project . --since-minutes 30 --limit 5
 ```
 
+未指定 `--from` 时，`collect` 会默认扫描 `~/.codex/generated_images` 和当前项目目录；如需限定扫描范围，可以传入逗号分隔的 `--from <dir,dir>`。
+
 ## Codex 插件安装
 
 本地开发时可以把当前仓库暴露给 Codex personal marketplace：

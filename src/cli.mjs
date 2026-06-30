@@ -329,7 +329,7 @@ Commands:
   open      Start the local server in the background and print the canvas URL.
   start     Run the local canvas server in the foreground with auto-collection enabled.
   import    Copy an image into the project canvas and place it on the board.
-  collect   Import recent image files from the project as a fallback auto-collector.
+  collect   Import recent image files from ~/.codex/generated_images and the project.
   status    Print current canvas runtime and object count.
   setup-ocr Install RapidOCR for local Edit Text recognition.
   setup-image-deps Install Pillow and numpy for Edit Elements local layer processing.

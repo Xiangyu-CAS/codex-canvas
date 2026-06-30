@@ -21,6 +21,7 @@ async function main() {
     ["thread migration asset paths", testThreadMigrationAssetPaths],
     ["mcp canvas status", testMcpCanvasStatus],
     ["auto collector watermark", testAutoCollectorWatermark],
+    ["cli collect help", testCliCollectHelp],
     ["chat binding alias", testChatBindingAlias],
     ["chat websocket fallback", testChatWebSocketFallback],
     ["chat turn action contract", testChatTurnActionContract],
@@ -162,6 +163,20 @@ async function testMcpCanvasStatus() {
     assertEqual(status.structuredContent?.chatBound, false, "MCP canvas_status should not infer chat binding without threadId");
   } finally {
     await client.stop();
+  }
+}
+
+async function testCliCollectHelp() {
+  const { stdout } = await execFileAsync(process.execPath, [path.join(process.cwd(), "bin", "agent-canvas.mjs"), "help"], {
+    cwd: process.cwd(),
+    maxBuffer: 1024 * 1024,
+    windowsHide: true
+  });
+  if (!stdout.includes("agent-canvas collect [--project <dir>] [--from <dir,dir>] [--since-minutes 120] [--limit 20]")) {
+    throw new Error("CLI help should document collect flags.");
+  }
+  if (!stdout.includes("Import recent image files from ~/.codex/generated_images and the project.")) {
+    throw new Error("CLI help should document collect default roots.");
   }
 }
 
