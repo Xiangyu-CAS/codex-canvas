@@ -446,6 +446,7 @@ async function testPersistentProjectRegistry() {
     persistentRegistryPath
   });
   const firstBase = first.url.replace(/\?.*/, "");
+  const firstProjectId = new URL(first.url).searchParams.get("project");
   let registered;
   try {
     registered = await postJson(`${firstBase}api/projects`, {
@@ -485,6 +486,34 @@ async function testPersistentProjectRegistry() {
     assertEqual(stateResponse.status, 200, "Restored project id should route to its canvas state after restart");
   } finally {
     await new Promise((resolve) => second.server.close(resolve));
+  }
+
+  const third = await createServer({
+    projectDir: firstProjectDir,
+    port: 0,
+    autoCollect: true,
+    persistentRegistryPath,
+    autoCollectIntervalMs: 100,
+    autoCollectWatchDebounceMs: 25
+  });
+  const thirdBase = third.url.replace(/\?.*/, "");
+  try {
+    const projectsResponse = await fetch(`${thirdBase}api/projects`);
+    const projectsBody = await projectsResponse.json();
+    const restoredInitial = projectsBody.projects?.find((project) => project.id === firstProjectId);
+    if (!restoredInitial) throw new Error("Restarted Agent-Canvas server should restore the initial project from the persistent registry.");
+    assertEqual(restoredInitial.autoCollect, false, "Initial projects with persisted auto-collection opt-out should stay disabled after restart");
+
+    const imagePath = path.join(firstProjectDir, `initial-opt-out-${Date.now()}.png`);
+    await fs.writeFile(imagePath, Buffer.from(pngOne, "base64"));
+    await delay(700);
+    const stateResponse = await fetch(`${thirdBase}api/state?project=${encodeURIComponent(firstProjectId)}`);
+    const state = await stateResponse.json();
+    if (state.objects?.some((object) => path.resolve(object.sourcePath || "") === path.resolve(imagePath))) {
+      throw new Error("Persisted initial project auto-collection opt-out should prevent background image imports.");
+    }
+  } finally {
+    await new Promise((resolve) => third.server.close(resolve));
   }
 }
 

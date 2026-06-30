@@ -336,11 +336,12 @@ async function registerProject(registry, projectDir, { autoCollect = true, chatT
   const id = projectIdFor(resolvedProjectDir, canvasId);
   const existing = registry.projects.get(id);
   if (existing) {
-    existing.autoCollect = existing.autoCollect || autoCollect;
+    existing.autoCollect = Boolean(autoCollect);
     if (normalizedThreadId) existing.chatThreadId = normalizedThreadId;
     existing.canvasId = canvasId;
     if (registeredAt && !existing.registeredAt) existing.registeredAt = registeredAt;
-    if (autoCollect && !existing.collectorTimer) startAutoCollector(existing, registry);
+    if (existing.autoCollect) startAutoCollector(existing, registry);
+    else stopAutoCollector(existing);
     return existing;
   }
 
