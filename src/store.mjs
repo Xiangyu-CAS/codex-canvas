@@ -870,7 +870,11 @@ export async function deleteObject(projectDir, id, options = {}) {
 }
 
 export async function deleteObjects(projectDir, ids, options = {}) {
-  const idSet = new Set(Array.isArray(ids) ? ids.filter((id) => typeof id === "string" && id.trim()) : []);
+  const idSet = new Set(Array.isArray(ids)
+    ? ids
+      .filter((id) => typeof id === "string" && id.trim())
+      .map((id) => id.trim())
+    : []);
   if (idSet.size === 0) {
     const error = new Error("delete_objects requires at least one object id.");
     error.statusCode = 400;

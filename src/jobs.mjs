@@ -13,7 +13,7 @@ import { recognizeTextLocal } from "./local-ocr.mjs";
 const execFileAsync = promisify(execFile);
 const jobs = new Map();
 const textRecognitionJobs = new Map();
-const supportedActions = new Set(["remove-bg", "quick-edit", "expand", "upscale", "multi-angles", "move-object", "edit-text", "edit-elements"]);
+const supportedActions = new Set(["remove-bg", "quick-edit", "expand", "upscale", "multi-angles", "move-object", "edit-elements"]);
 const ignoredGeneratedImagePaths = new Map();
 const globalIgnoredGeneratedImageScope = "__global__";
 const outputPollMs = 1000;
@@ -30,6 +30,11 @@ export async function createImageJob(projectDir, input, options = {}) {
   const canvasId = normalizeCanvasId(options.canvasId);
   const storeOptions = { canvasId };
   const action = String(input.action || "");
+  if (action === "edit-text") {
+    const error = new Error("Edit Text must be started with the text recognition workflow.");
+    error.statusCode = 400;
+    throw error;
+  }
   if (!supportedActions.has(action)) {
     const error = new Error(`Unsupported image job action: ${action || "(missing)"}`);
     error.statusCode = 400;

@@ -15,7 +15,8 @@ import { addImage, addObject, deleteObjects, promptHistory, readState, searchObj
 const execFileAsync = promisify(execFile);
 
 const pngOne = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
-const stableImageJobActions = ["quick-edit", "remove-bg", "expand", "upscale", "multi-angles", "move-object", "edit-text", "edit-elements"];
+const stableFrontendImageActions = ["quick-edit", "remove-bg", "expand", "upscale", "multi-angles", "move-object", "edit-text", "edit-elements"];
+const directImageJobActions = ["quick-edit", "remove-bg", "expand", "upscale", "multi-angles", "move-object", "edit-elements"];
 let smokeProjectRegistryPath = null;
 
 async function main() {
@@ -754,18 +755,24 @@ async function testHttpProjectRegistrationBoundaries() {
     autoCollect: false
   });
   const base = url.replace(/\?.*/, "");
+  const search = new URL(url).search;
   try {
-    const missing = await postJson(`${base}api/projects`, {});
+    const unauthorized = await postJson(`${base}api/projects`, {
+      projectDir
+    });
+    assertEqual(unauthorized.status, 403, "HTTP project registration should require the runtime capability token");
+
+    const missing = await postJson(`${base}api/projects${search}`, {});
     assertEqual(missing.status, 400, "HTTP project registration should reject missing projectDir");
 
-    const empty = await postJson(`${base}api/projects`, { projectDir: "" });
+    const empty = await postJson(`${base}api/projects${search}`, { projectDir: "" });
     assertEqual(empty.status, 400, "HTTP project registration should reject empty projectDir");
 
-    const relative = await postJson(`${base}api/projects`, { projectDir: "relative-project" });
+    const relative = await postJson(`${base}api/projects${search}`, { projectDir: "relative-project" });
     assertEqual(relative.status, 400, "HTTP project registration should reject relative projectDir");
 
     const registeredDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-http-projects-registered-"));
-    const registered = await postJson(`${base}api/projects`, {
+    const registered = await postJson(`${base}api/projects${search}`, {
       projectDir: registeredDir,
       autoCollect: false
     });
@@ -798,13 +805,13 @@ async function testFrontendActionContract() {
     throw new Error("frontend should not keep orphan selection more-menu code without a More action.");
   }
 
-  const frontendImageJobActions = [...domActions].filter((action) => stableImageJobActions.includes(action));
+  const frontendImageJobActions = [...domActions].filter((action) => stableFrontendImageActions.includes(action));
   for (const action of frontendImageJobActions) {
     if (!translatedActions.has(action)) {
       throw new Error(`frontend image action ${action} should have a translated label.`);
     }
   }
-  for (const action of ["quick-edit", "remove-bg", "expand", "upscale", "multi-angles", "move-object", "edit-text", "edit-elements"]) {
+  for (const action of stableFrontendImageActions) {
     if (!frontendImageJobActions.includes(action)) {
       throw new Error(`frontend should expose the existing stable ${action} image action.`);
     }
@@ -819,7 +826,7 @@ async function assertHttpImageJobActionsAccepted() {
   const base = url.replace(/\?.*/, "");
   const search = new URL(url).search;
   try {
-    for (const action of stableImageJobActions) {
+    for (const action of directImageJobActions) {
       const response = await postJson(`${base}api/jobs${search}`, {
         action,
         objectId: "missing-object"
@@ -828,6 +835,15 @@ async function assertHttpImageJobActionsAccepted() {
       if (/Unsupported image job action/.test(response.body.error || "")) {
         throw new Error(`HTTP image job action ${action} should be accepted as a stable backend action.`);
       }
+    }
+
+    const directEditText = await postJson(`${base}api/jobs${search}`, {
+      action: "edit-text",
+      objectId: "missing-object"
+    });
+    assertEqual(directEditText.status, 400, "HTTP image jobs should not start Edit Text without the text recognition workflow");
+    if (!/text recognition workflow/.test(directEditText.body.error || "")) {
+      throw new Error("HTTP image jobs should explain that Edit Text uses the text recognition workflow.");
     }
 
     const unsupported = await postJson(`${base}api/jobs${search}`, {
@@ -873,25 +889,27 @@ async function testPersistentProjectRegistry() {
     persistentRegistryPath
   });
   const firstBase = first.url.replace(/\?.*/, "");
+  const firstSearch = new URL(first.url).search;
+  const firstToken = new URL(first.url).searchParams.get("token");
   const firstProjectId = new URL(first.url).searchParams.get("project");
   let registered;
   let reboundOldProjectId;
   let reboundNewProjectId;
   try {
-    registered = await postJson(`${firstBase}api/projects`, {
+    registered = await postJson(`${firstBase}api/projects${firstSearch}`, {
       projectDir: secondProjectDir,
       autoCollect: false,
       threadId: "thread-persisted-registry"
     });
     assertEqual(registered.status, 201, "HTTP project registration should succeed before registry persistence is checked");
 
-    const rebound = await postJson(`${firstBase}api/projects`, {
+    const rebound = await postJson(`${firstBase}api/projects${firstSearch}`, {
       projectDir: reboundProjectDir,
       autoCollect: false
     });
     assertEqual(rebound.status, 201, "HTTP project registration should support a project that will be rebound");
     reboundOldProjectId = new URL(rebound.body.url).searchParams.get("project");
-    const reboundBinding = await postJson(`${firstBase}api/chat-binding?project=${encodeURIComponent(reboundOldProjectId)}`, {
+    const reboundBinding = await postJson(`${firstBase}api/chat-binding?project=${encodeURIComponent(reboundOldProjectId)}&token=${encodeURIComponent(firstToken)}`, {
       threadId: "thread-persisted-alias"
     });
     assertEqual(reboundBinding.status, 200, "HTTP chat binding should succeed before alias persistence is checked");
@@ -901,6 +919,7 @@ async function testPersistentProjectRegistry() {
   }
 
   const registryPayload = JSON.parse(await fs.readFile(persistentRegistryPath, "utf8"));
+  assertEqual(registryPayload.capabilityToken, firstToken, "Persistent project registry should store the runtime capability token for local CLI reuse");
   if (!registryPayload.projects?.some((project) => project.projectDir === secondProjectDir && project.chatThreadId === "thread-persisted-registry")) {
     throw new Error("Persistent project registry should store registered thread-scoped projects.");
   }
@@ -916,6 +935,7 @@ async function testPersistentProjectRegistry() {
     persistentRegistryPath
   });
   const secondBase = second.url.replace(/\?.*/, "");
+  assertEqual(new URL(second.url).searchParams.get("token"), firstToken, "Restarted Agent-Canvas server should reuse the persisted capability token");
   try {
     const projectsResponse = await fetch(`${secondBase}api/projects`);
     const projectsBody = await projectsResponse.json();
@@ -978,9 +998,10 @@ async function testPersistentProjectRegistryRestoredAutoCollector() {
     autoCollectWatchDebounceMs: 25
   });
   const firstBase = first.url.replace(/\?.*/, "");
+  const firstSearch = new URL(first.url).search;
   let restoredProjectId;
   try {
-    const registered = await postJson(`${firstBase}api/projects`, {
+    const registered = await postJson(`${firstBase}api/projects${firstSearch}`, {
       projectDir: restoredProjectDir
     });
     assertEqual(registered.status, 201, "HTTP project registration should persist an auto-collecting project");
@@ -1176,7 +1197,7 @@ async function assertMcpActionBoundaries(client, projectDir, imageObjectId) {
     { code: -32602, statusCode: 400 }
   );
 
-  for (const action of stableImageJobActions) {
+  for (const action of directImageJobActions) {
     await assertRejects(
       () => client.request("tools/call", {
         name: "start_image_job",
@@ -1187,6 +1208,16 @@ async function assertMcpActionBoundaries(client, projectDir, imageObjectId) {
       { code: -32004, statusCode: 404 }
     );
   }
+
+  await assertRejects(
+    () => client.request("tools/call", {
+      name: "start_image_job",
+      arguments: { projectDir, objectId: "missing-object", action: "edit-text" }
+    }),
+    "text recognition workflow",
+    "MCP start_image_job should not bypass the Edit Text recognition workflow",
+    { code: -32602, statusCode: 400 }
+  );
 
   await assertRejects(
     () => client.request("tools/call", {
@@ -1284,10 +1315,13 @@ function assertMcpToolSchema(tools = []) {
     }
   }
   const startImageJobActions = byName.get("start_image_job")?.inputSchema?.properties?.action?.enum || [];
-  for (const action of stableImageJobActions) {
+  for (const action of directImageJobActions) {
     if (!startImageJobActions.includes(action)) {
       throw new Error(`MCP start_image_job should expose the stable ${action} action.`);
     }
+  }
+  if (startImageJobActions.includes("edit-text")) {
+    throw new Error("MCP start_image_job should not expose direct edit-text; Edit Text uses the text recognition workflow.");
   }
   const sendToChatRequired = byName.get("send_to_chat")?.inputSchema?.required || [];
   for (const field of ["projectDir", "objectId", "threadId", "action"]) {
@@ -1688,6 +1722,12 @@ async function testStoreConcurrency() {
   ]);
   state = await readState(projectDir);
   assertEqual(state.objects.length, 0, "concurrent deleteObjects should remove every object");
+
+  const trimmed = await addObject(projectDir, { type: "text", text: "trimmed-delete" });
+  const trimmedResult = await deleteObjects(projectDir, [`  ${trimmed.id}  `]);
+  assertEqual(trimmedResult.ids[0], trimmed.id, "deleteObjects should trim object ids before matching objects");
+  state = await readState(projectDir);
+  assertEqual(state.objects.length, 0, "deleteObjects should delete objects when ids include surrounding whitespace");
 }
 
 async function testChatBindingAlias() {

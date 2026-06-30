@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { addImage, ensureProjectStore, promptHistory, readState, searchObjects, versionGroups } from "./store.mjs";
 import { createServer } from "./server.mjs";
 import { collectRecentImages } from "./collector.mjs";
-import { resolveProjectDir } from "./paths.mjs";
+import { projectRegistryPath, resolveProjectDir } from "./paths.mjs";
 import { checkImageProcessingDepsAvailable, checkOptionalPythonDepsAvailable, checkRapidOcrAvailable, installImageProcessingDeps, installOptionalPythonDeps, installRapidOcr } from "./ocr-setup.mjs";
 import { canvasIdForThread, readRuntime, writeRuntime, normalizeThreadId } from "./runtime.mjs";
 
@@ -433,9 +434,13 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 750) {
 }
 
 async function registerRemoteProject(baseUrl, projectDir, { autoCollect = true, chatThreadId = null } = {}) {
+  const capabilityToken = capabilityTokenFromUrl(baseUrl) || await readProjectRegistryToken();
   const response = await fetchWithTimeout(apiUrl(baseUrl, "/api/projects"), {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      ...(capabilityToken ? { "x-agent-canvas-token": capabilityToken } : {})
+    },
     body: JSON.stringify({ projectDir, autoCollect, chatThreadId })
   }, 2000);
   if (!response) {
@@ -460,6 +465,28 @@ async function registerRemoteProject(baseUrl, projectDir, { autoCollect = true, 
       reused: true
     }
   };
+}
+
+function capabilityTokenFromUrl(baseUrl) {
+  try {
+    const token = new URL(baseUrl).searchParams.get("token");
+    return isCapabilityToken(token) ? token : null;
+  } catch {
+    return null;
+  }
+}
+
+async function readProjectRegistryToken() {
+  try {
+    const payload = JSON.parse(await fs.readFile(projectRegistryPath(), "utf8"));
+    return isCapabilityToken(payload?.capabilityToken) ? payload.capabilityToken : null;
+  } catch {
+    return null;
+  }
+}
+
+function isCapabilityToken(token) {
+  return typeof token === "string" && /^[A-Za-z0-9_-]{24,}$/.test(token);
 }
 
 function printHelp() {

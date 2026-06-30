@@ -68,6 +68,7 @@ export async function createServer({ projectDir, host = "127.0.0.1", port = 4321
 async function handleRequest(request, response, context) {
   const requestUrl = new URL(request.url, "http://agent-canvas.local");
   const pathname = decodePathname(requestUrl.pathname);
+  requireCapabilityToken(request, requestUrl, pathname, context.registry);
 
   if (request.method === "GET" && pathname === "/api/projects") {
     return sendJson(response, 200, { projects: await listProjects(context.registry) });
@@ -271,7 +272,8 @@ async function sendFile(response, filePath) {
     const buffer = await fs.readFile(filePath);
     response.writeHead(200, {
       "content-type": contentTypes[path.extname(filePath).toLowerCase()] || "application/octet-stream",
-      "cache-control": "no-cache"
+      "cache-control": "no-cache",
+      "referrer-policy": "no-referrer"
     });
     response.end(buffer);
   } catch {
@@ -280,7 +282,10 @@ async function sendFile(response, filePath) {
 }
 
 function sendJson(response, status, body) {
-  response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
+  response.writeHead(status, {
+    "content-type": "application/json; charset=utf-8",
+    "referrer-policy": "no-referrer"
+  });
   response.end(JSON.stringify(body));
 }
 
@@ -296,6 +301,7 @@ function createProjectRegistry({ host, port, autoCollect, autoCollectIntervalMs,
   return {
     host,
     port,
+    capabilityToken: crypto.randomBytes(24).toString("base64url"),
     autoCollect,
     autoCollectIntervalMs,
     autoCollectWatchDebounceMs,
@@ -326,6 +332,24 @@ function decodePathname(pathname) {
     }
     throw error;
   }
+}
+
+function requireCapabilityToken(request, requestUrl, pathname, registry) {
+  if (!requiresCapabilityToken(request, pathname)) return;
+  const token = request.headers["x-agent-canvas-token"] || requestUrl.searchParams.get("token");
+  if (isCapabilityToken(token) && token === registry.capabilityToken) return;
+  const error = new Error("Agent-Canvas API writes require the runtime capability token.");
+  error.statusCode = 403;
+  throw error;
+}
+
+function isCapabilityToken(token) {
+  return typeof token === "string" && /^[A-Za-z0-9_-]{24,}$/.test(token);
+}
+
+function requiresCapabilityToken(request, pathname) {
+  if (!pathname.startsWith("/api/")) return false;
+  return !["GET", "HEAD", "OPTIONS"].includes(request.method);
 }
 
 function requireHttpProjectDir(projectDir) {
@@ -382,7 +406,8 @@ async function registerProject(registry, projectDir, { autoCollect = true, chatT
 }
 
 async function restorePersistedProjects(registry) {
-  const { projects: entries, aliases } = await readPersistedRegistry(registry.persistentRegistryPath);
+  const { projects: entries, aliases, capabilityToken } = await readPersistedRegistry(registry.persistentRegistryPath);
+  if (isCapabilityToken(capabilityToken)) registry.capabilityToken = capabilityToken;
   for (const entry of entries) {
     if (!entry || typeof entry !== "object") continue;
     if (typeof entry.projectDir !== "string" || !path.isAbsolute(entry.projectDir)) continue;
@@ -407,15 +432,16 @@ async function restorePersistedProjects(registry) {
 async function readPersistedRegistry(registryPath) {
   try {
     const payload = JSON.parse(await fs.readFile(registryPath, "utf8"));
-    if (Array.isArray(payload)) return { projects: payload, aliases: [] };
+    if (Array.isArray(payload)) return { projects: payload, aliases: [], capabilityToken: null };
     return {
       projects: Array.isArray(payload?.projects) ? payload.projects : [],
-      aliases: Array.isArray(payload?.aliases) ? payload.aliases : []
+      aliases: Array.isArray(payload?.aliases) ? payload.aliases : [],
+      capabilityToken: typeof payload?.capabilityToken === "string" ? payload.capabilityToken : null
     };
   } catch (error) {
-    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return { projects: [], aliases: [] };
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return { projects: [], aliases: [], capabilityToken: null };
     console.error(`Agent-Canvas could not read project registry ${registryPath}: ${error.message}`);
-    return { projects: [], aliases: [] };
+    return { projects: [], aliases: [], capabilityToken: null };
   }
 }
 
@@ -433,6 +459,7 @@ async function persistProjectRegistry(registry) {
   const payload = {
     version: 1,
     updatedAt: new Date().toISOString(),
+    capabilityToken: registry.capabilityToken,
     projects,
     aliases: Array.from(registry.projectAliases.entries())
       .filter(([, to]) => registry.projects.has(to))
@@ -698,6 +725,7 @@ async function writeProjectRuntime(registry, project) {
 function projectUrl(registry, projectId) {
   const url = new URL(registry.baseUrl);
   url.searchParams.set("project", projectId);
+  url.searchParams.set("token", registry.capabilityToken);
   return url.toString();
 }
 

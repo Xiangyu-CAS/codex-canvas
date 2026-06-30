@@ -29,7 +29,9 @@ const searchDebounceMs = 180;
 const languageStorageKey = "agentCanvasLanguage";
 const toolColorStorageKey = "agentCanvasToolColor";
 const toolColors = ["#202124", "#d93025", "#f9ab00", "#188038", "#1a73e8", "#9334e6", "#ffffff"];
-let currentProjectId = new URLSearchParams(window.location.search).get("project") || "";
+const initialSearchParams = new URLSearchParams(window.location.search);
+let currentProjectId = initialSearchParams.get("project") || "";
+let runtimeCapabilityToken = initialSearchParams.get("token") || "";
 let registeredProjects = [];
 const pendingTextRecognitionCancels = new Set();
 
@@ -1058,6 +1060,7 @@ function switchProject(projectId) {
   }
   const url = new URL(window.location.href);
   url.searchParams.set("project", projectId);
+  if (runtimeCapabilityToken) url.searchParams.set("token", runtimeCapabilityToken);
   window.location.href = `${url.pathname}${url.search}`;
 }
 
@@ -2421,19 +2424,23 @@ async function endDrawing() {
   if (points.length < 2) return;
 
   const bounds = boundsForPoints(points, 10);
-  const object = await createObject({
-    type: "drawing",
-    x: bounds.x,
-    y: bounds.y,
-    width: bounds.width,
-    height: bounds.height,
-    points: points.map((point) => ({ x: point.x - bounds.x, y: point.y - bounds.y })),
-    stroke: activeColor,
-    strokeWidth: 4
-  });
-  setLocalSelection([object.id], { fromUser: true });
-  render();
-  setActiveTool("select");
+  try {
+    const object = await createObject({
+      type: "drawing",
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
+      points: points.map((point) => ({ x: point.x - bounds.x, y: point.y - bounds.y })),
+      stroke: activeColor,
+      strokeWidth: 4
+    });
+    setLocalSelection([object.id], { fromUser: true });
+    render();
+    setActiveTool("select");
+  } catch (error) {
+    showToast(error?.message || t("jobFailed"));
+  }
 }
 
 function cancelDrawing() {
@@ -2452,21 +2459,25 @@ function updateDrawingPreview() {
 async function createTextObject(event) {
   event.preventDefault();
   const point = pointerToWorld(event);
-  const object = await createObject({
-    type: "text",
-    text: t("textPlaceholder"),
-    x: Math.round(point.x),
-    y: Math.round(point.y),
-    width: 220,
-    height: 54,
-    fontSize: 28,
-    color: activeColor
-  });
-  setLocalSelection([object.id], { fromUser: true });
-  editingTextId = object.id;
-  render();
-  focusTextObject(object.id);
-  setActiveTool("select");
+  try {
+    const object = await createObject({
+      type: "text",
+      text: t("textPlaceholder"),
+      x: Math.round(point.x),
+      y: Math.round(point.y),
+      width: 220,
+      height: 54,
+      fontSize: 28,
+      color: activeColor
+    });
+    setLocalSelection([object.id], { fromUser: true });
+    editingTextId = object.id;
+    render();
+    focusTextObject(object.id);
+    setActiveTool("select");
+  } catch (error) {
+    showToast(error?.message || t("jobFailed"));
+  }
 }
 
 async function createObject(payload) {
@@ -2476,6 +2487,7 @@ async function createObject(payload) {
     body: JSON.stringify(payload)
   });
   const object = await response.json();
+  if (!response.ok) throw new Error(object.error || t("jobFailed"));
   state.objects.push(object);
   return object;
 }
@@ -2483,6 +2495,18 @@ async function createObject(payload) {
 async function deleteSelectedObject() {
   const ids = selectedIds.size ? [...selectedIds] : (selectedId ? [selectedId] : []);
   if (!ids.length) return;
+  const previousObjects = [...state.objects];
+  const previousSelection = state.selection;
+  const previousSelectedIds = new Set(selectedIds);
+  const previousSelectedId = selectedId;
+  const restoreDeletedState = (error) => {
+    state.objects = previousObjects;
+    state.selection = previousSelection;
+    selectedIds = previousSelectedIds;
+    selectedId = previousSelectedId;
+    render();
+    showToast(error?.message || t("jobFailed"));
+  };
   const groupId = ids.length === 1 ? selectedLayerGroupId() : null;
   if (groupId) {
     const members = layerGroupMembers(groupId);
@@ -2491,23 +2515,33 @@ async function deleteSelectedObject() {
     state.objects = state.objects.filter((object) => object.layerGroupId !== groupId);
     state.selection = null;
     render();
-    await deleteObjectsById(members.map((object) => object.id));
+    try {
+      await deleteObjectsById(members.map((object) => object.id));
+    } catch (error) {
+      restoreDeletedState(error);
+    }
     return;
   }
   setLocalSelection([]);
   editingTextId = null;
   state.objects = state.objects.filter((object) => !ids.includes(object.id));
   render();
-  await deleteObjectsById(ids);
+  try {
+    await deleteObjectsById(ids);
+  } catch (error) {
+    restoreDeletedState(error);
+  }
 }
 
 async function deleteObjectsById(ids) {
   if (!ids.length) return;
-  await fetch(apiPath("/api/objects"), {
+  const response = await fetch(apiPath("/api/objects"), {
     method: "DELETE",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ ids })
-  }).catch(() => {});
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || t("jobFailed"));
 }
 
 async function uploadImageFiles(files) {
@@ -3480,6 +3514,7 @@ function clamp(value, min, max) {
 function apiPath(pathname) {
   const url = new URL(pathname, window.location.origin);
   if (currentProjectId) url.searchParams.set("project", currentProjectId);
+  if (runtimeCapabilityToken) url.searchParams.set("token", runtimeCapabilityToken);
   return `${url.pathname}${url.search}`;
 }
 
