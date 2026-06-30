@@ -43,16 +43,42 @@ async function migrateLegacyCanvasIfNeeded(projectDir, canvasId) {
   if (!await fileExists(legacyStatePath)) return;
 
   await fs.mkdir(path.dirname(targetStatePath), { recursive: true });
-  await fs.copyFile(legacyStatePath, targetStatePath);
-
   const legacyAssetsDir = assetsDirFor(projectDir);
+  const targetAssetsDir = assetsDirFor(projectDir, canvasId);
+  const legacyState = await readJsonFile(legacyStatePath);
+
   if (await fileExists(legacyAssetsDir)) {
-    await fs.cp(legacyAssetsDir, assetsDirFor(projectDir, canvasId), {
+    await fs.cp(legacyAssetsDir, targetAssetsDir, {
       recursive: true,
       force: false,
       errorOnExist: false
     });
   }
+  await writeMigratedLegacyState(targetStatePath, legacyState, legacyAssetsDir, targetAssetsDir);
+}
+
+async function readJsonFile(filePath) {
+  return JSON.parse(await fs.readFile(filePath, "utf8"));
+}
+
+async function writeMigratedLegacyState(targetStatePath, legacyState, legacyAssetsDir, targetAssetsDir) {
+  const migrated = {
+    ...legacyState,
+    objects: Array.isArray(legacyState?.objects)
+      ? legacyState.objects.map((object) => migrateObjectAssetPath(object, legacyAssetsDir, targetAssetsDir))
+      : []
+  };
+  await fs.writeFile(targetStatePath, `${JSON.stringify(migrated, null, 2)}\n`);
+}
+
+function migrateObjectAssetPath(object, legacyAssetsDir, targetAssetsDir) {
+  if (!object || typeof object !== "object" || typeof object.assetPath !== "string") return object;
+  const relative = path.relative(legacyAssetsDir, object.assetPath);
+  if (relative === "" || relative.startsWith("..") || path.isAbsolute(relative)) return object;
+  return {
+    ...object,
+    assetPath: path.join(targetAssetsDir, relative)
+  };
 }
 
 async function fileExists(filePath) {
@@ -271,7 +297,16 @@ export async function updateObject(projectDir, id, patch, options = {}) {
     let updated = null;
     const objects = state.objects.map((object) => {
       if (object.id !== id) return object;
-      updated = { ...object, ...patch, id: object.id, type: object.type };
+      updated = {
+        ...object,
+        ...sanitizeObjectPatch(patch),
+        id: object.id,
+        type: object.type,
+        src: object.src,
+        assetPath: object.assetPath,
+        sourcePath: object.sourcePath,
+        createdAt: object.createdAt
+      };
       return updated;
     });
 
@@ -286,6 +321,39 @@ export async function updateObject(projectDir, id, patch, options = {}) {
       value: updated
     };
   });
+}
+
+function sanitizeObjectPatch(patch = {}) {
+  const next = {};
+  for (const key of ["x", "y", "width", "height", "fontSize", "strokeWidth", "durationMs"]) {
+    if (Number.isFinite(patch[key])) next[key] = key === "width" || key === "height"
+      ? Math.max(1, Math.round(patch[key]))
+      : Math.round(patch[key]);
+  }
+  for (const key of [
+    "layerGroupIndex",
+    "layerGroupOriginalX",
+    "layerGroupOriginalY",
+    "layerGroupOriginalWidth",
+    "layerGroupOriginalHeight",
+    "layerGroupRelativeX",
+    "layerGroupRelativeY",
+    "layerGroupOriginalLayerWidth",
+    "layerGroupOriginalLayerHeight"
+  ]) {
+    if (Number.isFinite(patch[key])) next[key] = Math.round(patch[key]);
+  }
+  for (const key of ["name", "text", "color", "stroke", "status", "error", "layoutMode", "sourceObjectId", "layerGroupId", "layerGroupName", "layerGroupSourceObjectId", "layerGroupKind"]) {
+    if (typeof patch[key] === "string") next[key] = patch[key].slice(0, key === "text" ? 2000 : 300);
+  }
+  if (typeof patch.layerGroupLocked === "boolean") next.layerGroupLocked = patch.layerGroupLocked;
+  if (Array.isArray(patch.points)) {
+    next.points = patch.points
+      .filter((point) => Number.isFinite(point?.x) && Number.isFinite(point?.y))
+      .map((point) => ({ x: Math.round(point.x), y: Math.round(point.y) }))
+      .slice(0, 4000);
+  }
+  return next;
 }
 
 export async function markStaleJobPlaceholders(projectDir, { activePlaceholderIds = [], timeoutMs = 2 * 60_000, canvasId = null } = {}) {

@@ -4,8 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { sendImageToBoundChat } from "../src/codex-chat.mjs";
+import { assetsDirFor } from "../src/paths.mjs";
 import { createServer } from "../src/server.mjs";
-import { addObject, deleteObjects, readState, transformState, updateObject } from "../src/store.mjs";
+import { addImage, addObject, deleteObjects, readState, transformState, updateObject } from "../src/store.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -15,6 +16,9 @@ async function main() {
   const results = [];
   for (const [name, test] of [
     ["store concurrency", testStoreConcurrency],
+    ["object patch sanitization", testObjectPatchSanitization],
+    ["http object patch sanitization", testHttpObjectPatchSanitization],
+    ["thread migration asset paths", testThreadMigrationAssetPaths],
     ["mcp canvas status", testMcpCanvasStatus],
     ["auto collector watermark", testAutoCollectorWatermark],
     ["chat binding alias", testChatBindingAlias],
@@ -26,6 +30,89 @@ async function main() {
     results.push(name);
   }
   console.log(JSON.stringify({ ok: true, tests: results }, null, 2));
+}
+
+async function testObjectPatchSanitization() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-patch-"));
+  const image = await addImage(projectDir, {
+    dataUrl: `data:image/png;base64,${pngOne}`,
+    name: "safe.png",
+    x: 10,
+    y: 20
+  });
+  const updated = await updateObject(projectDir, image.id, {
+    x: "not-a-number",
+    y: 42,
+    width: -10,
+    src: "https://example.invalid/evil.png",
+    assetPath: "/tmp/evil.png",
+    sourcePath: "/tmp/source.png",
+    type: "text",
+    createdAt: "1900-01-01T00:00:00.000Z"
+  });
+  assertEqual(updated.x, 10, "updateObject should ignore non-numeric coordinates");
+  assertEqual(updated.y, 42, "updateObject should keep valid numeric coordinates");
+  assertEqual(updated.width, 1, "updateObject should clamp dimensions");
+  assertEqual(updated.src, image.src, "updateObject should not allow src mutation");
+  assertEqual(updated.assetPath, image.assetPath, "updateObject should not allow assetPath mutation");
+  assertEqual(updated.sourcePath, image.sourcePath || null, "updateObject should not allow sourcePath mutation");
+  assertEqual(updated.type, "image", "updateObject should not allow type mutation");
+  assertEqual(updated.createdAt, image.createdAt, "updateObject should not allow createdAt mutation");
+}
+
+async function testHttpObjectPatchSanitization() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-http-patch-"));
+  const { server, url } = await createServer({ projectDir, port: 0, autoCollect: false });
+  const base = url.replace(/\?.*/, "");
+  const search = new URL(url).search;
+  try {
+    const image = await postJson(`${base}api/images${search}`, {
+      dataUrl: `data:image/png;base64,${pngOne}`,
+      name: "safe.png",
+      x: 12,
+      y: 24
+    });
+    assertEqual(image.status, 201, "HTTP image setup should succeed");
+    const patched = await fetch(`${base}api/objects/${image.body.id}${search}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        x: "bad",
+        y: 64,
+        src: "https://example.invalid/evil.png",
+        assetPath: "/tmp/evil.png",
+        sourcePath: "/tmp/source.png",
+        type: "text"
+      })
+    });
+    const body = await patched.json();
+    assertEqual(patched.status, 200, "HTTP object patch should succeed with sanitized fields");
+    assertEqual(body.x, 12, "HTTP patch should ignore invalid coordinate values");
+    assertEqual(body.y, 64, "HTTP patch should keep valid coordinate values");
+    assertEqual(body.src, image.body.src, "HTTP patch should not mutate src");
+    assertEqual(body.assetPath, image.body.assetPath, "HTTP patch should not mutate assetPath");
+    assertEqual(body.sourcePath, image.body.sourcePath || null, "HTTP patch should not mutate sourcePath");
+    assertEqual(body.type, "image", "HTTP patch should not mutate type");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+async function testThreadMigrationAssetPaths() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-migrate-"));
+  const defaultImage = await addImage(projectDir, {
+    dataUrl: `data:image/png;base64,${pngOne}`,
+    name: "default.png"
+  });
+  const threadCanvasId = "thread-migration-test";
+  const migrated = await readState(projectDir, { canvasId: threadCanvasId });
+  const migratedImage = migrated.objects.find((object) => object.id === defaultImage.id);
+  if (!migratedImage) throw new Error("Thread canvas migration should preserve default image objects.");
+  const expectedAssetsDir = assetsDirFor(projectDir, threadCanvasId);
+  if (!isInsidePath(expectedAssetsDir, migratedImage.assetPath || "")) {
+    throw new Error("Thread canvas migration should rewrite assetPath into the thread assets directory.");
+  }
+  await fs.access(migratedImage.assetPath);
 }
 
 async function testAutoCollectorWatermark() {
@@ -248,6 +335,11 @@ async function waitForObjectCount(url, expected, message) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isInsidePath(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function startMcpServer() {
