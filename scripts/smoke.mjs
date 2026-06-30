@@ -633,6 +633,38 @@ async function testMcpCanvasStatus() {
     });
     assertEqual(status.structuredContent?.objects, 2, "MCP canvas_status should read default canvas state");
     assertEqual(status.structuredContent?.chatBound, false, "MCP canvas_status should not infer chat binding without threadId");
+    const customCanvasId = "mcp-custom-canvas";
+    await client.request("tools/call", {
+      name: "add_image",
+      arguments: {
+        projectDir,
+        canvasId: customCanvasId,
+        dataUrl: `data:image/png;base64,${pngOne}`,
+        name: "mcp-custom-canvas.png",
+        prompt: "unique explicit canvas prompt"
+      }
+    });
+    const customStatus = await client.request("tools/call", {
+      name: "canvas_status",
+      arguments: { projectDir, canvasId: customCanvasId }
+    });
+    assertEqual(customStatus.structuredContent?.canvasId, customCanvasId, "MCP canvas_status should accept an explicit canvasId");
+    assertEqual(customStatus.structuredContent?.objects, 3, "MCP explicit canvasId scope should include migrated default objects plus the new image");
+    const customSearch = await client.request("tools/call", {
+      name: "search_canvas",
+      arguments: { projectDir, canvasId: customCanvasId, query: "unique explicit canvas prompt" }
+    });
+    assertEqual(customSearch.structuredContent?.total, 1, "MCP add_image should write the new image to the explicit canvasId scope");
+    const defaultStatus = await client.request("tools/call", {
+      name: "canvas_status",
+      arguments: { projectDir }
+    });
+    assertEqual(defaultStatus.structuredContent?.objects, 2, "MCP explicit canvasId writes should not leak into the default canvas");
+    const defaultSearch = await client.request("tools/call", {
+      name: "search_canvas",
+      arguments: { projectDir, query: "unique explicit canvas prompt" }
+    });
+    assertEqual(defaultSearch.structuredContent?.total, 0, "MCP explicit canvasId image should not appear in default canvas search");
     const search = await client.request("tools/call", {
       name: "search_canvas",
       arguments: { projectDir, query: "searchable" }
@@ -678,6 +710,12 @@ function assertMcpToolSchema(tools = []) {
     const required = byName.get(name)?.inputSchema?.required || [];
     if (!required.includes("projectDir")) {
       throw new Error(`MCP ${name} should require projectDir.`);
+    }
+  }
+  for (const name of ["add_image", "canvas_status", "search_canvas", "prompt_history", "version_groups", "collect_recent_images", "start_image_job", "send_to_chat"]) {
+    const properties = byName.get(name)?.inputSchema?.properties || {};
+    if (!properties.canvasId) {
+      throw new Error(`MCP ${name} should declare canvasId when it accepts explicit canvas scopes.`);
     }
   }
   const addImageSchema = byName.get("add_image")?.inputSchema || {};

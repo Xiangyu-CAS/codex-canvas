@@ -76,7 +76,8 @@ async function handle(method, params) {
               dataUrl: { type: "string", description: "Base64 image data URL." },
               name: { type: "string" },
               prompt: { type: "string" },
-              threadId: { type: "string", description: "Codex thread id whose canvas should receive the image. Pass this explicitly for thread-scoped canvases; omitted means the default project canvas." }
+              threadId: { type: "string", description: "Codex thread id whose canvas should receive the image. Pass this explicitly for thread-scoped canvases; omitted means the default project canvas." },
+              canvasId: { type: "string", description: "Explicit Agent-Canvas canvas id. Overrides the canvas id derived from threadId." }
             }
           }
         },
@@ -88,7 +89,8 @@ async function handle(method, params) {
             required: ["projectDir"],
             properties: {
               projectDir: { type: "string", description: "Absolute path to the active Codex project." },
-              threadId: { type: "string", description: "Codex thread id whose canvas status should be read. Pass this explicitly for thread-scoped canvases; omitted means the default project canvas." }
+              threadId: { type: "string", description: "Codex thread id whose canvas status should be read. Pass this explicitly for thread-scoped canvases; omitted means the default project canvas." },
+              canvasId: { type: "string", description: "Explicit Agent-Canvas canvas id. Overrides the canvas id derived from threadId." }
             }
           }
         },
@@ -103,7 +105,8 @@ async function handle(method, params) {
               query: { type: "string", description: "Search text. Empty query returns the first matching objects." },
               type: { type: "string", enum: ["image", "text", "drawing", "job"], description: "Optional canvas object type filter." },
               limit: { type: "number", description: "Maximum number of results. Defaults to 20, capped at 100." },
-              threadId: { type: "string", description: "Codex thread id whose canvas should be searched. Pass explicitly for thread-scoped canvases; omitted means the default project canvas." }
+              threadId: { type: "string", description: "Codex thread id whose canvas should be searched. Pass explicitly for thread-scoped canvases; omitted means the default project canvas." },
+              canvasId: { type: "string", description: "Explicit Agent-Canvas canvas id. Overrides the canvas id derived from threadId." }
             }
           }
         },
@@ -117,7 +120,8 @@ async function handle(method, params) {
               projectDir: { type: "string", description: "Absolute path to the active Codex project." },
               query: { type: "string", description: "Optional text to filter prompts." },
               limit: { type: "number", description: "Maximum number of prompts. Defaults to 20, capped at 100." },
-              threadId: { type: "string", description: "Codex thread id whose canvas prompt history should be read. Pass explicitly for thread-scoped canvases; omitted means the default project canvas." }
+              threadId: { type: "string", description: "Codex thread id whose canvas prompt history should be read. Pass explicitly for thread-scoped canvases; omitted means the default project canvas." },
+              canvasId: { type: "string", description: "Explicit Agent-Canvas canvas id. Overrides the canvas id derived from threadId." }
             }
           }
         },
@@ -133,7 +137,8 @@ async function handle(method, params) {
               groupBy: { type: "string", enum: ["sourceObjectId", "batchId", "layoutMode", "prompt"], description: "Version grouping field. Defaults to sourceObjectId." },
               limit: { type: "number", description: "Maximum number of groups. Defaults to 20, capped at 100." },
               objectLimit: { type: "number", description: "Maximum number of objects returned per group. Defaults to 20, capped at 100." },
-              threadId: { type: "string", description: "Codex thread id whose canvas version groups should be read. Pass explicitly for thread-scoped canvases; omitted means the default project canvas." }
+              threadId: { type: "string", description: "Codex thread id whose canvas version groups should be read. Pass explicitly for thread-scoped canvases; omitted means the default project canvas." },
+              canvasId: { type: "string", description: "Explicit Agent-Canvas canvas id. Overrides the canvas id derived from threadId." }
             }
           }
         },
@@ -155,6 +160,7 @@ async function handle(method, params) {
                 description: "When collecting an image generated from a selected canvas object, place results in a row to the right of that source object."
               },
               threadId: { type: "string", description: "Codex thread id whose canvas should receive collected images. Pass this explicitly for thread-scoped canvases; omitted means the default project canvas." },
+              canvasId: { type: "string", description: "Explicit Agent-Canvas canvas id. Overrides the canvas id derived from threadId." },
               sinceMinutes: { type: "number", description: "Only import images modified in the last N minutes. Defaults to 120." },
               limit: { type: "number", description: "Maximum number of images to import. Defaults to 20." },
               prompt: { type: "string" }
@@ -176,7 +182,8 @@ async function handle(method, params) {
                 description: "Stable Agent-Canvas action id. Edit Text uses the frontend recognition flow."
               },
               prompt: { type: "string", description: "User edit request for quick-edit or expand." },
-              threadId: { type: "string", description: "Codex thread id whose canvas owns the selected object. Pass explicitly for thread-scoped canvases." }
+              threadId: { type: "string", description: "Codex thread id whose canvas owns the selected object. Pass explicitly for thread-scoped canvases." },
+              canvasId: { type: "string", description: "Explicit Agent-Canvas canvas id. Overrides the canvas id derived from threadId." }
             }
           }
         },
@@ -189,7 +196,8 @@ async function handle(method, params) {
             properties: {
               projectDir: { type: "string", description: "Absolute path to the active Codex project." },
               objectId: { type: "string", description: "Canvas image object id to send." },
-              threadId: { type: "string", description: "Codex thread id to receive the selected image." }
+              threadId: { type: "string", description: "Codex thread id to receive the selected image." },
+              canvasId: { type: "string", description: "Explicit Agent-Canvas canvas id. Overrides the canvas id derived from threadId." }
             }
           }
         }
