@@ -167,6 +167,18 @@ async function runViewportSmoke(browser, viewport) {
     width: viewport.name === "mobile" ? 180 : 220,
     height: viewport.name === "mobile" ? 140 : 160
   });
+  const nextVersion = await addImage(projectDir, {
+    dataUrl: `data:image/png;base64,${pngOne}`,
+    name: `${viewport.name}-visual-version-b.png`,
+    prompt: `${viewport.name} product variant B`,
+    sourceObjectId: image.id,
+    batchId: `${viewport.name}-batch`,
+    layoutMode: "canvas-row",
+    x: viewport.name === "mobile" ? 170 : 980,
+    y: viewport.name === "mobile" ? 660 : 280,
+    width: viewport.name === "mobile" ? 160 : 200,
+    height: viewport.name === "mobile" ? 120 : 140
+  });
   const { server, url } = await createServer({ projectDir, port: 0, autoCollect: false });
   const context = await browser.newContext({
     viewport: { width: viewport.width, height: viewport.height },
@@ -195,7 +207,7 @@ async function runViewportSmoke(browser, viewport) {
 
     await assertSingleImageActionToolbar(page);
     await assertVisibleControlsDoNotOverlap(page, viewport);
-    await assertDiscoveryVersionBrowser(page, version.id);
+    await assertDiscoveryVersionBrowser(page, [version.id, nextVersion.id]);
     assertDeepEqual(consoleErrors.filter((message) => !/favicon/i.test(message)), [], "visual smoke should not emit console errors");
   } finally {
     await context.close();
@@ -203,14 +215,16 @@ async function runViewportSmoke(browser, viewport) {
   }
 }
 
-async function assertDiscoveryVersionBrowser(page, versionId) {
+async function assertDiscoveryVersionBrowser(page, versionIds) {
   await page.locator(".prompt-history-button").click();
   await waitForVisible(page, ".prompt-history-panel:not([hidden])", "discovery panel should open");
   await page.locator("[data-discovery-mode='versions']").click();
   await waitForVisible(page, ".version-group", "version groups should render in discovery panel");
-  await page.locator(`[data-version-object-id="${versionId}"]`).click();
-  await waitForHidden(page, ".prompt-history-panel", "discovery panel should close after selecting a version object");
-  await assertLocatorClassContains(page, `.canvas-object[data-id="${versionId}"]`, "selected");
+  await page.locator(".version-group-compare").first().click();
+  await waitForHidden(page, ".prompt-history-panel", "discovery panel should close after comparing a version group");
+  for (const versionId of versionIds) {
+    await assertLocatorClassContains(page, `.canvas-object[data-id="${versionId}"]`, "selected");
+  }
 }
 
 async function runEditElementsLayerSmoke(browser) {

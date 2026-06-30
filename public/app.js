@@ -62,6 +62,7 @@ const translations = {
     versionGroupLayout: "Layout",
     versionGroupPrompt: "Prompt",
     versionGroupCount: "objects",
+    versionGroupCompare: "Compare",
     textPlaceholder: "Text",
     quickEditPlaceholder: "Describe your edit here",
     quickEditEmpty: "Describe the edit first.",
@@ -152,6 +153,7 @@ const translations = {
     versionGroupLayout: "布局",
     versionGroupPrompt: "提示词",
     versionGroupCount: "个对象",
+    versionGroupCompare: "比较",
     textPlaceholder: "文字",
     quickEditPlaceholder: "描述你想怎么改这张图",
     quickEditEmpty: "先描述你想怎么改。",
@@ -244,6 +246,7 @@ let promptHistoryFetchToken = 0;
 let versionBrowserFetchToken = 0;
 let promptHistorySearchTimer = null;
 let promptHistoryMode = "prompts";
+let versionBrowserGroups = [];
 
 initPromptHistoryUi();
 applyLanguage();
@@ -577,6 +580,13 @@ function initPromptHistoryUi() {
       return;
     }
 
+    const compare = event.target.closest("[data-version-group-index]");
+    if (compare) {
+      event.preventDefault();
+      compareVersionGroup(Number(compare.dataset.versionGroupIndex));
+      return;
+    }
+
     const versionObject = event.target.closest("[data-version-object-id]");
     if (versionObject) {
       event.preventDefault();
@@ -722,13 +732,14 @@ function renderPromptHistoryStatus(message) {
 
 function renderVersionGroups(groups) {
   promptHistoryUi.list.replaceChildren();
+  versionBrowserGroups = groups;
   if (!groups.length) {
     renderPromptHistoryStatus(t("versionBrowserEmpty"));
     return;
   }
   promptHistoryUi.status.textContent = "";
 
-  for (const group of groups) {
+  for (const [index, group] of groups.entries()) {
     const section = document.createElement("section");
     section.className = "version-group";
 
@@ -744,6 +755,13 @@ function renderVersionGroups(groups) {
     count.className = "version-group-count";
     count.textContent = `${group.count || 0} ${t("versionGroupCount")}`;
     header.append(count);
+
+    const compare = document.createElement("button");
+    compare.type = "button";
+    compare.className = "version-group-compare";
+    compare.dataset.versionGroupIndex = String(index);
+    compare.textContent = t("versionGroupCompare");
+    header.append(compare);
     section.append(header);
 
     const objects = Array.isArray(group.objects) ? group.objects : [];
@@ -767,6 +785,29 @@ function renderVersionGroups(groups) {
     }
     promptHistoryUi.list.append(section);
   }
+}
+
+function compareVersionGroup(index) {
+  const group = versionBrowserGroups[index];
+  const ids = (Array.isArray(group?.objects) ? group.objects : [])
+    .map((object) => object.id)
+    .filter(Boolean);
+  const objects = ids
+    .map((id) => state?.objects.find((object) => object.id === id))
+    .filter(Boolean);
+  if (!objects.length) return;
+
+  closePromptHistoryPanel();
+  closeQuickEdit({ keepPrompt: true });
+  setLocalSelection(objects.map((object) => object.id), { fromUser: true });
+  render();
+  frameWorldBounds(boundsForObjects(objects), {
+    paddingX: 96,
+    paddingTop: 104,
+    paddingBottom: 148,
+    minZoom: 0.12,
+    maxZoom: 1
+  });
 }
 
 function versionGroupTitle(group) {

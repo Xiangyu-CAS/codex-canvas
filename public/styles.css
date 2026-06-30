@@ -439,7 +439,7 @@ button {
 
 .version-group-header {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 8px;
   align-items: center;
 }
@@ -464,6 +464,23 @@ button {
   color: #8a8d93;
   font-size: 11px;
   font-weight: 700;
+}
+
+.version-group-compare {
+  height: 24px;
+  border-radius: 6px;
+  padding: 0 8px;
+  background: #fff;
+  color: #2f3338;
+  font-size: 11px;
+  font-weight: 800;
+  box-shadow: inset 0 0 0 1px rgba(28, 31, 36, 0.08);
+}
+
+.version-group-compare:hover,
+.version-group-compare:focus-visible {
+  outline: none;
+  background: #eeeeec;
 }
 
 .version-group-object {
