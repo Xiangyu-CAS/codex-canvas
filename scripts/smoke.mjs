@@ -8,7 +8,7 @@ import { placeImportedElementLayersForTest } from "../src/jobs.mjs";
 import { checkImageProcessingDepsAvailable } from "../src/ocr-setup.mjs";
 import { assetsDirFor } from "../src/paths.mjs";
 import { createServer as createAgentCanvasServer } from "../src/server.mjs";
-import { addImage, addObject, deleteObjects, promptHistory, readState, searchObjects, transformState, updateObject, versionGroups } from "../src/store.mjs";
+import { addImage, addObject, deleteObjects, promptHistory, readState, searchObjects, transformState, updateObject, updateSelection, versionGroups } from "../src/store.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -20,6 +20,7 @@ async function main() {
   for (const [name, test] of [
     ["store concurrency", testStoreConcurrency],
     ["object patch sanitization", testObjectPatchSanitization],
+    ["selection sanitization", testSelectionSanitization],
     ["http object patch sanitization", testHttpObjectPatchSanitization],
     ["http image input boundaries", testHttpImageInputBoundaries],
     ["canvas object search", testCanvasObjectSearch],
@@ -96,6 +97,20 @@ async function testObjectPatchSanitization() {
   assertEqual(updated.createdAt, image.createdAt, "updateObject should not allow createdAt mutation");
 }
 
+async function testSelectionSanitization() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-selection-"));
+  const image = await addImage(projectDir, {
+    dataUrl: `data:image/png;base64,${pngOne}`,
+    name: "selectable.png"
+  });
+  const selected = await updateSelection(projectDir, image.id);
+  assertEqual(selected, image.id, "updateSelection should accept an existing object id");
+  const cleared = await updateSelection(projectDir, "missing-object-id");
+  assertEqual(cleared, null, "updateSelection should clear unknown object ids");
+  const state = await readState(projectDir);
+  assertEqual(state.selection, null, "selection state should not persist orphan object ids");
+}
+
 async function testHttpObjectPatchSanitization() {
   const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-http-patch-"));
   const { server, url } = await createServer({ projectDir, port: 0, autoCollect: false });
@@ -132,6 +147,13 @@ async function testHttpObjectPatchSanitization() {
     assertEqual(body.assetPath, image.body.assetPath, "HTTP patch should not mutate assetPath");
     assertEqual(body.sourcePath, image.body.sourcePath || null, "HTTP patch should not mutate sourcePath");
     assertEqual(body.type, "image", "HTTP patch should not mutate type");
+
+    const selected = await postJson(`${base}api/selection${search}`, { selection: image.body.id });
+    assertEqual(selected.status, 200, "HTTP selection should accept existing objects");
+    assertEqual(selected.body.selection, image.body.id, "HTTP selection should return the selected object id");
+    const orphan = await postJson(`${base}api/selection${search}`, { selection: "missing-object-id" });
+    assertEqual(orphan.status, 200, "HTTP selection should tolerate unknown object ids");
+    assertEqual(orphan.body.selection, null, "HTTP selection should clear unknown object ids instead of persisting orphans");
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

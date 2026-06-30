@@ -504,10 +504,15 @@ export async function addJobPlaceholder(projectDir, input, options = {}) {
 }
 
 export async function updateSelection(projectDir, selection, options = {}) {
-  return mutateState(projectDir, options, (state) => ({
-    state: { ...state, selection },
-    value: selection
-  }));
+  return mutateState(projectDir, options, (state) => {
+    const selectedId = typeof selection === "string" && state.objects.some((object) => object.id === selection)
+      ? selection
+      : null;
+    return {
+      state: { ...state, selection: selectedId },
+      value: selectedId
+    };
+  });
 }
 
 export async function updateViewport(projectDir, viewport, options = {}) {
