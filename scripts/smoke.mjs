@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { normalizePort } from "../src/cli.mjs";
 import { sendImageToBoundChat } from "../src/codex-chat.mjs";
 import { collectRecentImages } from "../src/collector.mjs";
 import { placeImportedElementLayersForTest } from "../src/jobs.mjs";
@@ -30,6 +31,7 @@ async function main() {
     ["canvas version groups", testCanvasVersionGroups],
     ["collector numeric boundaries", testCollectorNumericBoundaries],
     ["cli numeric boundaries", testCliNumericBoundaries],
+    ["port numeric boundaries", testPortNumericBoundaries],
     ["http query numeric boundaries", testHttpQueryNumericBoundaries],
     ["http json boundaries", testHttpJsonBoundaries],
     ["http project registration boundaries", testHttpProjectRegistrationBoundaries],
@@ -418,6 +420,20 @@ async function testCliNumericBoundaries() {
   const versions = await runCliJson(["versions", "cli-limit", "--project", projectDir, "--group-by", "prompt", "--object-limit", "1000", "--json"]);
   assertEqual(versions.body.groups?.[0]?.count, 105, "CLI versions should keep full group counts when objectLimit is capped");
   assertEqual(versions.body.groups?.[0]?.objects?.length, 100, "CLI versions should cap oversized object limits");
+}
+
+async function testPortNumericBoundaries() {
+  assertEqual(normalizePort(undefined), 43217, "missing port should use the default Agent-Canvas port");
+  assertEqual(normalizePort(""), 43217, "blank port should use the default Agent-Canvas port");
+  assertEqual(normalizePort(true), 43217, "flag-only port should use the default Agent-Canvas port");
+  assertEqual(normalizePort("0"), 0, "port zero should remain valid for dynamic local binding");
+  assertEqual(normalizePort("49152"), 49152, "string numeric ports should be accepted");
+  assertEqual(normalizePort(65535), 65535, "the maximum TCP port should be accepted");
+  assertEqual(normalizePort(-1), 43217, "negative ports should use the default Agent-Canvas port");
+  assertEqual(normalizePort(65536), 43217, "out-of-range ports should use the default Agent-Canvas port");
+  assertEqual(normalizePort(1.5), 43217, "fractional ports should use the default Agent-Canvas port");
+  assertEqual(normalizePort(Infinity), 43217, "infinite ports should use the default Agent-Canvas port");
+  assertEqual(normalizePort("not-a-port"), 43217, "non-numeric ports should use the default Agent-Canvas port");
 }
 
 async function testHttpQueryNumericBoundaries() {

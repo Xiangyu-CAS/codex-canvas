@@ -1,6 +1,6 @@
 import readline from "node:readline";
 import path from "node:path";
-import { main as cliMain } from "./cli.mjs";
+import { main as cliMain, normalizePort } from "./cli.mjs";
 import { collectRecentImages } from "./collector.mjs";
 import { sendImageToBoundChat } from "./codex-chat.mjs";
 import { createImageJob } from "./jobs.mjs";
@@ -215,7 +215,7 @@ async function handle(method, params) {
     if (params.name === "open_canvas") {
       const projectDir = requireProjectDir(args);
       const entrypoint = path.join(pluginRoot, "bin", "agent-canvas.mjs");
-      const cliArgs = ["open", "--project", projectDir, "--port", String(args.port || 43217)];
+      const cliArgs = ["open", "--project", projectDir, "--port", String(normalizePort(args.port))];
       if (args.threadId) cliArgs.push("--thread-id", args.threadId);
       const output = await captureConsole(() => cliMain(
         cliArgs,

@@ -10,6 +10,8 @@ import { canvasIdForThread, readRuntime, writeRuntime, normalizeThreadId } from 
 const defaultLimit = 20;
 const maxLimit = 100;
 const defaultSinceMinutes = 120;
+const defaultPort = 43217;
+const maxPort = 65535;
 
 export async function main(args, context = {}) {
   const command = args[0] || "help";
@@ -17,7 +19,7 @@ export async function main(args, context = {}) {
   const projectDir = resolveProjectDir(options.project);
 
   if (command === "start") {
-    const port = Number(options.port || process.env.AGENT_CANVAS_PORT || 43217);
+    const port = normalizePort(options.port ?? process.env.AGENT_CANVAS_PORT);
     const host = options.host || process.env.AGENT_CANVAS_HOST || "127.0.0.1";
     const autoCollect = options["no-auto-collect"] !== true;
     const chatThreadId = normalizeThreadId(options["thread-id"] || options.threadId || process.env.AGENT_CANVAS_CODEX_THREAD_ID);
@@ -31,7 +33,7 @@ export async function main(args, context = {}) {
   }
 
   if (command === "open") {
-    const port = Number(options.port || process.env.AGENT_CANVAS_PORT || 43217);
+    const port = normalizePort(options.port ?? process.env.AGENT_CANVAS_PORT);
     const host = options.host || process.env.AGENT_CANVAS_HOST || "127.0.0.1";
     const defaultUrl = `http://${host}:${port}/`;
     const autoCollect = options["no-auto-collect"] !== true;
@@ -276,6 +278,14 @@ function normalizeNonNegativeNumber(value, fallback) {
   if (typeof value === "string" && value.trim() === "") return fallback;
   const number = Number(value);
   if (!Number.isFinite(number) || number < 0 || !Number.isFinite(number * 60 * 1000)) return fallback;
+  return number;
+}
+
+export function normalizePort(value, fallback = defaultPort) {
+  if (value === undefined || value === null || value === true) return fallback;
+  if (typeof value === "string" && value.trim() === "") return fallback;
+  const number = Number(value);
+  if (!Number.isInteger(number) || number < 0 || number > maxPort) return fallback;
   return number;
 }
 
