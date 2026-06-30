@@ -7,7 +7,7 @@ import { collectRecentImages } from "./collector.mjs";
 import { sendImageToBoundChat } from "./codex-chat.mjs";
 import { createImageJob, createTextRecognitionJob, getActivePlaceholderIds, getIgnoredGeneratedImagePaths, getImageJob, getTextRecognitionJob, hasRunningImageJobs, submitTextRecognitionEdit } from "./jobs.mjs";
 import { assetsDirFor, projectRegistryPath, publicDir, runtimePathFor } from "./paths.mjs";
-import { addImage, addObject, deleteObject, deleteObjects, ensureProjectStore, markStaleJobPlaceholders, readState, searchObjects, updateObject, updateProjectMeta, updateSelection, updateViewport } from "./store.mjs";
+import { addImage, addObject, deleteObject, deleteObjects, ensureProjectStore, markStaleJobPlaceholders, promptHistory, readState, searchObjects, updateObject, updateProjectMeta, updateSelection, updateViewport, versionGroups } from "./store.mjs";
 import { canvasIdForThread, normalizeThreadId } from "./runtime.mjs";
 
 const contentTypes = {
@@ -101,6 +101,24 @@ async function handleRequest(request, response, context) {
       query: requestUrl.searchParams.get("q") || requestUrl.searchParams.get("query") || "",
       type: requestUrl.searchParams.get("type") || null,
       limit: Number(requestUrl.searchParams.get("limit") || 20),
+      canvasId: project.canvasId
+    }));
+  }
+
+  if (request.method === "GET" && pathname === "/api/prompts") {
+    return sendJson(response, 200, await promptHistory(projectDir, {
+      query: requestUrl.searchParams.get("q") || requestUrl.searchParams.get("query") || "",
+      limit: Number(requestUrl.searchParams.get("limit") || 20),
+      canvasId: project.canvasId
+    }));
+  }
+
+  if (request.method === "GET" && pathname === "/api/versions") {
+    return sendJson(response, 200, await versionGroups(projectDir, {
+      query: requestUrl.searchParams.get("q") || requestUrl.searchParams.get("query") || "",
+      groupBy: requestUrl.searchParams.get("groupBy") || requestUrl.searchParams.get("group_by") || "sourceObjectId",
+      limit: Number(requestUrl.searchParams.get("limit") || 20),
+      objectLimit: Number(requestUrl.searchParams.get("objectLimit") || requestUrl.searchParams.get("object_limit") || 20),
       canvasId: project.canvasId
     }));
   }

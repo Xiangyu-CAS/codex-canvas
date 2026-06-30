@@ -8,7 +8,7 @@ import { placeImportedElementLayersForTest } from "../src/jobs.mjs";
 import { checkImageProcessingDepsAvailable } from "../src/ocr-setup.mjs";
 import { assetsDirFor } from "../src/paths.mjs";
 import { createServer as createAgentCanvasServer } from "../src/server.mjs";
-import { addImage, addObject, deleteObjects, readState, searchObjects, transformState, updateObject } from "../src/store.mjs";
+import { addImage, addObject, deleteObjects, promptHistory, readState, searchObjects, transformState, updateObject, versionGroups } from "../src/store.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -23,6 +23,8 @@ async function main() {
     ["http object patch sanitization", testHttpObjectPatchSanitization],
     ["http image input boundaries", testHttpImageInputBoundaries],
     ["canvas object search", testCanvasObjectSearch],
+    ["canvas prompt history", testCanvasPromptHistory],
+    ["canvas version groups", testCanvasVersionGroups],
     ["http json boundaries", testHttpJsonBoundaries],
     ["http project registration boundaries", testHttpProjectRegistrationBoundaries],
     ["frontend action contract", testFrontendActionContract],
@@ -188,6 +190,120 @@ async function testCanvasObjectSearch() {
   assertEqual(cli.status, 0, "CLI search should succeed");
   assertEqual(cli.body.total, 1, "CLI search should return matching objects");
   assertEqual(cli.body.results[0].id, text.id, "CLI search should return the matching text object");
+}
+
+async function testCanvasPromptHistory() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-prompts-"));
+  const first = await addImage(projectDir, {
+    dataUrl: `data:image/png;base64,${pngOne}`,
+    name: "first.png",
+    prompt: "Moody neon city"
+  });
+  await addImage(projectDir, {
+    dataUrl: `data:image/png;base64,${pngOne}`,
+    name: "duplicate.png",
+    prompt: "Moody neon city"
+  });
+  const latest = await addImage(projectDir, {
+    dataUrl: `data:image/png;base64,${pngOne}`,
+    name: "latest.png",
+    prompt: "Bright product render",
+    sourceObjectId: first.id,
+    layoutMode: "canvas-row"
+  });
+
+  const direct = await promptHistory(projectDir);
+  assertEqual(direct.total, 2, "prompt history should de-duplicate repeated prompts");
+  assertEqual(direct.prompts[0].prompt, "Bright product render", "prompt history should list newest unique prompts first");
+  assertEqual(direct.prompts[0].objectId, latest.id, "prompt history should retain the object that used the prompt");
+  assertEqual(direct.prompts[0].sourceObjectId, first.id, "prompt history should retain source object context");
+
+  const filtered = await promptHistory(projectDir, { query: "neon" });
+  assertEqual(filtered.total, 1, "prompt history should support query filtering");
+  assertEqual(filtered.prompts[0].prompt, "Moody neon city", "prompt history filtering should return matching prompt text");
+
+  const { server, url } = await createServer({ projectDir, port: 0, autoCollect: false });
+  const base = url.replace(/\?.*/, "");
+  const search = new URL(url).search;
+  try {
+    const response = await fetch(`${base}api/prompts${search}&q=${encodeURIComponent("product")}`);
+    const body = await response.json();
+    assertEqual(response.status, 200, "HTTP prompt history should succeed");
+    assertEqual(body.total, 1, "HTTP prompt history should filter prompt text");
+    assertEqual(body.prompts[0].prompt, "Bright product render", "HTTP prompt history should return prompt summaries");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+
+  const cli = await runCliJson(["prompts", "moody", "--project", projectDir, "--json"]);
+  assertEqual(cli.status, 0, "CLI prompts should succeed");
+  assertEqual(cli.body.total, 1, "CLI prompts should filter prompt history");
+  assertEqual(cli.body.prompts[0].prompt, "Moody neon city", "CLI prompts should return matching prompt summaries");
+}
+
+async function testCanvasVersionGroups() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-versions-"));
+  const source = await addImage(projectDir, {
+    dataUrl: `data:image/png;base64,${pngOne}`,
+    name: "source.png",
+    prompt: "Base product render"
+  });
+  const first = await addImage(projectDir, {
+    dataUrl: `data:image/png;base64,${pngOne}`,
+    name: "blue-one.png",
+    prompt: "Blue product variant",
+    sourceObjectId: source.id,
+    batchId: "batch-blue",
+    layoutMode: "canvas-row"
+  });
+  const second = await addImage(projectDir, {
+    dataUrl: `data:image/png;base64,${pngOne}`,
+    name: "blue-two.png",
+    prompt: "Blue product variant",
+    sourceObjectId: source.id,
+    batchId: "batch-blue",
+    layoutMode: "canvas-row"
+  });
+  await addImage(projectDir, {
+    dataUrl: `data:image/png;base64,${pngOne}`,
+    name: "manual.png",
+    prompt: "Manual reference"
+  });
+
+  const direct = await versionGroups(projectDir, { query: "blue", groupBy: "sourceObjectId", objectLimit: 1 });
+  assertEqual(direct.total, 1, "version groups should filter grouped objects by query");
+  assertEqual(direct.groups[0].value, source.id, "version groups should group derivatives by sourceObjectId");
+  assertEqual(direct.groups[0].count, 2, "version groups should retain full group counts when objects are limited");
+  assertEqual(direct.groups[0].objects.length, 1, "version groups should cap returned objects per group");
+  assertEqual(direct.groups[0].objects[0].id, second.id, "version groups should list newest grouped objects first");
+  const limitedOlderMatch = await versionGroups(projectDir, { query: "blue-one", groupBy: "sourceObjectId", objectLimit: 1 });
+  assertEqual(limitedOlderMatch.total, 1, "version groups should match all grouped objects even when returned objects are limited");
+  assertEqual(limitedOlderMatch.groups[0].objects.length, 1, "version groups should keep objectLimit after matching full groups");
+
+  const { server, url } = await createServer({ projectDir, port: 0, autoCollect: false });
+  const base = url.replace(/\?.*/, "");
+  const search = new URL(url).search;
+  try {
+    const response = await fetch(`${base}api/versions${search}&groupBy=batchId&q=${encodeURIComponent("batch-blue")}`);
+    const body = await response.json();
+    assertEqual(response.status, 200, "HTTP version groups should succeed");
+    assertEqual(body.groupBy, "batchId", "HTTP version groups should use the requested grouping field");
+    assertEqual(body.total, 1, "HTTP version groups should filter batch groups");
+    assertEqual(body.groups[0].count, 2, "HTTP version groups should include grouped object counts");
+
+    const invalid = await fetch(`${base}api/versions${search}&groupBy=notAField`);
+    const invalidBody = await invalid.json();
+    assertEqual(invalid.status, 400, "HTTP version groups should reject unsupported grouping fields");
+    assertEqual(invalidBody.error, "Unsupported version group field: notAField", "HTTP version groups should return a useful grouping error");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+
+  const cli = await runCliJson(["versions", "variant", "--project", projectDir, "--group-by", "prompt", "--json"]);
+  assertEqual(cli.status, 0, "CLI versions should succeed");
+  assertEqual(cli.body.groupBy, "prompt", "CLI versions should pass the prompt grouping field");
+  assertEqual(cli.body.total, 1, "CLI versions should filter prompt groups");
+  assertEqual(cli.body.groups[0].value, first.prompt, "CLI versions should return matching prompt version groups");
 }
 
 async function testHttpJsonBoundaries() {
@@ -394,6 +510,11 @@ async function testAutoCollectorWatermark() {
 async function testMcpCanvasStatus() {
   const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-mcp-"));
   await addObject(projectDir, { type: "text", text: "mcp searchable note", name: "MCP Note", x: 10, y: 10 });
+  await addImage(projectDir, {
+    dataUrl: `data:image/png;base64,${pngOne}`,
+    name: "mcp-prompt.png",
+    prompt: "MCP prompt history sample"
+  });
   const client = await startMcpServer();
   try {
     const initialized = await client.request("initialize", {});
@@ -407,7 +528,7 @@ async function testMcpCanvasStatus() {
       name: "canvas_status",
       arguments: { projectDir }
     });
-    assertEqual(status.structuredContent?.objects, 1, "MCP canvas_status should read default canvas state");
+    assertEqual(status.structuredContent?.objects, 2, "MCP canvas_status should read default canvas state");
     assertEqual(status.structuredContent?.chatBound, false, "MCP canvas_status should not infer chat binding without threadId");
     const search = await client.request("tools/call", {
       name: "search_canvas",
@@ -415,6 +536,18 @@ async function testMcpCanvasStatus() {
     });
     assertEqual(search.structuredContent?.total, 1, "MCP search_canvas should search canvas object text");
     assertEqual(search.structuredContent?.results?.[0]?.matchFields?.includes("text"), true, "MCP search_canvas should report matched fields");
+    const prompts = await client.request("tools/call", {
+      name: "prompt_history",
+      arguments: { projectDir, query: "sample" }
+    });
+    assertEqual(prompts.structuredContent?.total, 1, "MCP prompt_history should filter prompt history");
+    assertEqual(prompts.structuredContent?.prompts?.[0]?.prompt, "MCP prompt history sample", "MCP prompt_history should return prompt summaries");
+    const versions = await client.request("tools/call", {
+      name: "version_groups",
+      arguments: { projectDir, query: "sample", groupBy: "prompt" }
+    });
+    assertEqual(versions.structuredContent?.total, 1, "MCP version_groups should filter version groups");
+    assertEqual(versions.structuredContent?.groups?.[0]?.value, "MCP prompt history sample", "MCP version_groups should return grouped object summaries");
     await assertRejects(
       () => client.request("tools/call", {
         name: "canvas_status",
@@ -438,7 +571,7 @@ async function testMcpCanvasStatus() {
 
 function assertMcpToolSchema(tools = []) {
   const byName = new Map(tools.map((tool) => [tool.name, tool]));
-  for (const name of ["open_canvas", "canvas_status", "search_canvas", "collect_recent_images"]) {
+  for (const name of ["open_canvas", "canvas_status", "search_canvas", "prompt_history", "version_groups", "collect_recent_images"]) {
     const required = byName.get(name)?.inputSchema?.required || [];
     if (!required.includes("projectDir")) {
       throw new Error(`MCP ${name} should require projectDir.`);
@@ -549,11 +682,23 @@ async function testCliCollectHelp() {
   if (!stdout.includes("agent-canvas search [query] [--project <dir>] [--type image|text|drawing|job] [--limit 20] [--json]")) {
     throw new Error("CLI help should document search flags.");
   }
+  if (!stdout.includes("agent-canvas prompts [query] [--project <dir>] [--limit 20] [--json]")) {
+    throw new Error("CLI help should document prompt history flags.");
+  }
+  if (!stdout.includes("agent-canvas versions [query] [--project <dir>] [--group-by sourceObjectId|batchId|layoutMode|prompt] [--limit 20] [--object-limit 20] [--json]")) {
+    throw new Error("CLI help should document version grouping flags.");
+  }
   if (!stdout.includes("Import recent image files from ~/.codex/generated_images and the project.")) {
     throw new Error("CLI help should document collect default roots.");
   }
   if (!stdout.includes("Search canvas objects by name, prompt, text, source path, or grouping metadata.")) {
     throw new Error("CLI help should document search behavior.");
+  }
+  if (!stdout.includes("List recent unique prompts from canvas objects.")) {
+    throw new Error("CLI help should document prompt history behavior.");
+  }
+  if (!stdout.includes("Group canvas object version history by sourceObjectId, batchId, layoutMode, or prompt.")) {
+    throw new Error("CLI help should document version grouping behavior.");
   }
 }
 

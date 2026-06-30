@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { addImage, ensureProjectStore, readState, searchObjects } from "./store.mjs";
+import { addImage, ensureProjectStore, promptHistory, readState, searchObjects, versionGroups } from "./store.mjs";
 import { createServer } from "./server.mjs";
 import { collectRecentImages } from "./collector.mjs";
 import { resolveProjectDir } from "./paths.mjs";
@@ -112,6 +112,47 @@ export async function main(args, context = {}) {
         const label = object.name || object.text || object.id;
         const fields = object.matchFields.length ? ` [${object.matchFields.join(", ")}]` : "";
         console.log(`- ${object.id} ${object.type} ${label}${fields}`);
+      }
+    }
+    return;
+  }
+
+  if (command === "prompts" || command === "prompt-history") {
+    const canvas = await resolveCanvasOptions(projectDir, options);
+    const query = options.query || args[1] || "";
+    const result = await promptHistory(projectDir, {
+      query,
+      limit: Number(options.limit || 20),
+      canvasId: canvas.canvasId
+    });
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(`Found ${result.total} prompt(s)${query ? ` matching "${query}"` : ""}.`);
+      for (const item of result.prompts) {
+        console.log(`- ${item.prompt} (${item.objectId}${item.objectName ? `, ${item.objectName}` : ""})`);
+      }
+    }
+    return;
+  }
+
+  if (command === "versions" || command === "version-groups") {
+    const canvas = await resolveCanvasOptions(projectDir, options);
+    const query = options.query || args[1] || "";
+    const result = await versionGroups(projectDir, {
+      query,
+      groupBy: options["group-by"] || options.groupBy || "sourceObjectId",
+      limit: Number(options.limit || 20),
+      objectLimit: Number(options["object-limit"] || options.objectLimit || 20),
+      canvasId: canvas.canvasId
+    });
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(`Found ${result.total} version group(s) by ${result.groupBy}${query ? ` matching "${query}"` : ""}.`);
+      for (const group of result.groups) {
+        const latest = group.latestAt ? `, latest ${group.latestAt}` : "";
+        console.log(`- ${group.value} (${group.count} object(s)${latest})`);
       }
     }
     return;
@@ -352,6 +393,8 @@ Usage:
   agent-canvas import <image-path> [--project <dir>] [--prompt <text>] [--name <name>]
   agent-canvas collect [--project <dir>] [--from <dir,dir>] [--since-minutes 120] [--limit 20]
   agent-canvas search [query] [--project <dir>] [--type image|text|drawing|job] [--limit 20] [--json]
+  agent-canvas prompts [query] [--project <dir>] [--limit 20] [--json]
+  agent-canvas versions [query] [--project <dir>] [--group-by sourceObjectId|batchId|layoutMode|prompt] [--limit 20] [--object-limit 20] [--json]
   agent-canvas status [--project <dir>] [--json]
   agent-canvas setup-deps [--json]
   agent-canvas setup-ocr [--optional] [--json]
@@ -366,6 +409,8 @@ Commands:
   import    Copy an image into the project canvas and place it on the board.
   collect   Import recent image files from ~/.codex/generated_images and the project.
   search    Search canvas objects by name, prompt, text, source path, or grouping metadata.
+  prompts   List recent unique prompts from canvas objects.
+  versions  Group canvas object version history by sourceObjectId, batchId, layoutMode, or prompt.
   status    Print current canvas runtime and object count.
   setup-ocr Explicitly install RapidOCR for local Edit Text recognition.
   setup-image-deps Explicitly install Pillow and numpy for Edit Elements local layer processing.

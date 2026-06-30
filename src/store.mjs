@@ -16,6 +16,7 @@ const defaultImageSize = { width: 360, height: 360 };
 const maxImageDisplaySize = 420;
 const derivedGap = 72;
 const stateLocks = new Map();
+const versionGroupFields = new Set(["sourceObjectId", "batchId", "layoutMode", "prompt"]);
 
 function canvasIdFrom(options = {}) {
   return typeof options.canvasId === "string" && options.canvasId.trim() ? options.canvasId.trim() : null;
@@ -82,6 +83,71 @@ function summarizeSearchObject(object, matchFields) {
     createdAt: object.createdAt || null,
     matchFields
   };
+}
+
+function summarizeVersionObject(object) {
+  return {
+    id: object.id,
+    type: object.type || "image",
+    name: object.name || "",
+    prompt: object.prompt || "",
+    text: object.text || "",
+    src: object.src || "",
+    assetPath: object.assetPath || null,
+    sourcePath: object.sourcePath || null,
+    sourceObjectId: object.sourceObjectId || null,
+    batchId: object.batchId || null,
+    layoutMode: object.layoutMode || null,
+    status: object.status || null,
+    action: object.action || null,
+    x: Number.isFinite(object.x) ? object.x : null,
+    y: Number.isFinite(object.y) ? object.y : null,
+    width: Number.isFinite(object.width) ? object.width : null,
+    height: Number.isFinite(object.height) ? object.height : null,
+    createdAt: object.createdAt || null
+  };
+}
+
+function normalizeVersionGroupBy(groupBy) {
+  const aliases = {
+    source: "sourceObjectId",
+    sourceObject: "sourceObjectId",
+    "source-object": "sourceObjectId",
+    "source-object-id": "sourceObjectId",
+    batch: "batchId",
+    "batch-id": "batchId",
+    layout: "layoutMode",
+    "layout-mode": "layoutMode"
+  };
+  const value = typeof groupBy === "string" && groupBy.trim() ? groupBy.trim() : "sourceObjectId";
+  const normalized = aliases[value] || value;
+  if (versionGroupFields.has(normalized)) return normalized;
+  const error = new Error(`Unsupported version group field: ${value}`);
+  error.statusCode = 400;
+  throw error;
+}
+
+function versionGroupValue(object, groupBy) {
+  const value = object?.[groupBy];
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function versionGroupKey(value, groupBy) {
+  return groupBy === "prompt" || groupBy === "layoutMode" ? value.toLowerCase() : value;
+}
+
+function newerTimestamp(a, b) {
+  const aTime = Date.parse(a || "");
+  const bTime = Date.parse(b || "");
+  if (!Number.isFinite(aTime)) return b || null;
+  if (!Number.isFinite(bTime)) return a || null;
+  return aTime >= bTime ? a : b;
+}
+
+function groupMatchesQuery(group, normalizedQuery) {
+  if (!normalizedQuery) return true;
+  if (normalizeSearchText(group.value).includes(normalizedQuery)) return true;
+  return group.matchText.some((value) => value.includes(normalizedQuery));
 }
 
 export async function ensureProjectStore(projectDir, options = {}) {
@@ -182,6 +248,95 @@ export async function searchObjects(projectDir, { query = "", limit = 20, type =
     canvasId: canvasId || null,
     total: results.length,
     results
+  };
+}
+
+export async function promptHistory(projectDir, { query = "", limit = 20, canvasId = null } = {}) {
+  const state = await readState(projectDir, { canvasId });
+  const normalizedQuery = normalizeSearchText(query);
+  const maxResults = clampSearchLimit(limit);
+  const seen = new Set();
+  const prompts = [];
+
+  for (const object of [...state.objects].reverse()) {
+    const prompt = typeof object.prompt === "string" ? object.prompt.trim() : "";
+    if (!prompt) continue;
+    const key = prompt.toLowerCase();
+    if (seen.has(key)) continue;
+    if (normalizedQuery && !key.includes(normalizedQuery)) continue;
+    seen.add(key);
+    prompts.push({
+      prompt,
+      objectId: object.id,
+      objectName: object.name || "",
+      objectType: object.type || "image",
+      sourceObjectId: object.sourceObjectId || null,
+      layoutMode: object.layoutMode || null,
+      batchId: object.batchId || null,
+      createdAt: object.createdAt || null
+    });
+    if (prompts.length >= maxResults) break;
+  }
+
+  return {
+    query: query || "",
+    canvasId: canvasId || null,
+    total: prompts.length,
+    prompts
+  };
+}
+
+export async function versionGroups(projectDir, { query = "", groupBy = "sourceObjectId", limit = 20, objectLimit = 20, canvasId = null } = {}) {
+  const state = await readState(projectDir, { canvasId });
+  const normalizedQuery = normalizeSearchText(query);
+  const normalizedGroupBy = normalizeVersionGroupBy(groupBy);
+  const maxGroups = clampSearchLimit(limit);
+  const maxObjects = clampSearchLimit(objectLimit);
+  const byKey = new Map();
+
+  for (const object of [...state.objects].reverse()) {
+    const value = versionGroupValue(object, normalizedGroupBy);
+    if (!value) continue;
+    const key = versionGroupKey(value, normalizedGroupBy);
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.count += 1;
+      existing.latestAt = newerTimestamp(existing.latestAt, object.createdAt);
+      existing.matchText.push(...searchFieldsForObject(object).map((field) => field.value));
+      if (existing.objects.length < maxObjects) existing.objects.push(summarizeVersionObject(object));
+    } else {
+      byKey.set(key, {
+        id: `${normalizedGroupBy}:${key}`,
+        groupBy: normalizedGroupBy,
+        key,
+        value,
+        count: 1,
+        latestAt: object.createdAt || null,
+        matchText: searchFieldsForObject(object).map((field) => field.value),
+        objects: [summarizeVersionObject(object)]
+      });
+    }
+  }
+
+  const groups = [...byKey.values()]
+    .filter((group) => groupMatchesQuery(group, normalizedQuery))
+    .sort((a, b) => {
+      const aTime = Date.parse(a.latestAt || "");
+      const bTime = Date.parse(b.latestAt || "");
+      if (!Number.isFinite(aTime) && !Number.isFinite(bTime)) return 0;
+      if (!Number.isFinite(aTime)) return 1;
+      if (!Number.isFinite(bTime)) return -1;
+      return bTime - aTime;
+    })
+    .slice(0, maxGroups)
+    .map(({ matchText, ...group }) => group);
+
+  return {
+    query: query || "",
+    groupBy: normalizedGroupBy,
+    canvasId: canvasId || null,
+    total: groups.length,
+    groups
   };
 }
 

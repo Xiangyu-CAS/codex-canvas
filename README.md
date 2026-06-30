@@ -35,7 +35,9 @@ Agent-Canvas 可以按四个模块设计：
 - `agent-canvas import <image-path>`：将本地图片复制到当前项目的 `canvas/assets/`，并插入画布。
 - `agent-canvas collect`：扫描项目内和 `~/.codex/generated_images` 中最近生成的图片并导入画布，作为 `imagegen` 输出路径不明确时的兜底收集器。
 - `agent-canvas search`：按名称、prompt、文本、来源路径和图层组元数据搜索画布对象，用于快速定位项目资产。
-- MCP 工具：提供 `open_canvas`、`add_image`、`collect_recent_images`、`canvas_status`、`search_canvas`、`start_image_job`、`send_to_chat`，方便 Codex 在会话中打开画布、收录图片、搜索资产、触发稳定 action 和读取状态。
+- `agent-canvas prompts`：列出最近使用过的唯一 prompt，支持按文本过滤，用于复用项目提示词。
+- `agent-canvas versions`：按 `sourceObjectId`、`batchId`、`layoutMode` 或 `prompt` 分组查看画布对象版本历史，用于比较同源生成、批次和提示词变体。
+- MCP 工具：提供 `open_canvas`、`add_image`、`collect_recent_images`、`canvas_status`、`search_canvas`、`prompt_history`、`version_groups`、`start_image_job`、`send_to_chat`，方便 Codex 在会话中打开画布、收录图片、搜索资产、提示词和版本分组、触发稳定 action 和读取状态。
 - 画布 UI：提供 Lovart 风格的浅色无限画布、底部浮动工具栏、图片选择态和浮动编辑工具栏。
 - 单端口多画布页：默认统一使用 `127.0.0.1:43217`。再次在新 Codex 会话或新项目中打开 `/canvas` 时，现有服务会注册新的项目画布，并返回带 `?project=<id>` 的 URL；同一 workspace 会按 Codex thread 隔离为不同 canvas，左上角项目菜单可以在已注册画布页之间切换。
 - AI 图片操作：`Quick Edit`、`Remove BG`、`Edit Text`、`Edit Elements` 通过稳定 action id 创建后台 job，由后端映射到对应 Agent-Canvas operation skill 和 Codex/ImageGen 执行，再把结果回填到源图右侧。`Edit Elements` 会生成实例分割图，本地拆出透明对象/文字图层和补全背景，并作为锁定图层组放回画布。
@@ -101,6 +103,18 @@ node ./bin/agent-canvas.mjs collect --project . --since-minutes 30 --limit 5
 
 ```bash
 node ./bin/agent-canvas.mjs search "skyline" --project . --json
+```
+
+查看 prompt 历史：
+
+```bash
+node ./bin/agent-canvas.mjs prompts "product" --project . --json
+```
+
+查看版本分组：
+
+```bash
+node ./bin/agent-canvas.mjs versions "product" --project . --group-by sourceObjectId --json
 ```
 
 ## Codex 插件安装

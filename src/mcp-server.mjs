@@ -4,7 +4,7 @@ import { main as cliMain } from "./cli.mjs";
 import { collectRecentImages } from "./collector.mjs";
 import { sendImageToBoundChat } from "./codex-chat.mjs";
 import { createImageJob } from "./jobs.mjs";
-import { addImage, readState, searchObjects } from "./store.mjs";
+import { addImage, promptHistory, readState, searchObjects, versionGroups } from "./store.mjs";
 import { pluginRoot, resolveProjectDir } from "./paths.mjs";
 import { canvasIdForThread, normalizeThreadId } from "./runtime.mjs";
 
@@ -104,6 +104,36 @@ async function handle(method, params) {
               type: { type: "string", enum: ["image", "text", "drawing", "job"], description: "Optional canvas object type filter." },
               limit: { type: "number", description: "Maximum number of results. Defaults to 20, capped at 100." },
               threadId: { type: "string", description: "Codex thread id whose canvas should be searched. Pass explicitly for thread-scoped canvases; omitted means the default project canvas." }
+            }
+          }
+        },
+        {
+          name: "prompt_history",
+          description: "List recent unique prompts used by Agent-Canvas objects.",
+          inputSchema: {
+            type: "object",
+            required: ["projectDir"],
+            properties: {
+              projectDir: { type: "string", description: "Absolute path to the active Codex project." },
+              query: { type: "string", description: "Optional text to filter prompts." },
+              limit: { type: "number", description: "Maximum number of prompts. Defaults to 20, capped at 100." },
+              threadId: { type: "string", description: "Codex thread id whose canvas prompt history should be read. Pass explicitly for thread-scoped canvases; omitted means the default project canvas." }
+            }
+          }
+        },
+        {
+          name: "version_groups",
+          description: "Group Agent-Canvas object version history by sourceObjectId, batchId, layoutMode, or prompt.",
+          inputSchema: {
+            type: "object",
+            required: ["projectDir"],
+            properties: {
+              projectDir: { type: "string", description: "Absolute path to the active Codex project." },
+              query: { type: "string", description: "Optional text to filter version groups or grouped objects." },
+              groupBy: { type: "string", enum: ["sourceObjectId", "batchId", "layoutMode", "prompt"], description: "Version grouping field. Defaults to sourceObjectId." },
+              limit: { type: "number", description: "Maximum number of groups. Defaults to 20, capped at 100." },
+              objectLimit: { type: "number", description: "Maximum number of objects returned per group. Defaults to 20, capped at 100." },
+              threadId: { type: "string", description: "Codex thread id whose canvas version groups should be read. Pass explicitly for thread-scoped canvases; omitted means the default project canvas." }
             }
           }
         },
@@ -214,6 +244,30 @@ async function handle(method, params) {
         canvasId: canvas.canvasId
       });
       return textResult(`Found ${result.total} Agent-Canvas object(s).`, result);
+    }
+
+    if (params.name === "prompt_history") {
+      const projectDir = requireProjectDir(args);
+      const canvas = await resolveCanvasOptions(projectDir, args);
+      const result = await promptHistory(projectDir, {
+        query: args.query || "",
+        limit: Number(args.limit || 20),
+        canvasId: canvas.canvasId
+      });
+      return textResult(`Found ${result.total} Agent-Canvas prompt(s).`, result);
+    }
+
+    if (params.name === "version_groups") {
+      const projectDir = requireProjectDir(args);
+      const canvas = await resolveCanvasOptions(projectDir, args);
+      const result = await versionGroups(projectDir, {
+        query: args.query || "",
+        groupBy: args.groupBy || "sourceObjectId",
+        limit: Number(args.limit || 20),
+        objectLimit: Number(args.objectLimit || 20),
+        canvasId: canvas.canvasId
+      });
+      return textResult(`Found ${result.total} Agent-Canvas version group(s).`, result);
     }
 
     if (params.name === "collect_recent_images") {

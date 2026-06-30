@@ -2,6 +2,7 @@ const board = document.querySelector("#board");
 const world = document.querySelector("#world");
 const objectLayer = document.querySelector("#objects");
 const emptyState = document.querySelector("#emptyState");
+const boardShell = document.querySelector(".board-shell");
 const projectTitle = document.querySelector("#projectTitle");
 const projectOptionsButton = document.querySelector(".project-header button");
 const projectMenu = document.querySelector("#projectMenu");
@@ -20,9 +21,11 @@ const toast = document.querySelector("#toast");
 const toolDock = document.querySelector(".tool-dock");
 const imageUploadInput = document.querySelector("#imageUploadInput");
 const colorPalette = document.querySelector("#colorPalette");
+const canvasSearch = createCanvasSearchUi();
 const zoomWheelSensitivity = 0.0024;
 const maxWheelZoomDelta = 160;
 const uploadMaxDisplaySize = 420;
+const searchDebounceMs = 180;
 const languageStorageKey = "agentCanvasLanguage";
 const toolColorStorageKey = "agentCanvasToolColor";
 const toolColors = ["#202124", "#d93025", "#f9ab00", "#188038", "#1a73e8", "#9334e6", "#ffffff"];
@@ -40,6 +43,13 @@ const translations = {
     projectOptions: "Project options",
     switchCanvas: "Switch canvas",
     currentCanvas: "Current",
+    promptHistory: "Prompt history",
+    promptHistorySearch: "Filter prompts",
+    promptHistoryLoading: "Loading prompts...",
+    promptHistoryEmpty: "No matching prompts.",
+    promptHistoryFailed: "Prompt history failed to load.",
+    promptHistoryApplied: "Prompt added to Quick Edit.",
+    promptHistoryCopied: "Prompt copied.",
     textPlaceholder: "Text",
     quickEditPlaceholder: "Describe your edit here",
     quickEditEmpty: "Describe the edit first.",
@@ -49,6 +59,12 @@ const translations = {
     editTextRecognizing: "Recognizing text...",
     editTextNoText: "No editable text was recognized.",
     editTextNoChanges: "Edit at least one recognized text item first.",
+    searchLabel: "Search canvas",
+    searchPlaceholder: "Search name, prompt, text, source, metadata",
+    searchAllTypes: "All",
+    searchEmpty: "No matching objects",
+    searchHint: "Search canvas objects",
+    searchFailed: "Search failed.",
     cancel: "Cancel",
     run: "Run",
     jobStarted: "started. This can take a few minutes.",
@@ -88,6 +104,12 @@ const translations = {
     },
     controls: {
       reset: "Reset view"
+    },
+    objectTypes: {
+      image: "Image",
+      text: "Text",
+      drawing: "Drawing",
+      job: "Job"
     }
   },
   zh: {
@@ -99,6 +121,13 @@ const translations = {
     projectOptions: "项目选项",
     switchCanvas: "切换画布",
     currentCanvas: "当前",
+    promptHistory: "提示词历史",
+    promptHistorySearch: "筛选提示词",
+    promptHistoryLoading: "正在加载提示词...",
+    promptHistoryEmpty: "没有匹配的提示词。",
+    promptHistoryFailed: "提示词历史加载失败。",
+    promptHistoryApplied: "已填入快捷编辑。",
+    promptHistoryCopied: "已复制提示词。",
     textPlaceholder: "文字",
     quickEditPlaceholder: "描述你想怎么改这张图",
     quickEditEmpty: "先描述你想怎么改。",
@@ -108,6 +137,12 @@ const translations = {
     editTextRecognizing: "正在识别文字...",
     editTextNoText: "没有识别到可编辑文字。",
     editTextNoChanges: "先修改至少一项识别文字。",
+    searchLabel: "搜索画布",
+    searchPlaceholder: "搜索名称、prompt、文字、来源、元数据",
+    searchAllTypes: "全部",
+    searchEmpty: "没有匹配对象",
+    searchHint: "搜索画布对象",
+    searchFailed: "搜索失败。",
     cancel: "取消",
     run: "运行",
     jobStarted: "已开始，可能需要几分钟。",
@@ -147,6 +182,12 @@ const translations = {
     },
     controls: {
       reset: "重置视图"
+    },
+    objectTypes: {
+      image: "图片",
+      text: "文字",
+      drawing: "绘图",
+      job: "任务"
     }
   }
 };
@@ -171,7 +212,14 @@ let quickEditAction = null;
 let activeTextRecognitionId = null;
 let editTextItems = [];
 const runningJobs = new Map();
+let searchTimer = null;
+let searchRequestId = 0;
+let searchResults = [];
+let promptHistoryUi = null;
+let promptHistoryFetchToken = 0;
+let promptHistorySearchTimer = null;
 
+initPromptHistoryUi();
 applyLanguage();
 renderColorPalette();
 await loadProjects();
@@ -198,6 +246,8 @@ projectOptionsButton?.addEventListener("click", (event) => {
 
 settingsButton.addEventListener("click", (event) => {
   event.stopPropagation();
+  closeCanvasSearch({ keepQuery: true });
+  closePromptHistoryPanel();
   settingsMenu.hidden = !settingsMenu.hidden;
   if (settingsMenu.hidden) {
     settingsMenu.classList.remove("language-open");
@@ -238,6 +288,37 @@ colorPalette.addEventListener("click", (event) => {
   if (!button) return;
   event.preventDefault();
   setActiveColor(button.dataset.color);
+});
+
+canvasSearch.input.addEventListener("input", scheduleCanvasSearch);
+canvasSearch.type.addEventListener("change", runCanvasSearch);
+canvasSearch.input.addEventListener("focus", () => {
+  settingsMenu.hidden = true;
+  projectMenu.hidden = true;
+  closePromptHistoryPanel();
+  canvasSearch.panel.classList.add("active");
+  if (canvasSearch.input.value.trim() || searchResults.length) {
+    renderCanvasSearchResults(searchResults);
+  }
+});
+canvasSearch.input.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeCanvasSearch();
+    return;
+  }
+  if (event.key === "Enter") {
+    const firstResult = canvasSearch.results.querySelector("[data-search-result-id]");
+    if (!firstResult) return;
+    event.preventDefault();
+    focusSearchResult(firstResult.dataset.searchResultId);
+  }
+});
+canvasSearch.results.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-search-result-id]");
+  if (!button) return;
+  event.preventDefault();
+  focusSearchResult(button.dataset.searchResultId);
 });
 
 document.addEventListener("click", (event) => {
@@ -325,17 +406,25 @@ board.addEventListener("pointerdown", (event) => {
 
 document.addEventListener("pointerdown", (event) => {
   const isSettingsEvent = event.target.closest("#settingsMenu, #settingsButton");
+  const isPromptHistoryEvent = event.target.closest(".prompt-history-panel, .prompt-history-button");
+  const isCanvasSearchEvent = event.target.closest(".canvas-search");
   if (!isSettingsEvent) {
     settingsMenu.hidden = true;
     settingsMenu.classList.remove("language-open");
     settingsMenu.querySelector("[data-settings-row='language']")?.classList.remove("active");
   }
+  if (!isPromptHistoryEvent) {
+    closePromptHistoryPanel();
+  }
+  if (!isCanvasSearchEvent) {
+    closeCanvasSearch({ keepQuery: true });
+  }
   if (!event.target.closest("#projectMenu, .project-header button")) {
     projectMenu.hidden = true;
   }
-  if (isSettingsEvent) return;
+  if (isSettingsEvent || isPromptHistoryEvent || isCanvasSearchEvent) return;
   if (!selectedId && selectedIds.size === 0) return;
-  if (event.target.closest(".canvas-object, .selection-toolbar, .quick-edit-composer, .color-palette")) return;
+  if (event.target.closest(".canvas-object, .selection-toolbar, .quick-edit-composer, .color-palette, .prompt-history-panel, .prompt-history-button, .canvas-search")) return;
   selectObject(null);
 });
 
@@ -375,6 +464,205 @@ board.addEventListener("wheel", (event) => {
   updateSelectionUi();
   scheduleViewportSave();
 }, { passive: false });
+
+function initPromptHistoryUi() {
+  if (!boardShell) return;
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "prompt-history-button";
+  button.innerHTML = `
+    <svg class="prompt-history-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M3 12a9 9 0 1 0 3 -6.7L3 8"></path>
+      <path d="M3 3v5h5"></path>
+      <path d="M12 7v5l4 2"></path>
+    </svg>
+  `;
+
+  const panel = document.createElement("section");
+  panel.className = "prompt-history-panel";
+  panel.hidden = true;
+  panel.innerHTML = `
+    <div class="prompt-history-header">
+      <div class="prompt-history-title"></div>
+    </div>
+    <label class="prompt-history-search">
+      <svg class="prompt-history-search-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="11" cy="11" r="8"></circle>
+        <path d="m21 21 -4.3 -4.3"></path>
+      </svg>
+      <input type="search" autocomplete="off" spellcheck="false" />
+    </label>
+    <div class="prompt-history-list" role="listbox"></div>
+    <div class="prompt-history-status"></div>
+  `;
+
+  promptHistoryUi = {
+    button,
+    panel,
+    title: panel.querySelector(".prompt-history-title"),
+    search: panel.querySelector("input"),
+    list: panel.querySelector(".prompt-history-list"),
+    status: panel.querySelector(".prompt-history-status")
+  };
+
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    togglePromptHistoryPanel();
+  });
+
+  promptHistoryUi.search.addEventListener("input", () => {
+    window.clearTimeout(promptHistorySearchTimer);
+    promptHistorySearchTimer = window.setTimeout(() => fetchPromptHistory(), 180);
+  });
+
+  promptHistoryUi.search.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closePromptHistoryPanel();
+    }
+  });
+
+  panel.addEventListener("click", (event) => {
+    const item = event.target.closest("[data-prompt]");
+    if (!item) return;
+    event.preventDefault();
+    applyPromptFromHistory(item.dataset.prompt || "");
+  });
+
+  boardShell.append(button, panel);
+  updatePromptHistoryLabels();
+}
+
+function togglePromptHistoryPanel() {
+  if (!promptHistoryUi) return;
+  const nextOpen = promptHistoryUi.panel.hidden;
+  if (nextOpen) {
+    settingsMenu.hidden = true;
+    projectMenu.hidden = true;
+    promptHistoryUi.panel.hidden = false;
+    promptHistoryUi.button.classList.add("active");
+    fetchPromptHistory();
+    window.requestAnimationFrame(() => promptHistoryUi.search.focus());
+  } else {
+    closePromptHistoryPanel();
+  }
+}
+
+function closePromptHistoryPanel() {
+  if (!promptHistoryUi || promptHistoryUi.panel.hidden) return;
+  promptHistoryUi.panel.hidden = true;
+  promptHistoryUi.button.classList.remove("active");
+}
+
+async function fetchPromptHistory() {
+  if (!promptHistoryUi || promptHistoryUi.panel.hidden) return;
+  const token = ++promptHistoryFetchToken;
+  const query = promptHistoryUi.search.value.trim();
+  renderPromptHistoryStatus(t("promptHistoryLoading"));
+  promptHistoryUi.list.replaceChildren();
+
+  try {
+    const url = new URL(apiPath("/api/prompts"), window.location.origin);
+    url.searchParams.set("q", query);
+    url.searchParams.set("limit", "20");
+    const response = await fetch(`${url.pathname}${url.search}`);
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || t("promptHistoryFailed"));
+    if (token !== promptHistoryFetchToken) return;
+    renderPromptHistoryItems(Array.isArray(payload.prompts) ? payload.prompts : []);
+  } catch (error) {
+    if (token !== promptHistoryFetchToken) return;
+    renderPromptHistoryStatus(error?.message || t("promptHistoryFailed"));
+  }
+}
+
+function renderPromptHistoryItems(items) {
+  promptHistoryUi.list.replaceChildren();
+  if (!items.length) {
+    renderPromptHistoryStatus(t("promptHistoryEmpty"));
+    return;
+  }
+  promptHistoryUi.status.textContent = "";
+  for (const item of items) {
+    const prompt = String(item.prompt || "").trim();
+    if (!prompt) continue;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "prompt-history-item";
+    button.dataset.prompt = prompt;
+    button.setAttribute("role", "option");
+    button.setAttribute("aria-label", prompt);
+
+    const text = document.createElement("span");
+    text.className = "prompt-history-text";
+    text.textContent = prompt;
+    button.append(text);
+
+    const metaText = promptHistoryMeta(item);
+    if (metaText) {
+      const meta = document.createElement("span");
+      meta.className = "prompt-history-meta";
+      meta.textContent = metaText;
+      button.append(meta);
+    }
+    promptHistoryUi.list.append(button);
+  }
+  if (!promptHistoryUi.list.children.length) {
+    renderPromptHistoryStatus(t("promptHistoryEmpty"));
+  }
+}
+
+function renderPromptHistoryStatus(message) {
+  if (!promptHistoryUi) return;
+  promptHistoryUi.status.textContent = message;
+}
+
+function promptHistoryMeta(item) {
+  const name = String(item.objectName || "").trim();
+  const date = item.createdAt ? new Date(item.createdAt) : null;
+  const dateText = date && Number.isFinite(date.getTime())
+    ? date.toLocaleDateString(language === "zh" ? "zh-CN" : "en", { month: "short", day: "numeric" })
+    : "";
+  return [name, dateText].filter(Boolean).join(" · ");
+}
+
+function applyPromptFromHistory(prompt) {
+  const nextPrompt = String(prompt || "").trim();
+  if (!nextPrompt) return;
+  closePromptHistoryPanel();
+
+  if (!quickEditComposer.hidden && quickEditAction !== "edit-text" && !quickEditPrompt.hidden) {
+    setQuickEditPromptValue(nextPrompt);
+    return;
+  }
+
+  const object = state?.objects.find((item) => item.id === selectedId);
+  if (object && (object.type || "image") === "image" && hasUserSelection && quickEditAction !== "edit-text") {
+    openImageActionComposer("quick-edit");
+    window.requestAnimationFrame(() => setQuickEditPromptValue(nextPrompt));
+    return;
+  }
+
+  copyPromptToClipboard(nextPrompt);
+}
+
+function setQuickEditPromptValue(prompt) {
+  quickEditPrompt.value = prompt;
+  quickEditPrompt.focus();
+  quickEditPrompt.setSelectionRange(quickEditPrompt.value.length, quickEditPrompt.value.length);
+  showToast(t("promptHistoryApplied"));
+}
+
+async function copyPromptToClipboard(prompt) {
+  try {
+    await navigator.clipboard?.writeText(prompt);
+    showToast(t("promptHistoryCopied"));
+  } catch {
+    showToast(prompt);
+  }
+}
 
 async function loadState() {
   if (drag || resize || marquee || isComposerActive()) return;
@@ -454,6 +742,220 @@ function switchProject(projectId) {
   const url = new URL(window.location.href);
   url.searchParams.set("project", projectId);
   window.location.href = `${url.pathname}${url.search}`;
+}
+
+function createCanvasSearchUi() {
+  const panel = document.createElement("section");
+  panel.className = "canvas-search";
+
+  const inputWrap = document.createElement("div");
+  inputWrap.className = "canvas-search-input-wrap";
+  inputWrap.append(createSvgIcon("canvas-search-icon", [
+    "M10 10m-7 0a7 7 0 1 0 14 0a7 7 0 1 0 -14 0",
+    "M21 21l-6 -6"
+  ]));
+
+  const input = document.createElement("input");
+  input.type = "search";
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  input.className = "canvas-search-input";
+  inputWrap.append(input);
+
+  const type = document.createElement("select");
+  type.className = "canvas-search-type";
+  for (const value of ["", "image", "text", "drawing", "job"]) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.dataset.searchTypeOption = value || "all";
+    type.append(option);
+  }
+  inputWrap.append(type);
+  panel.append(inputWrap);
+
+  const results = document.createElement("div");
+  results.className = "canvas-search-results";
+  results.hidden = true;
+  panel.append(results);
+
+  boardShell?.append(panel);
+  return { panel, input, type, results };
+}
+
+function createSvgIcon(className, paths) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.classList.add(className);
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  for (const d of paths) {
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", d);
+    svg.append(path);
+  }
+  return svg;
+}
+
+function scheduleCanvasSearch() {
+  window.clearTimeout(searchTimer);
+  searchTimer = window.setTimeout(runCanvasSearch, searchDebounceMs);
+}
+
+async function runCanvasSearch() {
+  window.clearTimeout(searchTimer);
+  const query = canvasSearch.input.value.trim();
+  const type = canvasSearch.type.value;
+  const requestId = ++searchRequestId;
+  canvasSearch.panel.classList.add("active");
+
+  if (!query) {
+    searchResults = [];
+    renderCanvasSearchResults([]);
+    return;
+  }
+
+  try {
+    const url = new URL(apiPath("/api/search"), window.location.origin);
+    url.searchParams.set("q", query);
+    url.searchParams.set("limit", "12");
+    if (type) url.searchParams.set("type", type);
+    const response = await fetch(`${url.pathname}${url.search}`);
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || t("searchFailed"));
+    if (requestId !== searchRequestId) return;
+    searchResults = Array.isArray(payload.results) ? payload.results : [];
+    renderCanvasSearchResults(searchResults);
+  } catch (error) {
+    if (requestId !== searchRequestId) return;
+    searchResults = [];
+    renderCanvasSearchMessage(error?.message || t("searchFailed"));
+  }
+}
+
+function renderCanvasSearchResults(results) {
+  canvasSearch.results.replaceChildren();
+  canvasSearch.results.hidden = false;
+
+  const query = canvasSearch.input.value.trim();
+  if (!query) {
+    renderCanvasSearchMessage(t("searchHint"));
+    return;
+  }
+  if (!results.length) {
+    renderCanvasSearchMessage(t("searchEmpty"));
+    return;
+  }
+
+  for (const result of results) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "canvas-search-result";
+    button.dataset.searchResultId = result.id;
+
+    const title = document.createElement("span");
+    title.className = "canvas-search-result-title";
+    title.textContent = searchResultTitle(result);
+    button.append(title);
+
+    const meta = document.createElement("span");
+    meta.className = "canvas-search-result-meta";
+    meta.textContent = searchResultMeta(result);
+    button.append(meta);
+
+    const snippet = searchResultSnippet(result);
+    if (snippet) {
+      const detail = document.createElement("span");
+      detail.className = "canvas-search-result-detail";
+      detail.textContent = snippet;
+      button.append(detail);
+    }
+
+    canvasSearch.results.append(button);
+  }
+}
+
+function renderCanvasSearchMessage(message) {
+  canvasSearch.results.replaceChildren();
+  const element = document.createElement("div");
+  element.className = "canvas-search-message";
+  element.textContent = message;
+  canvasSearch.results.append(element);
+  canvasSearch.results.hidden = false;
+}
+
+async function focusSearchResult(id) {
+  const result = searchResults.find((item) => item.id === id);
+  let object = state?.objects.find((item) => item.id === id);
+  if (!object) {
+    await loadState();
+    object = state?.objects.find((item) => item.id === id);
+  }
+  const target = object || result;
+  if (!target) {
+    showToast(t("searchEmpty"));
+    return;
+  }
+
+  closeQuickEdit({ keepPrompt: true });
+  await selectObject(id, { fromUser: true });
+  frameCanvasObject(target);
+  closeCanvasSearch({ keepQuery: true });
+}
+
+function frameCanvasObject(object) {
+  const groupId = object.id ? selectedLayerGroupId() : null;
+  const bounds = groupId ? layerGroupBounds(groupId) : boundsForSearchTarget(object);
+  frameWorldBounds(bounds, {
+    paddingX: 88,
+    paddingTop: 104,
+    paddingBottom: 148,
+    minZoom: 0.16,
+    maxZoom: 1.28
+  });
+}
+
+function boundsForSearchTarget(object) {
+  return {
+    x: Number.isFinite(object.x) ? object.x : 0,
+    y: Number.isFinite(object.y) ? object.y : 0,
+    width: Number.isFinite(object.width) && object.width > 0 ? object.width : 1,
+    height: Number.isFinite(object.height) && object.height > 0 ? object.height : 1
+  };
+}
+
+function closeCanvasSearch({ keepQuery = false } = {}) {
+  window.clearTimeout(searchTimer);
+  canvasSearch.panel.classList.remove("active");
+  canvasSearch.results.hidden = true;
+  if (!keepQuery) {
+    canvasSearch.input.value = "";
+    searchResults = [];
+    canvasSearch.results.replaceChildren();
+  }
+}
+
+function searchResultTitle(result) {
+  return result.name || result.text || result.prompt || result.id || objectTypeLabel(result.type);
+}
+
+function searchResultMeta(result) {
+  const type = objectTypeLabel(result.type);
+  const fields = Array.isArray(result.matchFields) && result.matchFields.length
+    ? result.matchFields.join(", ")
+    : "id";
+  return `${type} · ${fields}`;
+}
+
+function searchResultSnippet(result) {
+  const values = [
+    result.prompt,
+    result.text,
+    result.sourcePath,
+    result.assetPath,
+    result.layerGroupName,
+    result.layerGroupKind,
+    result.src
+  ];
+  return values.map((value) => String(value || "").trim()).find(Boolean) || "";
 }
 
 function render() {
@@ -1668,7 +2170,7 @@ function frameSelectedImageForViewing(object) {
 
 function isShortcutEditingTarget(target) {
   if (isEditableTarget(target)) return true;
-  return Boolean(target.closest("button, [role='button'], .selection-toolbar, .quick-edit-composer, .settings-menu, .color-palette"));
+  return Boolean(target.closest("button, [role='button'], .selection-toolbar, .quick-edit-composer, .settings-menu, .color-palette, .prompt-history-panel, .canvas-search"));
 }
 
 function isDeleteEditingTarget(target) {
@@ -1775,11 +2277,22 @@ function applyLanguage() {
   settingsButton.setAttribute("aria-label", t("settings"));
   board.setAttribute("aria-label", t("agentCanvas"));
   toolDock.setAttribute("aria-label", t("canvasTools"));
+  canvasSearch.input.placeholder = t("searchPlaceholder");
+  canvasSearch.input.setAttribute("aria-label", t("searchLabel"));
+  canvasSearch.type.setAttribute("aria-label", t("searchLabel"));
+  canvasSearch.panel.setAttribute("aria-label", t("searchLabel"));
+  canvasSearch.type.querySelectorAll("[data-search-type-option]").forEach((option) => {
+    option.textContent = option.value ? objectTypeLabel(option.value) : t("searchAllTypes");
+  });
+  if (canvasSearch.panel.classList.contains("active")) {
+    renderCanvasSearchResults(searchResults);
+  }
   document.querySelector(".canvas-controls")?.setAttribute("aria-label", t("canvasViewControls"));
   settingsMenu.querySelector("[data-settings-row='language']")?.setAttribute("aria-label", t("language"));
   const currentLanguage = settingsMenu.querySelector("[data-language-current]");
   if (currentLanguage) currentLanguage.textContent = language === "zh" ? "简体中文" : "English";
   renderProjectMenu();
+  updatePromptHistoryLabels();
 
   settingsMenu.querySelectorAll("[data-language]").forEach((button) => {
     const isSelected = button.dataset.language === language;
@@ -1813,6 +2326,17 @@ function applyLanguage() {
   if (state) updateSelectionUi();
 }
 
+function updatePromptHistoryLabels() {
+  if (!promptHistoryUi) return;
+  const label = t("promptHistory");
+  promptHistoryUi.button.title = label;
+  promptHistoryUi.button.dataset.tooltip = label;
+  promptHistoryUi.button.setAttribute("aria-label", label);
+  promptHistoryUi.title.textContent = label;
+  promptHistoryUi.search.placeholder = t("promptHistorySearch");
+  promptHistoryUi.search.setAttribute("aria-label", t("promptHistorySearch"));
+}
+
 function t(key) {
   return translations[language]?.[key] || translations.en[key] || key;
 }
@@ -1829,6 +2353,11 @@ function viewActionLabel(action) {
   if (action === "upload") return translations[language].tools["upload-image"];
   if (action === "reset") return translations[language].controls.reset;
   return action;
+}
+
+function objectTypeLabel(type) {
+  const key = type || "image";
+  return translations[language].objectTypes[key] || translations.en.objectTypes[key] || key;
 }
 
 function pointerToWorld(event) {
