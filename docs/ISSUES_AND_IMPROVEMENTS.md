@@ -9,7 +9,7 @@
 - The project switcher now uses a persistent registry at `~/.agents/agent-canvas/projects.json`, so registered project canvases are restored after the local Agent-Canvas service restarts. Restored projects do not resume auto-collection implicitly.
 - Canvas objects can be searched through CLI, HTTP, MCP, and a compact in-canvas UI by name, prompt, text, source path, and layer-group metadata.
 - Prompt history is available through CLI, HTTP, MCP, and a lightweight in-canvas browser by deriving recent unique prompts from canvas objects. A richer prompt management workflow is still future work.
-- Version grouping is available through CLI, HTTP, and MCP by grouping canvas objects on `sourceObjectId`, `batchId`, `layoutMode`, or `prompt`. A richer in-canvas version browser is still future work.
+- Version grouping is available through CLI, HTTP, MCP, and the in-canvas discovery panel by grouping canvas objects on `sourceObjectId`, `batchId`, `layoutMode`, or `prompt`. Deeper side-by-side visual comparison is still future work.
 - The Lovart visual match is approximate. A reference screenshot was inspected and the current UI follows the broad shape: light canvas, bottom dock, and selected-image toolbar. Pixel-level spacing, iconography, transitions, and interaction details still need dedicated visual QA.
 - Lovart's page was not friendly to Chrome extension DOM automation in this run; reference inspection used a system screenshot after bringing Chrome to the foreground.
 - `Quick Edit`, `Remove BG`, `Edit Text`, and `Edit Elements` are implemented as background jobs backed by dedicated Agent-Canvas operation skills. `Edit Elements` now has deterministic smoke coverage for segmentation artifacts, completed background normalization, layer stack/group metadata, and missing-segmentation failures, plus browser-level visual smoke coverage for locked layer-group rendering and toolbar behavior. Broader visual QA is still useful because generated mask quality can vary.
@@ -19,4 +19,4 @@
 - Add a real infinite-canvas engine such as tldraw once the Codex integration contract is stable.
 - Add browser-based visual regression checks against a reference screenshot set.
 - Replace the current polling auto-collector with a real file watcher or Codex lifecycle hook so image outputs are captured faster and with fewer false positives.
-- Add a first-class in-canvas version browser that uses the existing version grouping APIs.
+- Add side-by-side version comparison controls for grouped canvas outputs.

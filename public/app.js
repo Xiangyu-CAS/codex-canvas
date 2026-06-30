@@ -50,6 +50,18 @@ const translations = {
     promptHistoryFailed: "Prompt history failed to load.",
     promptHistoryApplied: "Prompt added to Quick Edit.",
     promptHistoryCopied: "Prompt copied.",
+    promptHistoryTab: "Prompts",
+    versionBrowserTab: "Versions",
+    versionBrowserSearch: "Filter versions",
+    versionBrowserLoading: "Loading versions...",
+    versionBrowserEmpty: "No matching version groups.",
+    versionBrowserFailed: "Version groups failed to load.",
+    versionGroupLabel: "Group by",
+    versionGroupSource: "Source",
+    versionGroupBatch: "Batch",
+    versionGroupLayout: "Layout",
+    versionGroupPrompt: "Prompt",
+    versionGroupCount: "objects",
     textPlaceholder: "Text",
     quickEditPlaceholder: "Describe your edit here",
     quickEditEmpty: "Describe the edit first.",
@@ -128,6 +140,18 @@ const translations = {
     promptHistoryFailed: "提示词历史加载失败。",
     promptHistoryApplied: "已填入快捷编辑。",
     promptHistoryCopied: "已复制提示词。",
+    promptHistoryTab: "提示词",
+    versionBrowserTab: "版本",
+    versionBrowserSearch: "筛选版本",
+    versionBrowserLoading: "正在加载版本...",
+    versionBrowserEmpty: "没有匹配的版本分组。",
+    versionBrowserFailed: "版本分组加载失败。",
+    versionGroupLabel: "分组",
+    versionGroupSource: "来源",
+    versionGroupBatch: "批次",
+    versionGroupLayout: "布局",
+    versionGroupPrompt: "提示词",
+    versionGroupCount: "个对象",
     textPlaceholder: "文字",
     quickEditPlaceholder: "描述你想怎么改这张图",
     quickEditEmpty: "先描述你想怎么改。",
@@ -217,7 +241,9 @@ let searchRequestId = 0;
 let searchResults = [];
 let promptHistoryUi = null;
 let promptHistoryFetchToken = 0;
+let versionBrowserFetchToken = 0;
 let promptHistorySearchTimer = null;
+let promptHistoryMode = "prompts";
 
 initPromptHistoryUi();
 applyLanguage();
@@ -486,12 +512,25 @@ function initPromptHistoryUi() {
     <div class="prompt-history-header">
       <div class="prompt-history-title"></div>
     </div>
+    <div class="prompt-history-tabs" role="tablist">
+      <button type="button" data-discovery-mode="prompts"></button>
+      <button type="button" data-discovery-mode="versions"></button>
+    </div>
     <label class="prompt-history-search">
       <svg class="prompt-history-search-icon" viewBox="0 0 24 24" aria-hidden="true">
         <circle cx="11" cy="11" r="8"></circle>
         <path d="m21 21 -4.3 -4.3"></path>
       </svg>
       <input type="search" autocomplete="off" spellcheck="false" />
+    </label>
+    <label class="version-group-select">
+      <span></span>
+      <select>
+        <option value="sourceObjectId"></option>
+        <option value="batchId"></option>
+        <option value="layoutMode"></option>
+        <option value="prompt"></option>
+      </select>
     </label>
     <div class="prompt-history-list" role="listbox"></div>
     <div class="prompt-history-status"></div>
@@ -501,7 +540,11 @@ function initPromptHistoryUi() {
     button,
     panel,
     title: panel.querySelector(".prompt-history-title"),
+    tabs: [...panel.querySelectorAll("[data-discovery-mode]")],
     search: panel.querySelector("input"),
+    groupBy: panel.querySelector(".version-group-select select"),
+    groupByLabel: panel.querySelector(".version-group-select span"),
+    groupByWrap: panel.querySelector(".version-group-select"),
     list: panel.querySelector(".prompt-history-list"),
     status: panel.querySelector(".prompt-history-status")
   };
@@ -514,7 +557,7 @@ function initPromptHistoryUi() {
 
   promptHistoryUi.search.addEventListener("input", () => {
     window.clearTimeout(promptHistorySearchTimer);
-    promptHistorySearchTimer = window.setTimeout(() => fetchPromptHistory(), 180);
+    promptHistorySearchTimer = window.setTimeout(() => fetchDiscoveryPanel(), 180);
   });
 
   promptHistoryUi.search.addEventListener("keydown", (event) => {
@@ -524,7 +567,24 @@ function initPromptHistoryUi() {
     }
   });
 
+  promptHistoryUi.groupBy.addEventListener("change", () => fetchVersionGroups());
+
   panel.addEventListener("click", (event) => {
+    const tab = event.target.closest("[data-discovery-mode]");
+    if (tab) {
+      event.preventDefault();
+      setDiscoveryMode(tab.dataset.discoveryMode);
+      return;
+    }
+
+    const versionObject = event.target.closest("[data-version-object-id]");
+    if (versionObject) {
+      event.preventDefault();
+      closePromptHistoryPanel();
+      focusSearchResult(versionObject.dataset.versionObjectId);
+      return;
+    }
+
     const item = event.target.closest("[data-prompt]");
     if (!item) return;
     event.preventDefault();
@@ -543,7 +603,7 @@ function togglePromptHistoryPanel() {
     projectMenu.hidden = true;
     promptHistoryUi.panel.hidden = false;
     promptHistoryUi.button.classList.add("active");
-    fetchPromptHistory();
+    fetchDiscoveryPanel();
     window.requestAnimationFrame(() => promptHistoryUi.search.focus());
   } else {
     closePromptHistoryPanel();
@@ -556,9 +616,25 @@ function closePromptHistoryPanel() {
   promptHistoryUi.button.classList.remove("active");
 }
 
+function setDiscoveryMode(mode) {
+  const nextMode = mode === "versions" ? "versions" : "prompts";
+  if (promptHistoryMode === nextMode) return;
+  promptHistoryMode = nextMode;
+  promptHistoryUi.search.value = "";
+  updatePromptHistoryLabels();
+  fetchDiscoveryPanel();
+  window.requestAnimationFrame(() => promptHistoryUi.search.focus());
+}
+
+function fetchDiscoveryPanel() {
+  if (promptHistoryMode === "versions") return fetchVersionGroups();
+  return fetchPromptHistory();
+}
+
 async function fetchPromptHistory() {
   if (!promptHistoryUi || promptHistoryUi.panel.hidden) return;
   const token = ++promptHistoryFetchToken;
+  versionBrowserFetchToken += 1;
   const query = promptHistoryUi.search.value.trim();
   renderPromptHistoryStatus(t("promptHistoryLoading"));
   promptHistoryUi.list.replaceChildren();
@@ -575,6 +651,31 @@ async function fetchPromptHistory() {
   } catch (error) {
     if (token !== promptHistoryFetchToken) return;
     renderPromptHistoryStatus(error?.message || t("promptHistoryFailed"));
+  }
+}
+
+async function fetchVersionGroups() {
+  if (!promptHistoryUi || promptHistoryUi.panel.hidden) return;
+  const token = ++versionBrowserFetchToken;
+  promptHistoryFetchToken += 1;
+  const query = promptHistoryUi.search.value.trim();
+  renderPromptHistoryStatus(t("versionBrowserLoading"));
+  promptHistoryUi.list.replaceChildren();
+
+  try {
+    const url = new URL(apiPath("/api/versions"), window.location.origin);
+    url.searchParams.set("q", query);
+    url.searchParams.set("groupBy", promptHistoryUi.groupBy.value || "sourceObjectId");
+    url.searchParams.set("limit", "20");
+    url.searchParams.set("objectLimit", "6");
+    const response = await fetch(`${url.pathname}${url.search}`);
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || t("versionBrowserFailed"));
+    if (token !== versionBrowserFetchToken) return;
+    renderVersionGroups(Array.isArray(payload.groups) ? payload.groups : []);
+  } catch (error) {
+    if (token !== versionBrowserFetchToken) return;
+    renderPromptHistoryStatus(error?.message || t("versionBrowserFailed"));
   }
 }
 
@@ -617,6 +718,71 @@ function renderPromptHistoryItems(items) {
 function renderPromptHistoryStatus(message) {
   if (!promptHistoryUi) return;
   promptHistoryUi.status.textContent = message;
+}
+
+function renderVersionGroups(groups) {
+  promptHistoryUi.list.replaceChildren();
+  if (!groups.length) {
+    renderPromptHistoryStatus(t("versionBrowserEmpty"));
+    return;
+  }
+  promptHistoryUi.status.textContent = "";
+
+  for (const group of groups) {
+    const section = document.createElement("section");
+    section.className = "version-group";
+
+    const header = document.createElement("div");
+    header.className = "version-group-header";
+
+    const title = document.createElement("span");
+    title.className = "version-group-title";
+    title.textContent = versionGroupTitle(group);
+    header.append(title);
+
+    const count = document.createElement("span");
+    count.className = "version-group-count";
+    count.textContent = `${group.count || 0} ${t("versionGroupCount")}`;
+    header.append(count);
+    section.append(header);
+
+    const objects = Array.isArray(group.objects) ? group.objects : [];
+    for (const object of objects) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "version-group-object";
+      button.dataset.versionObjectId = object.id;
+
+      const name = document.createElement("span");
+      name.className = "version-group-object-name";
+      name.textContent = object.name || object.prompt || object.id;
+      button.append(name);
+
+      const meta = document.createElement("span");
+      meta.className = "version-group-object-meta";
+      meta.textContent = versionObjectMeta(object);
+      button.append(meta);
+
+      section.append(button);
+    }
+    promptHistoryUi.list.append(section);
+  }
+}
+
+function versionGroupTitle(group) {
+  const value = String(group.value || "").trim();
+  if (!value) return group.groupBy || "";
+  if (value.length <= 72) return value;
+  return `${value.slice(0, 69)}...`;
+}
+
+function versionObjectMeta(object) {
+  const type = objectTypeLabel(object.type);
+  const date = object.createdAt ? new Date(object.createdAt) : null;
+  const dateText = date && Number.isFinite(date.getTime())
+    ? date.toLocaleDateString(language === "zh" ? "zh-CN" : "en", { month: "short", day: "numeric" })
+    : "";
+  return [type, object.layoutMode, object.batchId, dateText].filter(Boolean).join(" · ");
 }
 
 function promptHistoryMeta(item) {
@@ -2333,8 +2499,26 @@ function updatePromptHistoryLabels() {
   promptHistoryUi.button.dataset.tooltip = label;
   promptHistoryUi.button.setAttribute("aria-label", label);
   promptHistoryUi.title.textContent = label;
-  promptHistoryUi.search.placeholder = t("promptHistorySearch");
-  promptHistoryUi.search.setAttribute("aria-label", t("promptHistorySearch"));
+  promptHistoryUi.search.placeholder = promptHistoryMode === "versions" ? t("versionBrowserSearch") : t("promptHistorySearch");
+  promptHistoryUi.search.setAttribute("aria-label", promptHistoryUi.search.placeholder);
+  promptHistoryUi.groupByLabel.textContent = t("versionGroupLabel");
+  promptHistoryUi.groupByWrap.hidden = promptHistoryMode !== "versions";
+  promptHistoryUi.tabs.forEach((tab) => {
+    const active = tab.dataset.discoveryMode === promptHistoryMode;
+    tab.textContent = tab.dataset.discoveryMode === "versions" ? t("versionBrowserTab") : t("promptHistoryTab");
+    tab.classList.toggle("active", active);
+    tab.setAttribute("aria-selected", String(active));
+    tab.setAttribute("role", "tab");
+  });
+  const labels = {
+    sourceObjectId: t("versionGroupSource"),
+    batchId: t("versionGroupBatch"),
+    layoutMode: t("versionGroupLayout"),
+    prompt: t("versionGroupPrompt")
+  };
+  promptHistoryUi.groupBy.querySelectorAll("option").forEach((option) => {
+    option.textContent = labels[option.value] || option.value;
+  });
 }
 
 function t(key) {

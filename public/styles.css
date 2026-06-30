@@ -288,6 +288,32 @@ button {
   font-weight: 800;
 }
 
+.prompt-history-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 8px;
+  background: #f4f4f3;
+}
+
+.prompt-history-tabs button {
+  min-width: 0;
+  height: 28px;
+  border-radius: 6px;
+  color: #7c8087;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.prompt-history-tabs button.active {
+  background: #fff;
+  color: #2f3338;
+  box-shadow:
+    0 1px 2px rgba(22, 25, 30, 0.08),
+    0 0 0 1px rgba(28, 31, 36, 0.04);
+}
+
 .prompt-history-search {
   display: flex;
   align-items: center;
@@ -319,6 +345,34 @@ button {
 
 .prompt-history-search input::placeholder {
   color: #9ca0a6;
+}
+
+.version-group-select {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 2px;
+  color: #7c8087;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.version-group-select[hidden] {
+  display: none;
+}
+
+.version-group-select select {
+  min-width: 0;
+  height: 28px;
+  border: 0;
+  border-radius: 7px;
+  outline: none;
+  padding: 0 8px;
+  background: #f4f4f3;
+  color: #2f3338;
+  font: inherit;
 }
 
 .prompt-history-list {
@@ -372,6 +426,73 @@ button {
 .prompt-history-status {
   min-height: 15px;
   padding: 1px 2px;
+}
+
+.version-group {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 7px;
+  border-radius: 8px;
+  background: #f8f8f7;
+}
+
+.version-group-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.version-group-title,
+.version-group-count,
+.version-group-object-name,
+.version-group-object-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.version-group-title {
+  color: #24282f;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.version-group-count {
+  color: #8a8d93;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.version-group-object {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
+  border-radius: 7px;
+  padding: 7px 8px;
+  background: transparent;
+  text-align: left;
+}
+
+.version-group-object:hover,
+.version-group-object:focus-visible {
+  background: #eeeeec;
+  outline: none;
+}
+
+.version-group-object-name {
+  color: #2f3338;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.version-group-object-meta {
+  color: #8a8d93;
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .settings-gear {

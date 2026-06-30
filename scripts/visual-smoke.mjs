@@ -149,10 +149,23 @@ async function runViewportSmoke(browser, viewport) {
   const image = await addImage(projectDir, {
     dataUrl: `data:image/png;base64,${pngOne}`,
     name: `${viewport.name}-visual.png`,
+    prompt: `${viewport.name} product source`,
     x: viewport.name === "mobile" ? 110 : 360,
     y: viewport.name === "mobile" ? 260 : 240,
     width: viewport.name === "mobile" ? 220 : 320,
     height: viewport.name === "mobile" ? 180 : 240
+  });
+  const version = await addImage(projectDir, {
+    dataUrl: `data:image/png;base64,${pngOne}`,
+    name: `${viewport.name}-visual-version.png`,
+    prompt: `${viewport.name} product variant`,
+    sourceObjectId: image.id,
+    batchId: `${viewport.name}-batch`,
+    layoutMode: "canvas-row",
+    x: viewport.name === "mobile" ? 150 : 720,
+    y: viewport.name === "mobile" ? 500 : 260,
+    width: viewport.name === "mobile" ? 180 : 220,
+    height: viewport.name === "mobile" ? 140 : 160
   });
   const { server, url } = await createServer({ projectDir, port: 0, autoCollect: false });
   const context = await browser.newContext({
@@ -182,11 +195,22 @@ async function runViewportSmoke(browser, viewport) {
 
     await assertSingleImageActionToolbar(page);
     await assertVisibleControlsDoNotOverlap(page, viewport);
+    await assertDiscoveryVersionBrowser(page, version.id);
     assertDeepEqual(consoleErrors.filter((message) => !/favicon/i.test(message)), [], "visual smoke should not emit console errors");
   } finally {
     await context.close();
     await new Promise((resolve) => server.close(resolve));
   }
+}
+
+async function assertDiscoveryVersionBrowser(page, versionId) {
+  await page.locator(".prompt-history-button").click();
+  await waitForVisible(page, ".prompt-history-panel:not([hidden])", "discovery panel should open");
+  await page.locator("[data-discovery-mode='versions']").click();
+  await waitForVisible(page, ".version-group", "version groups should render in discovery panel");
+  await page.locator(`[data-version-object-id="${versionId}"]`).click();
+  await waitForHidden(page, ".prompt-history-panel", "discovery panel should close after selecting a version object");
+  await assertLocatorClassContains(page, `.canvas-object[data-id="${versionId}"]`, "selected");
 }
 
 async function runEditElementsLayerSmoke(browser) {
@@ -455,6 +479,18 @@ async function waitForVisible(page, selector, message) {
     const style = getComputedStyle(element);
     const rect = element.getBoundingClientRect();
     return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+  }, selector, { timeout: 5000 }).catch((error) => {
+    throw new Error(`${message}: ${error.message}`);
+  });
+}
+
+async function waitForHidden(page, selector, message) {
+  await page.waitForFunction((target) => {
+    const element = document.querySelector(target);
+    if (!element || element.hidden) return true;
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return style.display === "none" || style.visibility === "hidden" || rect.width === 0 || rect.height === 0;
   }, selector, { timeout: 5000 }).catch((error) => {
     throw new Error(`${message}: ${error.message}`);
   });
