@@ -12,6 +12,7 @@ const pngTwo = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFUlEQVR4nGO8Y6D6
 const expectedSingleImageActions = [
   "quick-edit",
   "remove-bg",
+  "expand",
   "edit-elements",
   "edit-text",
   "send-to-chat",
@@ -207,6 +208,7 @@ async function runViewportSmoke(browser, viewport) {
     await assertLocatorClassContains(page, `.canvas-object[data-id="${image.id}"]`, "selected");
 
     await assertSingleImageActionToolbar(page);
+    await assertExpandComposer(page, viewport);
     await assertVisibleControlsDoNotOverlap(page, viewport);
     await assertDiscoveryVersionBrowser(page, [version.id, nextVersion.id]);
     assertDeepEqual(consoleErrors.filter((message) => !/favicon/i.test(message)), [], "visual smoke should not emit console errors");
@@ -584,6 +586,34 @@ async function assertSingleImageActionToolbar(page) {
   ));
   for (const rect of buttonRects) assertRectVisible(rect, `toolbar action ${rect.name}`);
   assertNoPairwiseOverlap(buttonRects, "toolbar action buttons");
+}
+
+async function assertExpandComposer(page, viewport) {
+  await page.locator('[data-action="expand"]').click();
+  await waitForVisible(page, ".quick-edit-composer.quick-edit-mode", "Expand composer should be visible");
+  const snapshot = await page.evaluate(() => {
+    const composer = document.querySelector("#quickEditComposer");
+    const textarea = document.querySelector("#quickEditPrompt");
+    const rect = composer?.getBoundingClientRect();
+    return {
+      rect: rect ? {
+        left: Math.round(rect.left),
+        top: Math.round(rect.top),
+        right: Math.round(rect.right),
+        bottom: Math.round(rect.bottom),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height)
+      } : null,
+      placeholder: textarea?.placeholder || "",
+      activeAction: document.querySelector("#quickEditComposer")?.classList.contains("quick-edit-mode") || false
+    };
+  });
+  assertRectVisible(snapshot.rect, "Expand composer");
+  assertRectInsideViewport(snapshot.rect, viewport, "Expand composer");
+  assert(snapshot.placeholder.includes("extend"), "Expand composer should show expansion-specific placeholder text");
+  assert(snapshot.activeAction, "Expand composer should use the image prompt composer mode");
+  await page.locator("#quickEditCancel").click();
+  await waitForHidden(page, "#quickEditComposer", "Expand composer should close after cancel");
 }
 
 async function assertVisibleControlsDoNotOverlap(page, viewport) {

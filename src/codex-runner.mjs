@@ -219,6 +219,30 @@ function promptForAction({ action, outputDir, userPrompt }) {
     ].join("\n");
   }
 
+  if (action === "expand") {
+    return [
+      "Use the canvas-expand skill and the imagegen skill to expand the attached image.",
+      "Optimize for latency: do not inspect unrelated repository files, do not produce variants, and do not run broad filesystem searches before generation.",
+      "",
+      "Task: outpaint the selected image beyond its current edges according to this user instruction:",
+      userPrompt || "Expand the image naturally beyond its current frame.",
+      "",
+      "Preserve the source subject identity, visible text, perspective, lighting, colors, and design intent.",
+      "Extend the scene or design outside the current frame; do not crop, zoom in, replace the main subject, or redesign unrelated content.",
+      "Keep the original image content centered or anchored as the visual source, with plausible new surrounding content.",
+      "Use a wider or taller canvas only when the instruction implies that direction; otherwise create a balanced expansion with extra context around all sides.",
+      "Treat this as an outpainting image edit, not a new unrelated generation.",
+      "",
+      `Save or copy the final expanded image into this exact directory: ${outputDir}`,
+      "Use a descriptive filename ending in .png, such as expand-result.png.",
+      "As soon as the generated PNG exists, copy it into the output directory and finish.",
+      "Do not modify source files outside that output directory.",
+      "Do not ask follow-up questions. Do not perform extra visual QA unless generation clearly failed.",
+      "",
+      "Finish with a concise message containing the saved output path."
+    ].join("\n");
+  }
+
   if (action === "edit-text") {
     return [
       "Use the canvas-edit-text skill and the imagegen skill to edit the attached image.",

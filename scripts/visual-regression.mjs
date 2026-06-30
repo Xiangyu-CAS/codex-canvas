@@ -17,7 +17,7 @@ const viewports = [
   { name: "desktop", width: 1280, height: 800, deviceScaleFactor: 1 },
   { name: "mobile", width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 2 }
 ];
-const screenshotCases = ["discovery", "selected", "compare", "overlay", "text-edit"];
+const screenshotCases = ["discovery", "selected", "expand", "compare", "overlay", "text-edit"];
 let visualProjectRegistryPath = null;
 
 async function main() {
@@ -114,6 +114,18 @@ async function captureReferenceViewport(browser, viewport, screenshotCase) {
     if (screenshotCase === "selected") {
       await page.locator(`.canvas-object[data-id="${source.id}"]`).click();
       await waitForVisible(page, "#selectionToolbar", "selection toolbar should be visible");
+    } else if (screenshotCase === "expand") {
+      await page.locator(`.canvas-object[data-id="${source.id}"]`).click();
+      await waitForVisible(page, "#selectionToolbar", "selection toolbar should be visible");
+      await page.locator('[data-action="expand"]').click();
+      await waitForVisible(page, ".quick-edit-composer.quick-edit-mode", "Expand composer should be visible");
+      await page.waitForFunction(() => document.activeElement?.id === "quickEditPrompt", null, { timeout: 5000 });
+      await page.locator("#quickEditPrompt").fill("Extend the product scene with more studio background on every side");
+      await page.locator("#quickEditPrompt").evaluate((element) => {
+        element.style.caretColor = "transparent";
+        element.blur();
+      });
+      await page.waitForTimeout(50);
     } else if (screenshotCase === "text-edit") {
       await page.locator(`.canvas-object[data-id="${source.id}"]`).click();
       await waitForVisible(page, "#selectionToolbar", "selection toolbar should be visible");

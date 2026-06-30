@@ -13,7 +13,7 @@ import { recognizeTextLocal } from "./local-ocr.mjs";
 const execFileAsync = promisify(execFile);
 const jobs = new Map();
 const textRecognitionJobs = new Map();
-const supportedActions = new Set(["remove-bg", "quick-edit", "edit-text", "edit-elements"]);
+const supportedActions = new Set(["remove-bg", "quick-edit", "expand", "edit-text", "edit-elements"]);
 const ignoredGeneratedImagePaths = new Map();
 const globalIgnoredGeneratedImageScope = "__global__";
 const outputPollMs = 1000;
@@ -1023,6 +1023,7 @@ async function requireImageObject(projectDir, objectId, options = {}) {
 
 function jobPrompt(job) {
   if (job.action === "quick-edit") return `Canvas Quick Edit: ${job.prompt || "edited image"}`;
+  if (job.action === "expand") return `Canvas Expand: ${job.prompt || "expanded image"}`;
   if (job.action === "edit-text") return "Canvas Edit Text result";
   if (job.action === "edit-elements") return "Canvas Edit Elements layer";
   if (job.action === "remove-bg") return "Canvas Remove BG result";
@@ -1060,6 +1061,7 @@ function buildEditTextPrompt(changes) {
 
 function actionLabel(action) {
   if (action === "quick-edit") return "Quick Edit";
+  if (action === "expand") return "Expand";
   if (action === "edit-text") return "Edit Text";
   if (action === "edit-elements") return "Edit Elements";
   if (action === "remove-bg") return "Remove BG";

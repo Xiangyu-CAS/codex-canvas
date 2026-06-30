@@ -67,7 +67,9 @@ const translations = {
     versionDiffLabel: "Pixel diff",
     textPlaceholder: "Text",
     quickEditPlaceholder: "Describe your edit here",
+    expandPlaceholder: "Describe what should extend beyond the image edges",
     quickEditEmpty: "Describe the edit first.",
+    expandEmpty: "Describe what to extend first.",
     editTextPlaceholder: "Describe the text change here",
     editTextEmpty: "Describe the text change first.",
     editTextTitle: "Edit Text",
@@ -94,6 +96,7 @@ const translations = {
     actions: {
       "quick-edit": "Quick Edit",
       "remove-bg": "Remove BG",
+      "expand": "Expand",
       "edit-elements": "Edit Elements",
       "reset-layer-group": "Reset group",
       "group-layer-group": "Group",
@@ -104,6 +107,7 @@ const translations = {
     actionNames: {
       "quick-edit": "Quick Edit",
       "remove-bg": "Remove BG",
+      "expand": "Expand",
       "edit-elements": "Edit Elements",
       "reset-layer-group": "Reset group",
       "group-layer-group": "Group",
@@ -160,7 +164,9 @@ const translations = {
     versionDiffLabel: "像素差异",
     textPlaceholder: "文字",
     quickEditPlaceholder: "描述你想怎么改这张图",
+    expandPlaceholder: "描述要向画面边缘外扩展什么内容",
     quickEditEmpty: "先描述你想怎么改。",
+    expandEmpty: "先描述要扩展什么内容。",
     editTextPlaceholder: "描述要替换或修改的文字",
     editTextEmpty: "先描述你想改哪些字。",
     editTextTitle: "编辑文字",
@@ -187,6 +193,7 @@ const translations = {
     actions: {
       "quick-edit": "快捷编辑",
       "remove-bg": "去背景",
+      "expand": "扩图",
       "edit-elements": "编辑元素",
       "reset-layer-group": "重置组",
       "group-layer-group": "成组",
@@ -197,6 +204,7 @@ const translations = {
     actionNames: {
       "quick-edit": "快捷编辑",
       "remove-bg": "去背景",
+      "expand": "扩图",
       "edit-elements": "编辑元素",
       "reset-layer-group": "重置组",
       "group-layer-group": "成组",
@@ -375,7 +383,7 @@ document.addEventListener("click", (event) => {
   if (action) {
     event.stopPropagation();
     updateSelectionUi();
-    if (action === "quick-edit" || action === "edit-text") {
+    if (action === "quick-edit" || action === "edit-text" || action === "expand") {
       openImageActionComposer(action);
       return;
     }
@@ -2571,11 +2579,15 @@ function updateEditTextRunState() {
 }
 
 function composerPlaceholder(action) {
-  return action === "edit-text" ? t("editTextPlaceholder") : t("quickEditPlaceholder");
+  if (action === "edit-text") return t("editTextPlaceholder");
+  if (action === "expand") return t("expandPlaceholder");
+  return t("quickEditPlaceholder");
 }
 
 function composerEmptyMessage(action) {
-  return action === "edit-text" ? t("editTextEmpty") : t("quickEditEmpty");
+  if (action === "edit-text") return t("editTextEmpty");
+  if (action === "expand") return t("expandEmpty");
+  return t("quickEditEmpty");
 }
 
 function isComposerActive() {
@@ -3093,7 +3105,7 @@ function layerGroupOrigin(groupId) {
 
 function updateToolbarForSelection(isGroupSelection) {
   const groupOnly = new Set(["reset-layer-group", "group-layer-group"]);
-  const singleOnly = new Set(["quick-edit", "remove-bg", "edit-elements", "edit-text", "send-to-chat", "download"]);
+  const singleOnly = new Set(["quick-edit", "remove-bg", "expand", "edit-elements", "edit-text", "send-to-chat", "download"]);
   const selectedGroupMemberId = selectedObjectLayerGroupId();
   toolbar.querySelectorAll("[data-action]").forEach((button) => {
     const action = button.dataset.action;

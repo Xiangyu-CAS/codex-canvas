@@ -602,6 +602,12 @@ function assertMcpToolSchema(tools = []) {
       throw new Error(`MCP start_image_job should require ${field}.`);
     }
   }
+  const startImageJobActions = byName.get("start_image_job")?.inputSchema?.properties?.action?.enum || [];
+  for (const action of ["quick-edit", "remove-bg", "expand", "edit-elements"]) {
+    if (!startImageJobActions.includes(action)) {
+      throw new Error(`MCP start_image_job should expose the stable ${action} action.`);
+    }
+  }
   const sendToChatRequired = byName.get("send_to_chat")?.inputSchema?.required || [];
   for (const field of ["projectDir", "objectId", "threadId"]) {
     if (!sendToChatRequired.includes(field)) {
