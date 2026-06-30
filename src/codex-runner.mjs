@@ -46,7 +46,7 @@ export async function startCodexImageJob({ projectDir, action, imagePath, output
   args.push("--", prompt);
   if (model) args.splice(4, 0, "--model", model);
 
-  const child = spawn(executable, args, {
+  const child = spawnCodexProcess(executable, args, {
     cwd: projectDir,
     env: {
       ...process.env,
@@ -83,6 +83,13 @@ export async function startCodexImageJob({ projectDir, action, imagePath, output
   });
 
   return { child, done, executable };
+}
+
+export function spawnCodexProcess(executable, args, options = {}) {
+  return spawn(executable, args, {
+    ...options,
+    shell: options.shell ?? shouldUseShellForCommandScript(executable)
+  });
 }
 
 export async function runCodexImageJob(options) {
@@ -130,6 +137,10 @@ async function isExecutable(filePath) {
   } catch {
     return false;
   }
+}
+
+function shouldUseShellForCommandScript(filePath) {
+  return process.platform === "win32" && /\.(?:cmd|bat)$/i.test(filePath);
 }
 
 function promptForAction({ action, outputDir, userPrompt }) {

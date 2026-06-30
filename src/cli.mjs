@@ -4,7 +4,7 @@ import { addImage, ensureProjectStore, readState } from "./store.mjs";
 import { createServer } from "./server.mjs";
 import { collectRecentImages } from "./collector.mjs";
 import { resolveProjectDir } from "./paths.mjs";
-import { checkImageProcessingDepsAvailable, checkRapidOcrAvailable, installImageProcessingDeps, installOptionalPythonDeps, installRapidOcr } from "./ocr-setup.mjs";
+import { checkImageProcessingDepsAvailable, checkOptionalPythonDepsAvailable, checkRapidOcrAvailable, installImageProcessingDeps, installOptionalPythonDeps, installRapidOcr } from "./ocr-setup.mjs";
 import { canvasIdForThread, readRuntime, writeRuntime, normalizeThreadId } from "./runtime.mjs";
 
 export async function main(args, context = {}) {
@@ -156,6 +156,17 @@ export async function main(args, context = {}) {
       console.log(result.available
         ? `Image processing dependencies available: Pillow ${result.versions?.Pillow || ""} numpy ${result.versions?.numpy || ""}`.trim()
         : `Image processing dependencies unavailable${result.missing?.length ? `: missing ${result.missing.join(", ")}` : ""}${result.error ? ` (${result.error})` : ""}`);
+    }
+    return;
+  }
+
+  if (command === "doctor-deps") {
+    const result = await checkOptionalPythonDepsAvailable();
+    if (options.json) console.log(JSON.stringify(result, null, 2));
+    else {
+      console.log(result.available
+        ? "Optional Python dependencies available."
+        : "Optional Python dependencies unavailable; OCR and Edit Elements will use fallbacks or report feature-specific errors.");
     }
     return;
   }
@@ -324,6 +335,7 @@ Usage:
   agent-canvas setup-image-deps [--optional] [--json]
   agent-canvas doctor-ocr [--json]
   agent-canvas doctor-image-deps [--json]
+  agent-canvas doctor-deps [--json]
 
 Commands:
   open      Start the local server in the background and print the canvas URL.
@@ -331,10 +343,11 @@ Commands:
   import    Copy an image into the project canvas and place it on the board.
   collect   Import recent image files from ~/.codex/generated_images and the project.
   status    Print current canvas runtime and object count.
-  setup-ocr Install RapidOCR for local Edit Text recognition.
-  setup-image-deps Install Pillow and numpy for Edit Elements local layer processing.
-  setup-deps Install optional Python dependencies for OCR and Edit Elements.
+  setup-ocr Explicitly install RapidOCR for local Edit Text recognition.
+  setup-image-deps Explicitly install Pillow and numpy for Edit Elements local layer processing.
+  setup-deps Explicitly install optional Python dependencies for OCR and Edit Elements.
   doctor-ocr Check whether local RapidOCR is available.
   doctor-image-deps Check whether Pillow and numpy are available.
+  doctor-deps Check all optional Python dependencies without installing them.
 `.trim());
 }

@@ -52,26 +52,34 @@ node ./bin/agent-canvas.mjs open --project .
 npm install
 ```
 
-`npm install` 会在 `postinstall` 中自动尝试安装 Python 可选依赖：`rapidocr_onnxruntime` 用于 `Edit Text` 的本地快速文字识别，`Pillow` 和 `numpy` 用于 `Edit Elements` 的本地拆层与背景处理。安装失败不会阻塞 Agent-Canvas；OCR 不可用时会回退到 Codex 视觉识别，拆层依赖不可用时 `Edit Elements` 会在本地处理阶段报出明确错误。也可以手动运行：
+`npm install` 只安装 Node 包，不会在生命周期脚本中自动安装用户级 Python 依赖。可选依赖需要显式检查或安装：`rapidocr_onnxruntime` 用于 `Edit Text` 的本地快速文字识别，`Pillow` 和 `numpy` 用于 `Edit Elements` 的本地拆层与背景处理。OCR 不可用时会回退到 Codex 视觉识别，拆层依赖不可用时 `Edit Elements` 会在本地处理阶段报出明确错误。
+
+检查本地可选依赖：
+
+```bash
+npm run doctor:ocr
+npm run doctor:image-deps
+npm run doctor:deps
+```
+
+显式安装本地可选依赖：
 
 ```bash
 npm run setup:deps
 npm run setup:ocr
 npm run setup:image-deps
-npm run doctor:ocr
-npm run doctor:image-deps
 ```
 
-如果需要跳过 OCR 安装，可以设置：
+显式安装命令会通过 Python `pip install --user` 安装缺失依赖；如果需要跳过 OCR 安装，可以设置：
 
 ```bash
-AGENT_CANVAS_SKIP_OCR_INSTALL=1 npm install
+AGENT_CANVAS_SKIP_OCR_INSTALL=1 npm run setup:deps
 ```
 
 如果只想跳过 `Edit Elements` 的本地图像处理依赖安装，可以设置：
 
 ```bash
-AGENT_CANVAS_SKIP_IMAGE_DEPS_INSTALL=1 npm install
+AGENT_CANVAS_SKIP_IMAGE_DEPS_INSTALL=1 npm run setup:deps
 ```
 
 导入图片：

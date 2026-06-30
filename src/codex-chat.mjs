@@ -1,7 +1,6 @@
-import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import net from "node:net";
-import { resolveCodexExecutable } from "./codex-runner.mjs";
+import { resolveCodexExecutable, spawnCodexProcess } from "./codex-runner.mjs";
 
 const appServerStartupTimeoutMs = 5000;
 const chatTurnTimeoutMs = 120000;
@@ -66,7 +65,7 @@ export async function sendImageToBoundChat({ projectDir, threadId, imagePath, pr
 async function startAppServer() {
   const executable = await resolveCodexExecutable();
   const port = await allocatePort();
-  const child = spawn(executable, ["app-server", "--listen", `ws://127.0.0.1:${port}`], {
+  const child = spawnCodexProcess(executable, ["app-server", "--listen", `ws://127.0.0.1:${port}`], {
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true
   });

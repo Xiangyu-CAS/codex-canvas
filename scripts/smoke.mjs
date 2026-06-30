@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { sendImageToBoundChat } from "../src/codex-chat.mjs";
+import { checkImageProcessingDepsAvailable } from "../src/ocr-setup.mjs";
 import { assetsDirFor } from "../src/paths.mjs";
 import { createServer } from "../src/server.mjs";
 import { addImage, addObject, deleteObjects, readState, transformState, updateObject } from "../src/store.mjs";
@@ -21,7 +22,9 @@ async function main() {
     ["thread migration asset paths", testThreadMigrationAssetPaths],
     ["mcp canvas status", testMcpCanvasStatus],
     ["auto collector watermark", testAutoCollectorWatermark],
+    ["package optional dependency scripts", testPackageOptionalDependencyScripts],
     ["cli collect help", testCliCollectHelp],
+    ["doctor optional deps without python", testDoctorOptionalDepsWithoutPython],
     ["chat binding alias", testChatBindingAlias],
     ["chat websocket fallback", testChatWebSocketFallback],
     ["chat turn action contract", testChatTurnActionContract],
@@ -166,6 +169,18 @@ async function testMcpCanvasStatus() {
   }
 }
 
+async function testPackageOptionalDependencyScripts() {
+  const packageJson = JSON.parse(await fs.readFile(path.join(process.cwd(), "package.json"), "utf8"));
+  if (packageJson.scripts?.postinstall) {
+    throw new Error("package.json should not install optional Python dependencies from postinstall.");
+  }
+  assertEqual(
+    packageJson.scripts?.["doctor:deps"],
+    "node ./bin/agent-canvas.mjs doctor-deps --json",
+    "package.json should expose a non-installing optional dependency doctor script"
+  );
+}
+
 async function testCliCollectHelp() {
   const { stdout } = await execFileAsync(process.execPath, [path.join(process.cwd(), "bin", "agent-canvas.mjs"), "help"], {
     cwd: process.cwd(),
@@ -177,6 +192,28 @@ async function testCliCollectHelp() {
   }
   if (!stdout.includes("Import recent image files from ~/.codex/generated_images and the project.")) {
     throw new Error("CLI help should document collect default roots.");
+  }
+}
+
+async function testDoctorOptionalDepsWithoutPython() {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-no-python-"));
+  const emptyPath = path.join(tmp, "empty-path");
+  await fs.mkdir(emptyPath);
+  const env = {
+    ...withoutPathEnv(process.env),
+    PATH: emptyPath,
+    AGENT_CANVAS_PROJECT_DIR: tmp
+  };
+  for (const command of ["doctor-ocr", "doctor-image-deps", "doctor-deps", "setup-deps"]) {
+    const result = await runCliJson([command, "--json"], { env });
+    assertEqual(result.status, 0, `${command} should not fail when Python is unavailable`);
+    if (command === "doctor-deps") {
+      assertEqual(result.body.available, false, "doctor-deps should report unavailable optional dependencies without Python");
+    } else if (command === "setup-deps") {
+      assertEqual(result.body.available, false, "setup-deps should remain optional when Python is unavailable");
+    } else {
+      assertEqual(result.body.available, false, `${command} should report unavailable optional dependencies without Python`);
+    }
   }
 }
 
@@ -286,6 +323,12 @@ async function testChatWebSocketFallback() {
 }
 
 async function testEditElementsScripts() {
+  const deps = await checkImageProcessingDepsAvailable();
+  if (!deps.available) {
+    console.warn(`Skipping edit elements scripts smoke test; missing optional image dependencies: ${deps.missing?.join(", ") || "unknown"}.`);
+    return;
+  }
+
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-elements-"));
   const makeImages = path.join(tmp, "make-images.py");
   await fs.writeFile(makeImages, [
@@ -335,6 +378,33 @@ async function postJson(url, body) {
     body: JSON.stringify(body)
   });
   return { status: response.status, body: await response.json().catch(() => ({})) };
+}
+
+async function runCliJson(args, options = {}) {
+  const result = await execFileAsync(process.execPath, [path.join(process.cwd(), "bin", "agent-canvas.mjs"), ...args], {
+    cwd: process.cwd(),
+    env: options.env || process.env,
+    maxBuffer: 1024 * 1024,
+    windowsHide: true
+  }).then(
+    (completed) => ({ ...completed, status: 0 }),
+    (error) => ({
+      stdout: error.stdout || "",
+      stderr: error.stderr || "",
+      status: error.code || 1
+    })
+  );
+  let body = {};
+  try {
+    body = JSON.parse(result.stdout.trim() || "{}");
+  } catch (error) {
+    throw new Error(`CLI did not print JSON for ${args.join(" ")}. stdout=${result.stdout.trim()} stderr=${result.stderr.trim()}`);
+  }
+  return { status: result.status, body };
+}
+
+function withoutPathEnv(env) {
+  return Object.fromEntries(Object.entries(env).filter(([key]) => key.toLowerCase() !== "path"));
 }
 
 async function waitForObjectCount(url, expected, message) {

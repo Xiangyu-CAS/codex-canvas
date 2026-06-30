@@ -7,12 +7,12 @@
     "agent-canvas": "./bin/agent-canvas.mjs"
   },
   "scripts": {
-    "postinstall": "node ./bin/agent-canvas.mjs setup-deps --json",
     "setup:ocr": "node ./bin/agent-canvas.mjs setup-ocr",
     "setup:image-deps": "node ./bin/agent-canvas.mjs setup-image-deps",
     "setup:deps": "node ./bin/agent-canvas.mjs setup-deps",
     "doctor:ocr": "node ./bin/agent-canvas.mjs doctor-ocr --json",
     "doctor:image-deps": "node ./bin/agent-canvas.mjs doctor-image-deps --json",
+    "doctor:deps": "node ./bin/agent-canvas.mjs doctor-deps --json",
     "start": "node ./bin/agent-canvas.mjs start",
     "validate": "node ./bin/agent-canvas.mjs status --json",
     "smoke": "node ./scripts/smoke.mjs",

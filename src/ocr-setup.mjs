@@ -244,6 +244,16 @@ export async function installOptionalPythonDeps() {
   };
 }
 
+export async function checkOptionalPythonDepsAvailable() {
+  const ocr = await checkRapidOcrAvailable();
+  const imageProcessing = await checkImageProcessingDepsAvailable();
+  return {
+    available: Boolean(ocr.available && imageProcessing.available),
+    ocr,
+    imageProcessing
+  };
+}
+
 function pythonCandidates(args) {
   return process.platform === "win32"
     ? [["py", ["-3", ...args]], ["python", args], ["python3", args]]
