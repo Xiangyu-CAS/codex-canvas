@@ -317,6 +317,7 @@ function shouldSkipDirectory(directoryPath, projectDir) {
   const basename = path.basename(directoryPath);
   if (basename.startsWith(".")) return true;
   if (["node_modules", "dist", "build", "coverage"].includes(basename)) return true;
+  if (basename === "reference-screenshots" && path.basename(path.dirname(directoryPath)) === "scripts") return true;
   const relative = path.relative(projectDir, directoryPath);
   return relative === "canvas" || relative.startsWith(`canvas${path.sep}`);
 }

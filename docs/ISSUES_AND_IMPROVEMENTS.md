@@ -10,13 +10,13 @@
 - Canvas objects can be searched through CLI, HTTP, MCP, and a compact in-canvas UI by name, prompt, text, source path, and layer-group metadata.
 - Prompt history is available through CLI, HTTP, MCP, and a lightweight in-canvas browser by deriving recent unique prompts from canvas objects. A richer prompt management workflow is still future work.
 - Version grouping is available through CLI, HTTP, MCP, and the in-canvas discovery panel by grouping canvas objects on `sourceObjectId`, `batchId`, `layoutMode`, or `prompt`. The discovery panel shows image thumbnails, can select and frame grouped versions for side-by-side comparison, and leaves deeper visual diffing as future work.
-- The Lovart visual match is approximate. A reference screenshot was inspected and the current UI follows the broad shape: light canvas, bottom dock, and selected-image toolbar. Pixel-level spacing, iconography, transitions, and interaction details still need dedicated visual QA.
+- The Lovart visual match is approximate. A reference screenshot was inspected and the current UI follows the broad shape: light canvas, bottom dock, and selected-image toolbar. Browser-based visual regression now compares deterministic desktop/mobile screenshots against committed baselines, but pixel-level spacing, iconography, transitions, and interaction details still need broader visual QA.
 - Lovart's page was not friendly to Chrome extension DOM automation in this run; reference inspection used a system screenshot after bringing Chrome to the foreground.
 - `Quick Edit`, `Remove BG`, `Edit Text`, and `Edit Elements` are implemented as background jobs backed by dedicated Agent-Canvas operation skills. `Edit Elements` now has deterministic smoke coverage for segmentation artifacts, completed background normalization, layer stack/group metadata, and missing-segmentation failures, plus browser-level visual smoke coverage for locked layer-group rendering and toolbar behavior. Broader visual QA is still useful because generated mask quality can vary.
 
 ## Improvement Space
 
 - Add a real infinite-canvas engine such as tldraw once the Codex integration contract is stable.
-- Add browser-based visual regression checks against a reference screenshot set.
+- Expand the reference screenshot set to cover more interaction states and Lovart-inspired details.
 - Add a Codex lifecycle hook for image outputs so auto-collection can become event-specific instead of watcher-backed scanning.
 - Add pixel-diff or annotation overlays for grouped canvas outputs.

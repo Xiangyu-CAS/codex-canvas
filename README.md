@@ -117,6 +117,16 @@ node ./bin/agent-canvas.mjs prompts "product" --project . --json
 node ./bin/agent-canvas.mjs versions "product" --project . --group-by sourceObjectId --json
 ```
 
+运行验证：
+
+```bash
+npm test
+npm run smoke:visual
+npm run visual:regression
+```
+
+`visual:regression` 会把固定桌面/移动端画布截图与 `scripts/reference-screenshots/` 中的基线 PNG 比较；需要刷新基线时运行 `npm run visual:regression -- --update`。
+
 ## Codex 插件安装
 
 本地开发时可以把当前仓库暴露给 Codex personal marketplace：

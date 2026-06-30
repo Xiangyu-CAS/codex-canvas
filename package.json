@@ -31,6 +31,7 @@
     "validate": "node ./bin/agent-canvas.mjs status --json",
     "smoke": "node ./scripts/smoke.mjs",
     "smoke:visual": "node ./scripts/visual-smoke.mjs",
+    "visual:regression": "node ./scripts/visual-regression.mjs",
     "test": "npm run smoke"
   },
   "keywords": [

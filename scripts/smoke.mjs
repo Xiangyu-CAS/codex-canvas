@@ -503,6 +503,14 @@ async function testAutoCollectorWatermark() {
     const stateResponse = await fetch(`${base}api/state${search}`);
     const state = await stateResponse.json();
     assertEqual(state.objects.length, 1, "auto collector should advance its watermark after a successful scan");
+
+    const baselineDir = path.join(projectDir, "scripts", "reference-screenshots");
+    await fs.mkdir(baselineDir, { recursive: true });
+    await fs.writeFile(path.join(baselineDir, "baseline.png"), Buffer.from(pngOne, "base64"));
+    await delay(450);
+    const baselineStateResponse = await fetch(`${base}api/state${search}`);
+    const baselineState = await baselineStateResponse.json();
+    assertEqual(baselineState.objects.length, 1, "auto collector should ignore visual regression reference screenshots");
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
@@ -616,6 +624,11 @@ async function testPackageOptionalDependencyScripts() {
     packageJson.scripts?.["doctor:deps"],
     "node ./bin/agent-canvas.mjs doctor-deps --json",
     "package.json should expose a non-installing optional dependency doctor script"
+  );
+  assertEqual(
+    packageJson.scripts?.["visual:regression"],
+    "node ./scripts/visual-regression.mjs",
+    "package.json should expose reference screenshot regression checks"
   );
 }
 
