@@ -7,7 +7,7 @@ import { sendImageToBoundChat } from "../src/codex-chat.mjs";
 import { collectRecentImages } from "../src/collector.mjs";
 import { placeImportedElementLayersForTest } from "../src/jobs.mjs";
 import { checkImageProcessingDepsAvailable } from "../src/ocr-setup.mjs";
-import { assetsDirFor } from "../src/paths.mjs";
+import { assetsDirFor, statePathFor } from "../src/paths.mjs";
 import { createServer as createAgentCanvasServer } from "../src/server.mjs";
 import { addImage, addObject, deleteObjects, promptHistory, readState, searchObjects, transformState, updateObject, updateSelection, updateViewport, versionGroups } from "../src/store.mjs";
 
@@ -127,6 +127,18 @@ async function testViewportSanitization() {
   assertEqual(maxZoom.zoom, 2.2, "updateViewport should clamp zoom to the frontend maximum");
   const unchanged = await updateViewport(projectDir, { zoom: "bad" });
   assertEqual(unchanged.zoom, 2.2, "updateViewport should ignore non-numeric zoom values");
+
+  const legacyProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-legacy-viewport-"));
+  await fs.mkdir(path.dirname(statePathFor(legacyProjectDir)), { recursive: true });
+  const legacyBaseState = await readState(legacyProjectDir);
+  await fs.writeFile(statePathFor(legacyProjectDir), `${JSON.stringify({
+    ...legacyBaseState,
+    viewport: { x: "bad", y: 24, zoom: 0 }
+  }, null, 2)}\n`);
+  const legacyState = await readState(legacyProjectDir);
+  assertEqual(legacyState.viewport.x, 0, "readState should sanitize legacy viewport x values");
+  assertEqual(legacyState.viewport.y, 24, "readState should preserve finite legacy viewport y values");
+  assertEqual(legacyState.viewport.zoom, 0.12, "readState should clamp legacy viewport zoom values");
 }
 
 async function testHttpObjectPatchSanitization() {

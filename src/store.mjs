@@ -353,22 +353,35 @@ export async function transformState(projectDir, options = {}, transformer) {
 async function readStateFile(projectDir, options = {}) {
   const canvasId = canvasIdFrom(options);
   const raw = await fs.readFile(statePathFor(projectDir, canvasId), "utf8");
-  return { ...defaultState, ...JSON.parse(raw) };
+  return normalizeState(JSON.parse(raw));
 }
 
 async function writeStateFile(projectDir, state, options = {}) {
   const canvasId = canvasIdFrom(options);
   const statePath = statePathFor(projectDir, canvasId);
   await fs.mkdir(path.dirname(statePath), { recursive: true });
-  const next = {
-    ...defaultState,
-    ...state,
-    updatedAt: new Date().toISOString()
-  };
+  const next = normalizeState({ ...state, updatedAt: new Date().toISOString() });
   const tempPath = `${statePath}.${process.pid}.${Date.now()}.${crypto.randomBytes(3).toString("hex")}.tmp`;
   await fs.writeFile(tempPath, `${JSON.stringify(next, null, 2)}\n`);
   await fs.rename(tempPath, statePath);
   return next;
+}
+
+function normalizeState(state = {}) {
+  return {
+    ...defaultState,
+    ...state,
+    viewport: normalizeViewport(state.viewport)
+  };
+}
+
+function normalizeViewport(viewport = {}) {
+  const source = viewport && typeof viewport === "object" ? viewport : {};
+  return {
+    x: Number.isFinite(source.x) ? source.x : defaultState.viewport.x,
+    y: Number.isFinite(source.y) ? source.y : defaultState.viewport.y,
+    zoom: Number.isFinite(source.zoom) ? clampViewportZoom(source.zoom) : defaultState.viewport.zoom
+  };
 }
 
 async function mutateState(projectDir, options = {}, mutator) {
