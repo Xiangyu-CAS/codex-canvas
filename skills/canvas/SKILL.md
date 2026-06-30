@@ -12,9 +12,15 @@ Use this skill to open the local Agent-Canvas board and keep generated images co
 1. Start or reuse the local canvas server for the active project:
    - Prefer the `agent-canvas.open_canvas` MCP tool when available.
    - Pass the active workspace path as `projectDir`.
+   - Pass the current Codex thread id as `threadId` whenever it is available; Agent-Canvas uses this explicit binding for canvas-to-chat image sends and to keep one canvas per Codex thread.
    - If the MCP tool is not available, run `node <plugin-root>/bin/agent-canvas.mjs open --project <workspace>`.
-2. Open the returned URL in the Codex in-app browser when Browser is available.
-3. When the user asks for image generation or image editing while this skill is active:
+2. Fast open behavior:
+   - Prefer reusing the existing runtime URL in `<workspace>/canvas/.agent-canvas-runtime.json` when it responds.
+   - Prefer `agent-canvas open --project <workspace>` over `agent-canvas start`; `open` already reuses the saved runtime or starts a detached server only when needed.
+   - If the Codex in-app browser already has a tab on that exact Agent-Canvas URL, reuse it and make it visible. Do not open a duplicate tab or reload the page unless the user asks.
+   - Do not repeat Browser plugin bootstrap/path discovery when a browser tab is already connected and usable in this turn; reuse the existing tab binding.
+3. Open the returned URL in the Codex in-app browser when Browser is available.
+4. When the user asks for image generation or image editing while this skill is active:
    - Use Codex `imagegen` for the image work.
    - Save or identify the generated image file path. Prefer saving generated images under the active workspace so Agent-Canvas auto-collection can find them.
    - Immediately add the result to the canvas with `agent-canvas.add_image`, or by running:
@@ -24,10 +30,11 @@ Use this skill to open the local Agent-Canvas board and keep generated images co
    - The collector scans both the active workspace and Codex's default generated image directory at `~/.codex/generated_images`.
    - Session-generated images are placed in a vertical column by generation batch. Multiple images from the same generation batch are aligned in one horizontal row.
    - Canvas-derived images, when collected with a `sourceObjectId`, are placed in a horizontal row to the right of the source image.
-4. `Quick Edit`, `Remove BG`, and `Edit Text` are implemented as background Agent-Canvas jobs. They create a canvas placeholder immediately, run Codex/ImageGen through the matching Agent-Canvas operation skill and bundled Codex App CLI, then replace the placeholder with the collected output.
-5. `Edit Text` is a two-step interaction: first run text recognition and show the formatted editable text list in the canvas UI; after the user changes one or more fields and clicks Run, call imagegen to produce the edited PNG.
+5. `Quick Edit`, `Remove BG`, `Edit Text`, and `Edit Elements` are implemented as background Agent-Canvas jobs. They create a canvas placeholder immediately, run Codex/ImageGen through the matching Agent-Canvas operation skill and bundled Codex App CLI, then replace the placeholder with the collected output.
+6. `Edit Text` is a two-step interaction: first run text recognition and show the formatted editable text list in the canvas UI; after the user changes one or more fields and clicks Run, call imagegen to produce the edited PNG.
    - Text recognition should try local RapidOCR first when available. If local OCR is unavailable, fails, or returns no text, fall back to Codex vision recognition.
-6. If the user asks for `Edit Elements`, explain briefly that the control exists but the underlying image operation is intentionally reserved for a later implementation.
+7. `Edit Elements` asks ImageGen for a low-detail instance segmentation map, then Agent-Canvas locally splits the source image into four-channel transparent PNG object/text layers plus a residual background. Agent-Canvas then runs a background-completion pass from the original image plus residual background, imports only the completed background and transparent object/text layers, and stacks them to the right of the source image so they reconstruct the original composition. Intermediate segmentation and raw completion images stay internal to the job and are not added to the canvas.
+8. Canvas-to-chat requires a bound Codex thread. Each bound thread uses a separate canvas scope under `canvas/threads/<canvasId>/`. The frontend sends a stable `send-to-chat` action to the backend; the backend refuses to send unless the project runtime has `chatThreadId`, then sends the selected local image to that thread with Codex app-server `thread/resume` + `turn/start` and a `localImage` input. Do not use desktop UI automation or clipboard paste as a fallback.
 
 ## Notes
 

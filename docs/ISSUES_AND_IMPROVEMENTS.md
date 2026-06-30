@@ -8,12 +8,12 @@
 - Image auto-collection now has two paths: the local canvas service automatically scans for image files created after each project is registered, and the skill still instructs Codex to import explicit `imagegen` output paths. This only works for images saved under the active project; images kept only as chat attachments or written outside the project still need explicit `add_image` or `collect_recent_images`.
 - The Lovart visual match is approximate. A reference screenshot was inspected and the current UI follows the broad shape: light canvas, bottom dock, and selected-image toolbar. Pixel-level spacing, iconography, transitions, and interaction details still need dedicated visual QA.
 - Lovart's page was not friendly to Chrome extension DOM automation in this run; reference inspection used a system screenshot after bringing Chrome to the foreground.
-- `Quick Edit`, `Remove BG`, and `Edit Text` are implemented as background jobs backed by dedicated Agent-Canvas operation skills. `Edit Elements` remains visible as a reserved product surface for a later implementation.
+- `Quick Edit`, `Remove BG`, `Edit Text`, and `Edit Elements` are implemented as background jobs backed by dedicated Agent-Canvas operation skills. `Edit Elements` still needs broader visual QA because segmentation quality depends on generated mask consistency and local layer splitting.
 
 ## Improvement Space
 
 - Add a deterministic plugin install/update script that registers the plugin in the personal marketplace.
-- Implement `Edit Elements` with local mask/selection export and an Agent-Canvas operation skill.
+- Harden `Edit Elements` with focused visual regression tests for segmentation masks, layer stacking, completed backgrounds, and grouped layer manipulation.
 - Add a real infinite-canvas engine such as tldraw once the Codex integration contract is stable.
 - Add browser-based visual regression checks against a reference screenshot set.
 - Replace the current polling auto-collector with a real file watcher or Codex lifecycle hook so image outputs are captured faster and with fewer false positives.

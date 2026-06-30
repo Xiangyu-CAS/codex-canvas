@@ -12,11 +12,12 @@ const editGap = 72;
 const batchWindowMs = 12_000;
 
 export async function collectRecentImages(projectDir, options = {}) {
+  const storeOptions = { canvasId: options.canvasId || null };
   const roots = normalizeRoots(projectDir, options.roots);
   const sinceMs = Number.isFinite(options.sinceMs) ? options.sinceMs : Date.now() - 2 * 60 * 60 * 1000;
   const limit = Number.isFinite(options.limit) ? options.limit : 20;
   const excludePaths = new Set((options.excludePaths || []).map((item) => path.resolve(item)));
-  const state = await readState(projectDir);
+  const state = await readState(projectDir, storeOptions);
   const knownSources = new Set(
     state.objects
       .map((object) => object.sourcePath)
@@ -54,7 +55,7 @@ export async function collectRecentImages(projectDir, options = {}) {
       batchId: candidate.batchId,
       layoutMode: candidate.layoutMode,
       sourceObjectId: options.sourceObjectId || null
-    });
+    }, storeOptions);
     imported.push(object);
   }
 

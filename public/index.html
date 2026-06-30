@@ -15,7 +15,9 @@
             <span class="project-mark"></span>
             <input id="projectTitle" class="project-title-input" value="Untitled" aria-label="Project title" spellcheck="false" />
             <button title="Project options" aria-label="Project options">
-              <span class="icon icon-chevron" aria-hidden="true"></span>
+              <svg class="header-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m6 9 6 6 6-6"></path>
+              </svg>
             </button>
           </header>
           <div id="projectMenu" class="project-menu" hidden></div>
@@ -95,6 +97,23 @@
                 </svg>
                 <span>Edit Elements</span>
               </button>
+              <button data-action="reset-layer-group" data-tooltip="Reset group" title="Reset group" aria-label="Reset group" hidden>
+                <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M3.05 11a9 9 0 1 1 2.64 6.36" />
+                  <path d="M3 4v7h7" />
+                  <path d="M8 11a4 4 0 1 0 1.17-2.83" />
+                </svg>
+                <span>Reset group</span>
+              </button>
+              <button data-action="group-layer-group" data-tooltip="Group" title="Group" aria-label="Group" hidden>
+                <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M8 7V5a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-2" />
+                  <rect x="5" y="10" width="9" height="9" rx="2" />
+                  <path d="M5 14H3a2 2 0 0 1-2-2V8" />
+                  <path d="M14 19h2a2 2 0 0 0 2-2v-2" />
+                </svg>
+                <span>Group</span>
+              </button>
               <button data-action="edit-text" data-tooltip="Edit Text" title="Edit Text" aria-label="Edit Text">
                 <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M12 4v16" />
@@ -102,6 +121,12 @@
                   <path d="M9 20h6" />
                 </svg>
                 <span>Edit Text</span>
+              </button>
+              <button class="icon-only" data-action="send-to-chat" data-tooltip="Send to chat" title="Send to chat" aria-label="Send to chat">
+                <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M14.536 21.686a.5.5 0 0 0 .937 -.024l6.5 -19a.496 .496 0 0 0 -.635 -.635l-19 6.5a.5 .5 0 0 0 -.024 .937l7.93 3.18a2 2 0 0 1 1.112 1.11z" />
+                  <path d="m21.854 2.147 -10.94 10.939" />
+                </svg>
               </button>
               <button class="icon-only" data-action="download" data-tooltip="Download" title="Download" aria-label="Download">
                 <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -127,17 +152,12 @@
           </div>
 
           <div class="canvas-controls" aria-label="Canvas view controls">
-            <button title="Reset view" aria-label="Reset view">
-              <span class="icon icon-reset" aria-hidden="true"></span>
-            </button>
-            <button title="Layers" aria-label="Layers">
-              <span class="icon icon-layers" aria-hidden="true"></span>
-            </button>
-            <button title="Search" aria-label="Search">
-              <span class="icon icon-search" aria-hidden="true"></span>
-            </button>
-            <button title="Export" aria-label="Export">
-              <span class="icon icon-download" aria-hidden="true"></span>
+            <button title="Reset view" aria-label="Reset view" data-tooltip="Reset view" data-view-action="reset">
+              <svg class="control-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3.06 13a9 9 0 1 0 .49 -4.087"></path>
+                <path d="M3 4.001v5h5"></path>
+                <path d="M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0"></path>
+              </svg>
             </button>
             <span id="zoomLabel">5%</span>
           </div>

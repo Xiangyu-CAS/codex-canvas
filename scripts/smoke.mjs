@@ -1,0 +1,276 @@
+import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
+import { sendImageToBoundChat } from "../src/codex-chat.mjs";
+import { createServer } from "../src/server.mjs";
+import { addObject, deleteObjects, readState, transformState, updateObject } from "../src/store.mjs";
+
+const execFileAsync = promisify(execFile);
+
+const pngOne = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+async function main() {
+  const results = [];
+  for (const [name, test] of [
+    ["store concurrency", testStoreConcurrency],
+    ["chat binding alias", testChatBindingAlias],
+    ["chat websocket fallback", testChatWebSocketFallback],
+    ["chat turn action contract", testChatTurnActionContract],
+    ["edit elements scripts", testEditElementsScripts]
+  ]) {
+    await test();
+    results.push(name);
+  }
+  console.log(JSON.stringify({ ok: true, tests: results }, null, 2));
+}
+
+async function testChatTurnActionContract() {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-chat-turn-"));
+  const fakeCodex = path.join(tmp, process.platform === "win32" ? "codex.cmd" : "codex");
+  await fs.writeFile(fakeCodex, fakeCodexAppServerScript(), { mode: 0o755 });
+
+  const previousCli = process.env.AGENT_CANVAS_CODEX_CLI;
+  process.env.AGENT_CANVAS_CODEX_CLI = fakeCodex;
+  const { server, url } = await createServer({
+    projectDir: tmp,
+    port: 0,
+    autoCollect: false,
+    chatThreadId: "thread-test"
+  });
+  const base = url.replace(/\?.*/, "");
+  const search = new URL(url).search;
+  try {
+    const image = await postJson(`${base}api/images${search}`, {
+      dataUrl: `data:image/png;base64,${pngOne}`,
+      name: "chat.png"
+    });
+    assertEqual(image.status, 201, "test image should be added before chat turn");
+
+    const missingAction = await postJson(`${base}api/chat-turn${search}`, {
+      objectId: image.body.id
+    });
+    assertEqual(missingAction.status, 400, "chat turn should require stable send-to-chat action");
+
+    const sent = await postJson(`${base}api/chat-turn${search}`, {
+      action: "send-to-chat",
+      objectId: image.body.id
+    });
+    assertEqual(sent.status, 200, "chat turn with stable action should succeed");
+    assertEqual(sent.body.status, "completed", "chat turn should complete through fake app-server");
+  } finally {
+    process.env.AGENT_CANVAS_CODEX_CLI = previousCli;
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+async function testStoreConcurrency() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-store-"));
+  const created = await Promise.all(Array.from({ length: 20 }, (_, index) => (
+    addObject(projectDir, { type: "text", text: `item-${index}`, x: index, y: index })
+  )));
+  let state = await readState(projectDir);
+  assertEqual(state.objects.length, 20, "concurrent addObject should not lose objects");
+
+  await Promise.all([
+    ...created.map((object, index) => updateObject(projectDir, object.id, { x: 100 + index })),
+    transformState(projectDir, {}, (current) => ({ ...current, title: "concurrent" }))
+  ]);
+  state = await readState(projectDir);
+  assertEqual(state.title, "concurrent", "transformState should preserve metadata");
+  assertEqual(new Set(state.objects.map((object) => object.x)).size, 20, "concurrent updateObject should not lose updates");
+
+  await Promise.all([
+    deleteObjects(projectDir, created.slice(0, 10).map((object) => object.id)),
+    deleteObjects(projectDir, created.slice(10).map((object) => object.id))
+  ]);
+  state = await readState(projectDir);
+  assertEqual(state.objects.length, 0, "concurrent deleteObjects should remove every object");
+}
+
+async function testChatBindingAlias() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-rebind-"));
+  const { server, url } = await createServer({ projectDir, port: 0, autoCollect: false });
+  const base = url.replace(/\?.*/, "");
+  const search = new URL(url).search;
+  try {
+    const first = await postJson(`${base}api/chat-binding${search}`, { threadId: "thread-one" });
+    const second = await postJson(`${base}api/chat-binding${search}`, { threadId: "thread-two" });
+    assertEqual(first.status, 200, "first chat binding should succeed");
+    assertEqual(second.status, 200, "second chat binding through old project id should succeed");
+    const stateResponse = await fetch(`${base}api/state${search}`);
+    assertEqual(stateResponse.status, 200, "old project id alias should resolve after repeated binding");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+async function testChatWebSocketFallback() {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-chat-"));
+  const fakeCodex = path.join(tmp, process.platform === "win32" ? "codex.cmd" : "codex");
+  const imagePath = path.join(tmp, "image.png");
+  await fs.writeFile(imagePath, Buffer.from(pngOne, "base64"));
+  await fs.writeFile(fakeCodex, fakeCodexAppServerScript(), { mode: 0o755 });
+
+  const previousCli = process.env.AGENT_CANVAS_CODEX_CLI;
+  const previousWebSocket = globalThis.WebSocket;
+  process.env.AGENT_CANVAS_CODEX_CLI = fakeCodex;
+  globalThis.WebSocket = undefined;
+  try {
+    const result = await sendImageToBoundChat({
+      projectDir: tmp,
+      threadId: "thread-test",
+      imagePath,
+      prompt: "hello"
+    });
+    assertEqual(result.status, "completed", "fallback WebSocket chat turn should complete");
+  } finally {
+    process.env.AGENT_CANVAS_CODEX_CLI = previousCli;
+    globalThis.WebSocket = previousWebSocket;
+  }
+}
+
+async function testEditElementsScripts() {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-elements-"));
+  const makeImages = path.join(tmp, "make-images.py");
+  await fs.writeFile(makeImages, [
+    "from pathlib import Path",
+    "from PIL import Image, ImageDraw",
+    "import sys",
+    "root = Path(sys.argv[1])",
+    "source = Image.new('RGBA', (32, 32), (255, 255, 255, 255))",
+    "draw = ImageDraw.Draw(source)",
+    "draw.rectangle((8, 8, 18, 18), fill=(255, 0, 0, 255))",
+    "source.save(root / 'source.png')",
+    "seg = Image.new('RGB', (32, 32), (0, 0, 0))",
+    "draw = ImageDraw.Draw(seg)",
+    "draw.rectangle((8, 8, 18, 18), fill=(255, 0, 102))",
+    "seg.save(root / 'seg.png')",
+    "completed = Image.new('RGBA', (32, 32), (240, 240, 240, 255))",
+    "completed.save(root / 'completed.png')"
+  ].join("\n"));
+
+  await runPython([makeImages, tmp]);
+  await runPython([
+    path.join(process.cwd(), "scripts", "split_elements.py"),
+    "--source", path.join(tmp, "source.png"),
+    "--segmentation", path.join(tmp, "seg.png"),
+    "--out-dir", path.join(tmp, "layers"),
+    "--max-layers", "8",
+    "--palette-size", "8",
+    "--force"
+  ]);
+  await runPython([
+    path.join(process.cwd(), "scripts", "prepare_completed_background.py"),
+    "--source", path.join(tmp, "source.png"),
+    "--completed", path.join(tmp, "completed.png"),
+    "--out", path.join(tmp, "background.png"),
+    "--force"
+  ]);
+
+  const manifest = JSON.parse(await fs.readFile(path.join(tmp, "layers", "elements-manifest.json"), "utf8"));
+  assertEqual(manifest.layers.length, 2, "split_elements should export foreground and background layers");
+  await fs.access(path.join(tmp, "background.png"));
+}
+
+async function postJson(url, body) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  return { status: response.status, body: await response.json().catch(() => ({})) };
+}
+
+async function runPython(args) {
+  const candidates = process.platform === "win32"
+    ? [["py", ["-3", ...args]], ["python", args], ["python3", args]]
+    : [["python3", args], ["python", args]];
+  const errors = [];
+  for (const [command, commandArgs] of candidates) {
+    try {
+      await execFileAsync(command, commandArgs, { maxBuffer: 1024 * 1024, windowsHide: true });
+      return;
+    } catch (error) {
+      errors.push(`${command}: ${error.message}`);
+    }
+  }
+  throw new Error(`Python smoke step failed. ${errors.join(" | ")}`);
+}
+
+function fakeCodexAppServerScript() {
+  return `#!/usr/bin/env node
+const crypto = require("crypto");
+const net = require("net");
+const listen = process.argv[process.argv.indexOf("--listen") + 1];
+const port = Number(new URL(listen).port);
+function encode(text) {
+  const payload = Buffer.from(text, "utf8");
+  if (payload.length < 126) return Buffer.concat([Buffer.from([0x81, payload.length]), payload]);
+  return Buffer.concat([Buffer.from([0x81, 126, payload.length >> 8, payload.length & 255]), payload]);
+}
+function decode(buffer) {
+  if (buffer.length < 2) return null;
+  const opcode = buffer[0] & 0x0f;
+  let length = buffer[1] & 0x7f;
+  let offset = 2;
+  if (length === 126) {
+    if (buffer.length < 4) return null;
+    length = buffer.readUInt16BE(2);
+    offset = 4;
+  }
+  const masked = Boolean(buffer[1] & 0x80);
+  const mask = masked ? buffer.slice(offset, offset + 4) : null;
+  offset += masked ? 4 : 0;
+  if (buffer.length < offset + length) return null;
+  const payload = Buffer.from(buffer.slice(offset, offset + length));
+  if (mask) for (let index = 0; index < payload.length; index += 1) payload[index] ^= mask[index % 4];
+  return { opcode, text: payload.toString("utf8"), bytesRead: offset + length };
+}
+net.createServer((socket) => {
+  let handshaken = false;
+  let buffer = Buffer.alloc(0);
+  socket.on("data", (chunk) => {
+    buffer = Buffer.concat([buffer, chunk]);
+    if (!handshaken) {
+      const end = buffer.indexOf("\\r\\n\\r\\n");
+      if (end < 0) return;
+      const header = buffer.slice(0, end).toString("utf8");
+      const key = /sec-websocket-key:\\s*(.+)/i.exec(header)[1].trim();
+      const accept = crypto.createHash("sha1").update(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
+      socket.write(["HTTP/1.1 101 Switching Protocols", "Upgrade: websocket", "Connection: Upgrade", "Sec-WebSocket-Accept: " + accept, "", ""].join("\\r\\n"));
+      buffer = buffer.slice(end + 4);
+      handshaken = true;
+    }
+    for (;;) {
+      const frame = decode(buffer);
+      if (!frame) return;
+      buffer = buffer.slice(frame.bytesRead);
+      if (frame.opcode !== 1) {
+        if (frame.opcode === 8) socket.end();
+        continue;
+      }
+      const message = JSON.parse(frame.text);
+      if (message.method === "turn/start") {
+        socket.write(encode(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { turn: { id: "turn-1" } } })));
+        socket.write(encode(JSON.stringify({ jsonrpc: "2.0", method: "turn/completed", params: { threadId: message.params.threadId, turn: { id: "turn-1", status: "completed", durationMs: 7 } } })));
+      } else {
+        socket.write(encode(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: {} })));
+      }
+    }
+  });
+}).listen(port, "127.0.0.1");
+`;
+}
+
+function assertEqual(actual, expected, message) {
+  if (actual !== expected) {
+    throw new Error(`${message}. Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}.`);
+  }
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

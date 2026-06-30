@@ -36,8 +36,9 @@ Agent-Canvas 可以按四个模块设计：
 - `agent-canvas collect`：扫描项目内最近生成的图片并导入画布，作为 `imagegen` 输出路径不明确时的兜底收集器。
 - MCP 工具：提供 `open_canvas`、`add_image`、`collect_recent_images`、`canvas_status`，方便 Codex 在会话中打开画布和收录图片。
 - 画布 UI：提供 Lovart 风格的浅色无限画布、底部浮动工具栏、图片选择态和浮动编辑工具栏。
-- 单端口多画布页：默认统一使用 `127.0.0.1:43217`。再次在新 Codex 会话或新项目中打开 `/canvas` 时，现有服务会注册新的项目画布，并返回带 `?project=<id>` 的 URL；左上角项目菜单可以在已注册画布页之间切换。
-- AI 图片操作：`Quick Edit`、`Remove BG`、`Edit Text` 通过稳定 action id 创建后台 job，由后端映射到对应 Agent-Canvas operation skill 和 Codex/ImageGen 执行，再把结果回填到源图右侧。`Edit Elements` 控件保留给后续实现。
+- 单端口多画布页：默认统一使用 `127.0.0.1:43217`。再次在新 Codex 会话或新项目中打开 `/canvas` 时，现有服务会注册新的项目画布，并返回带 `?project=<id>` 的 URL；同一 workspace 会按 Codex thread 隔离为不同 canvas，左上角项目菜单可以在已注册画布页之间切换。
+- AI 图片操作：`Quick Edit`、`Remove BG`、`Edit Text`、`Edit Elements` 通过稳定 action id 创建后台 job，由后端映射到对应 Agent-Canvas operation skill 和 Codex/ImageGen 执行，再把结果回填到源图右侧。`Edit Elements` 会生成实例分割图，本地拆出透明对象/文字图层和补全背景，并作为锁定图层组放回画布。
+- Canvas-to-chat：已 smoke test 跑通 Codex app-server `turn/start` 携带 `localImage` 的路径；发送必须绑定明确的 Codex thread，每个 thread 使用独立 canvas，可通过 `--thread-id`、MCP `open_canvas.threadId` 或 `/api/chat-binding` 写入；详见 [`docs/CANVAS_TO_CHAT.md`](docs/CANVAS_TO_CHAT.md)。
 
 基础运行：
 
@@ -51,17 +52,26 @@ node ./bin/agent-canvas.mjs open --project .
 npm install
 ```
 
-`npm install` 会在 `postinstall` 中自动尝试安装 `rapidocr_onnxruntime`，用于 `Edit Text` 的本地快速文字识别。安装失败不会阻塞 Agent-Canvas；此时会回退到 Codex 视觉识别。也可以手动运行：
+`npm install` 会在 `postinstall` 中自动尝试安装 Python 可选依赖：`rapidocr_onnxruntime` 用于 `Edit Text` 的本地快速文字识别，`Pillow` 和 `numpy` 用于 `Edit Elements` 的本地拆层与背景处理。安装失败不会阻塞 Agent-Canvas；OCR 不可用时会回退到 Codex 视觉识别，拆层依赖不可用时 `Edit Elements` 会在本地处理阶段报出明确错误。也可以手动运行：
 
 ```bash
+npm run setup:deps
 npm run setup:ocr
+npm run setup:image-deps
 npm run doctor:ocr
+npm run doctor:image-deps
 ```
 
 如果需要跳过 OCR 安装，可以设置：
 
 ```bash
 AGENT_CANVAS_SKIP_OCR_INSTALL=1 npm install
+```
+
+如果只想跳过 `Edit Elements` 的本地图像处理依赖安装，可以设置：
+
+```bash
+AGENT_CANVAS_SKIP_IMAGE_DEPS_INSTALL=1 npm install
 ```
 
 导入图片：
@@ -111,10 +121,11 @@ ln -sfn /Users/zhuxiangyu/workspace/agent-canvas ~/plugins/agent-canvas
 ```text
 canvas/
   agent-canvas.json
+  threads/
   assets/
   jobs/
 ```
 
-`agent-canvas.json` 保存画布对象和选区状态，`assets/` 保存导入的图片文件，`jobs/` 保存后台 AI 操作的日志、中间产物和输出。
+`agent-canvas.json` 保存默认画布对象和选区状态；绑定 Codex thread 后，每个 thread 的画布状态保存在 `canvas/threads/<canvasId>/agent-canvas.json`。`assets/` 保存导入的图片文件，`jobs/` 保存后台 AI 操作的日志、中间产物和输出。
 
 服务启动后会自动扫描项目内新产生的图片文件，并导入画布。自动扫描会忽略 `canvas/`、`node_modules/`、`.git/` 等目录；如果不希望自动收集，可以使用 `--no-auto-collect`。

@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const defaultPackageName = "rapidocr_onnxruntime";
+const imageProcessingPackages = ["Pillow", "numpy"];
 
 export async function checkRapidOcrAvailable() {
   const script = `
@@ -113,6 +114,134 @@ export async function installRapidOcr({ optional = false } = {}) {
   }
 
   throw new Error(message);
+}
+
+export async function checkImageProcessingDepsAvailable() {
+  const script = `
+import json
+import sys
+
+result = {"available": True, "missing": [], "versions": {}}
+for module_name, package_name in (("PIL", "Pillow"), ("numpy", "numpy")):
+    try:
+        module = __import__(module_name)
+        result["versions"][package_name] = getattr(module, "__version__", None)
+    except Exception:
+        result["available"] = False
+        result["missing"].append(package_name)
+print(json.dumps(result))
+`;
+
+  const errors = [];
+  for (const [command, args] of pythonCandidates(["-c", script])) {
+    try {
+      const { stdout } = await execFileAsync(command, args, {
+        windowsHide: true,
+        timeout: 10_000,
+        maxBuffer: 1024 * 1024
+      });
+      const result = JSON.parse(stdout.trim() || "{}");
+      return {
+        available: result.available === true,
+        missing: Array.isArray(result.missing) ? result.missing : [],
+        versions: result.versions || {},
+        pythonCommand: command,
+        pythonArgs: args.slice(0, args.length - 2)
+      };
+    } catch (error) {
+      errors.push(`${command}: ${error.message}`);
+    }
+  }
+
+  return {
+    available: false,
+    missing: imageProcessingPackages,
+    versions: {},
+    pythonCommand: null,
+    pythonArgs: [],
+    error: errors.join(" | ")
+  };
+}
+
+export async function installImageProcessingDeps({ optional = false } = {}) {
+  if (process.env.AGENT_CANVAS_SKIP_IMAGE_DEPS_INSTALL === "1") {
+    return {
+      installed: false,
+      skipped: true,
+      available: false,
+      message: "Skipped because AGENT_CANVAS_SKIP_IMAGE_DEPS_INSTALL=1."
+    };
+  }
+
+  const existing = await checkImageProcessingDepsAvailable();
+  if (existing.available) {
+    return {
+      installed: false,
+      skipped: true,
+      available: true,
+      versions: existing.versions,
+      pythonCommand: existing.pythonCommand,
+      message: "Pillow and numpy are already installed."
+    };
+  }
+
+  const packages = String(process.env.AGENT_CANVAS_IMAGE_DEPS_PACKAGES || imageProcessingPackages.join(" "))
+    .split(/\s+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const errors = [];
+  for (const [command, baseArgs] of pythonCandidates([])) {
+    const args = [...baseArgs, "-m", "pip", "install", "--user", ...packages];
+    try {
+      await execFileAsync(command, args, {
+        windowsHide: true,
+        timeout: 180_000,
+        maxBuffer: 1024 * 1024 * 12
+      });
+      const installed = await checkImageProcessingDepsAvailable();
+      if (installed.available) {
+        return {
+          installed: true,
+          skipped: false,
+          available: true,
+          versions: installed.versions,
+          pythonCommand: installed.pythonCommand,
+          message: "Pillow and numpy installed successfully."
+        };
+      }
+      errors.push(`${command}: pip completed but image processing dependencies were still unavailable`);
+    } catch (error) {
+      errors.push(`${command}: ${error.message}`);
+    }
+  }
+
+  const message = `Image processing dependency install failed: ${errors.join(" | ")}`;
+  if (optional) {
+    return {
+      installed: false,
+      skipped: false,
+      available: false,
+      message
+    };
+  }
+
+  throw new Error(message);
+}
+
+export async function installOptionalPythonDeps() {
+  const ocr = await installRapidOcr({ optional: true });
+  const imageProcessing = await installImageProcessingDeps({ optional: true });
+  return {
+    installed: Boolean(ocr.installed || imageProcessing.installed),
+    skipped: Boolean(ocr.skipped && imageProcessing.skipped),
+    available: Boolean(ocr.available && imageProcessing.available),
+    ocr,
+    imageProcessing,
+    message: [
+      `OCR: ${ocr.message}`,
+      `Image deps: ${imageProcessing.message}`
+    ].join("\n")
+  };
 }
 
 function pythonCandidates(args) {

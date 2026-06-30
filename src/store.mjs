@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
-import { assetsDirFor, dataDirFor, statePathFor } from "./paths.mjs";
+import { assetsDirFor, statePathFor } from "./paths.mjs";
 
 const defaultState = {
   version: 1,
@@ -15,74 +15,158 @@ const defaultState = {
 const defaultImageSize = { width: 360, height: 360 };
 const maxImageDisplaySize = 420;
 const derivedGap = 72;
+const stateLocks = new Map();
 
-export async function ensureProjectStore(projectDir) {
-  await fs.mkdir(assetsDirFor(projectDir), { recursive: true });
-  const statePath = statePathFor(projectDir);
-  try {
-    await fs.access(statePath);
-  } catch {
-    await writeState(projectDir, defaultState);
+function canvasIdFrom(options = {}) {
+  return typeof options.canvasId === "string" && options.canvasId.trim() ? options.canvasId.trim() : null;
+}
+
+export async function ensureProjectStore(projectDir, options = {}) {
+  const canvasId = canvasIdFrom(options);
+  if (canvasId) await migrateLegacyCanvasIfNeeded(projectDir, canvasId);
+  await fs.mkdir(assetsDirFor(projectDir, canvasId), { recursive: true });
+  const statePath = statePathFor(projectDir, canvasId);
+  await withStateLock(projectDir, options, async () => {
+    try {
+      await fs.access(statePath);
+    } catch {
+      await writeStateFile(projectDir, defaultState, options);
+    }
+  });
+}
+
+async function migrateLegacyCanvasIfNeeded(projectDir, canvasId) {
+  const targetStatePath = statePathFor(projectDir, canvasId);
+  if (await fileExists(targetStatePath)) return;
+
+  const legacyStatePath = statePathFor(projectDir);
+  if (!await fileExists(legacyStatePath)) return;
+
+  await fs.mkdir(path.dirname(targetStatePath), { recursive: true });
+  await fs.copyFile(legacyStatePath, targetStatePath);
+
+  const legacyAssetsDir = assetsDirFor(projectDir);
+  if (await fileExists(legacyAssetsDir)) {
+    await fs.cp(legacyAssetsDir, assetsDirFor(projectDir, canvasId), {
+      recursive: true,
+      force: false,
+      errorOnExist: false
+    });
   }
 }
 
-export async function readState(projectDir) {
-  await ensureProjectStore(projectDir);
-  const raw = await fs.readFile(statePathFor(projectDir), "utf8");
+async function fileExists(filePath) {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function readState(projectDir, options = {}) {
+  const canvasId = canvasIdFrom(options);
+  await ensureProjectStore(projectDir, options);
+  return readStateFile(projectDir, { canvasId });
+}
+
+export async function writeState(projectDir, state, options = {}) {
+  return withStateLock(projectDir, options, () => writeStateFile(projectDir, state, options));
+}
+
+export async function transformState(projectDir, options = {}, transformer) {
+  return mutateState(projectDir, options, transformer);
+}
+
+async function readStateFile(projectDir, options = {}) {
+  const canvasId = canvasIdFrom(options);
+  const raw = await fs.readFile(statePathFor(projectDir, canvasId), "utf8");
   return { ...defaultState, ...JSON.parse(raw) };
 }
 
-export async function writeState(projectDir, state) {
-  await fs.mkdir(dataDirFor(projectDir), { recursive: true });
+async function writeStateFile(projectDir, state, options = {}) {
+  const canvasId = canvasIdFrom(options);
+  const statePath = statePathFor(projectDir, canvasId);
+  await fs.mkdir(path.dirname(statePath), { recursive: true });
   const next = {
     ...defaultState,
     ...state,
     updatedAt: new Date().toISOString()
   };
-  await fs.writeFile(statePathFor(projectDir), `${JSON.stringify(next, null, 2)}\n`);
+  const tempPath = `${statePath}.${process.pid}.${Date.now()}.${crypto.randomBytes(3).toString("hex")}.tmp`;
+  await fs.writeFile(tempPath, `${JSON.stringify(next, null, 2)}\n`);
+  await fs.rename(tempPath, statePath);
   return next;
 }
 
-export async function addImage(projectDir, input) {
-  await ensureProjectStore(projectDir);
-
-  const asset = await persistImage(projectDir, input);
-  const state = await readState(projectDir);
-  const count = state.objects.length;
-  const displaySize = imageDisplaySize(asset, input);
-  const object = {
-    id: `img_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
-    type: "image",
-    name: input.name || asset.name,
-    src: asset.src,
-    assetPath: asset.assetPath,
-    sourcePath: asset.sourcePath || null,
-    prompt: input.prompt || "",
-    sourceObjectId: input.sourceObjectId || null,
-    batchId: input.batchId || null,
-    layoutMode: input.layoutMode || "manual",
-    x: Number.isFinite(input.x) ? input.x : 120 + (count % 5) * 56,
-    y: Number.isFinite(input.y) ? input.y : 120 + (count % 7) * 44,
-    width: displaySize.width,
-    height: displaySize.height,
-    naturalWidth: asset.width || null,
-    naturalHeight: asset.height || null,
-    hasAlpha: Boolean(asset.hasAlpha),
-    createdAt: new Date().toISOString()
-  };
-
-  const next = {
-    ...state,
-    objects: [...state.objects, object],
-    selection: object.id
-  };
-  await writeState(projectDir, next);
-  return object;
+async function mutateState(projectDir, options = {}, mutator) {
+  await ensureProjectStore(projectDir, options);
+  return withStateLock(projectDir, options, async () => {
+    const state = await readStateFile(projectDir, options);
+    const result = await mutator(state);
+    if (result?.write === false) return result.value;
+    const nextState = result?.state || result;
+    const written = await writeStateFile(projectDir, nextState, options);
+    return Object.hasOwn(result || {}, "value") ? result.value : written;
+  });
 }
 
-export async function addObject(projectDir, input) {
-  await ensureProjectStore(projectDir);
-  const state = await readState(projectDir);
+async function withStateLock(projectDir, options = {}, operation) {
+  const key = statePathFor(projectDir, canvasIdFrom(options));
+  const previous = stateLocks.get(key) || Promise.resolve();
+  let release;
+  const current = new Promise((resolve) => {
+    release = resolve;
+  });
+  const chain = previous.catch(() => {}).then(() => current);
+  stateLocks.set(key, chain);
+  await previous.catch(() => {});
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (stateLocks.get(key) === chain) stateLocks.delete(key);
+  }
+}
+
+export async function addImage(projectDir, input, options = {}) {
+  const asset = await persistImage(projectDir, input, options);
+  return mutateState(projectDir, options, (state) => {
+    const count = state.objects.length;
+    const displaySize = imageDisplaySize(asset, input);
+    const object = {
+      id: `img_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
+      type: "image",
+      name: input.name || asset.name,
+      src: asset.src,
+      assetPath: asset.assetPath,
+      sourcePath: asset.sourcePath || null,
+      prompt: input.prompt || "",
+      sourceObjectId: input.sourceObjectId || null,
+      batchId: input.batchId || null,
+      layoutMode: input.layoutMode || "manual",
+      x: Number.isFinite(input.x) ? input.x : 120 + (count % 5) * 56,
+      y: Number.isFinite(input.y) ? input.y : 120 + (count % 7) * 44,
+      width: displaySize.width,
+      height: displaySize.height,
+      naturalWidth: asset.width || null,
+      naturalHeight: asset.height || null,
+      hasAlpha: Boolean(asset.hasAlpha),
+      createdAt: new Date().toISOString()
+    };
+
+    return {
+      state: {
+        ...state,
+        objects: [...state.objects, object],
+        selection: object.id
+      },
+      value: object
+    };
+  });
+}
+
+export async function addObject(projectDir, input, options = {}) {
   const type = typeof input.type === "string" ? input.type : "";
   if (!["drawing", "text"].includes(type)) {
     const error = new Error("add_object requires type to be drawing or text");
@@ -91,145 +175,188 @@ export async function addObject(projectDir, input) {
   }
 
   const object = normalizeObject(input);
-  const next = {
-    ...state,
-    objects: [...state.objects, object],
-    selection: object.id
-  };
-  await writeState(projectDir, next);
-  return object;
+  return mutateState(projectDir, options, (state) => ({
+    state: {
+      ...state,
+      objects: [...state.objects, object],
+      selection: object.id
+    },
+    value: object
+  }));
 }
 
-export async function addJobPlaceholder(projectDir, input) {
-  await ensureProjectStore(projectDir);
-  const state = await readState(projectDir);
-  const source = state.objects.find((object) => object.id === input.sourceObjectId);
-  if (!source) {
-    const error = new Error(`Source canvas object not found: ${input.sourceObjectId || "(missing)"}`);
-    error.statusCode = 404;
-    throw error;
-  }
-
-  const width = Number.isFinite(input.width) ? input.width : source.width;
-  const height = Number.isFinite(input.height) ? input.height : source.height;
-  const position = adjacentDerivedPosition(source);
-  const shift = width + derivedGap;
-  const object = {
-    id: input.id || `job_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
-    type: "job",
-    name: input.name || "Working",
-    action: input.action || "image-job",
-    status: input.status || "running",
-    sourceObjectId: source.id,
-    layoutMode: "canvas-row",
-    src: source.src || null,
-    assetPath: source.assetPath || null,
-    x: position.x,
-    y: position.y,
-    width,
-    height,
-    naturalWidth: source.naturalWidth || null,
-    naturalHeight: source.naturalHeight || null,
-    createdAt: new Date().toISOString()
-  };
-
-  const shiftedObjects = state.objects.map((item) => {
-    if (item.sourceObjectId !== source.id) return item;
-    if (item.x < position.x) return item;
-    return { ...item, x: item.x + shift };
-  });
-
-  await writeState(projectDir, {
-    ...state,
-    objects: [...shiftedObjects, object]
-  });
-  return object;
-}
-
-export async function updateSelection(projectDir, selection) {
-  const state = await readState(projectDir);
-  await writeState(projectDir, { ...state, selection });
-  return selection;
-}
-
-export async function updateViewport(projectDir, viewport) {
-  const state = await readState(projectDir);
-  const nextViewport = {
-    x: Number.isFinite(viewport.x) ? viewport.x : state.viewport.x,
-    y: Number.isFinite(viewport.y) ? viewport.y : state.viewport.y,
-    zoom: Number.isFinite(viewport.zoom) ? viewport.zoom : state.viewport.zoom
-  };
-  await writeState(projectDir, { ...state, viewport: nextViewport });
-  return nextViewport;
-}
-
-export async function updateProjectMeta(projectDir, patch) {
-  const state = await readState(projectDir);
-  const title = typeof patch.title === "string" && patch.title.trim()
-    ? patch.title.trim().slice(0, 120)
-    : state.title;
-  const next = await writeState(projectDir, { ...state, title });
-  return { title: next.title };
-}
-
-export async function updateObject(projectDir, id, patch) {
-  const state = await readState(projectDir);
-  let updated = null;
-  const objects = state.objects.map((object) => {
-    if (object.id !== id) return object;
-    updated = { ...object, ...patch, id: object.id, type: object.type };
-    return updated;
-  });
-
-  if (!updated) {
-    const error = new Error(`Canvas object not found: ${id}`);
-    error.statusCode = 404;
-    throw error;
-  }
-
-  await writeState(projectDir, { ...state, objects });
-  return updated;
-}
-
-export async function markStaleJobPlaceholders(projectDir, { activePlaceholderIds = [], timeoutMs = 2 * 60_000 } = {}) {
-  const state = await readState(projectDir);
-  const active = new Set(activePlaceholderIds);
-  const now = Date.now();
-  let changed = false;
-  const objects = state.objects.map((object) => {
-    if (object.type !== "job") return object;
-    if (object.status === "failed") {
-      if (object.error) return object;
-      changed = true;
-      return { ...object, error: "The image job failed before reporting an error." };
+export async function addJobPlaceholder(projectDir, input, options = {}) {
+  return mutateState(projectDir, options, (state) => {
+    const source = state.objects.find((object) => object.id === input.sourceObjectId);
+    if (!source) {
+      const error = new Error(`Source canvas object not found: ${input.sourceObjectId || "(missing)"}`);
+      error.statusCode = 404;
+      throw error;
     }
-    if (active.has(object.id)) return object;
-    const createdAt = Date.parse(object.createdAt || "");
-    if (!Number.isFinite(createdAt) || now - createdAt < timeoutMs) return object;
-    changed = true;
+
+    const width = Number.isFinite(input.width) ? input.width : source.width;
+    const height = Number.isFinite(input.height) ? input.height : source.height;
+    const position = adjacentDerivedPosition(source);
+    const shift = width + derivedGap;
+    const object = {
+      id: input.id || `job_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
+      type: "job",
+      name: input.name || "Working",
+      action: input.action || "image-job",
+      status: input.status || "running",
+      sourceObjectId: source.id,
+      layoutMode: "canvas-row",
+      src: source.src || null,
+      assetPath: source.assetPath || null,
+      x: position.x,
+      y: position.y,
+      width,
+      height,
+      naturalWidth: source.naturalWidth || null,
+      naturalHeight: source.naturalHeight || null,
+      createdAt: new Date().toISOString()
+    };
+
+    const shiftedObjects = state.objects.map((item) => {
+      if (item.sourceObjectId !== source.id) return item;
+      if (item.x < position.x) return item;
+      return { ...item, x: item.x + shift };
+    });
+
     return {
-      ...object,
-      status: "failed",
-      error: object.error || "The image job timed out or was interrupted."
+      state: {
+        ...state,
+        objects: [...shiftedObjects, object]
+      },
+      value: object
     };
   });
-
-  if (!changed) return state;
-  return writeState(projectDir, { ...state, objects });
 }
 
-export async function deleteObject(projectDir, id) {
-  const state = await readState(projectDir);
-  const objects = state.objects.filter((object) => object.id !== id);
-  if (objects.length === state.objects.length) {
-    const error = new Error(`Canvas object not found: ${id}`);
-    error.statusCode = 404;
+export async function updateSelection(projectDir, selection, options = {}) {
+  return mutateState(projectDir, options, (state) => ({
+    state: { ...state, selection },
+    value: selection
+  }));
+}
+
+export async function updateViewport(projectDir, viewport, options = {}) {
+  return mutateState(projectDir, options, (state) => {
+    const nextViewport = {
+      x: Number.isFinite(viewport.x) ? viewport.x : state.viewport.x,
+      y: Number.isFinite(viewport.y) ? viewport.y : state.viewport.y,
+      zoom: Number.isFinite(viewport.zoom) ? viewport.zoom : state.viewport.zoom
+    };
+    return {
+      state: { ...state, viewport: nextViewport },
+      value: nextViewport
+    };
+  });
+}
+
+export async function updateProjectMeta(projectDir, patch, options = {}) {
+  return mutateState(projectDir, options, (state) => {
+    const title = typeof patch.title === "string" && patch.title.trim()
+      ? patch.title.trim().slice(0, 120)
+      : state.title;
+    return {
+      state: { ...state, title },
+      value: { title }
+    };
+  });
+}
+
+export async function updateObject(projectDir, id, patch, options = {}) {
+  return mutateState(projectDir, options, (state) => {
+    let updated = null;
+    const objects = state.objects.map((object) => {
+      if (object.id !== id) return object;
+      updated = { ...object, ...patch, id: object.id, type: object.type };
+      return updated;
+    });
+
+    if (!updated) {
+      const error = new Error(`Canvas object not found: ${id}`);
+      error.statusCode = 404;
+      throw error;
+    }
+
+    return {
+      state: { ...state, objects },
+      value: updated
+    };
+  });
+}
+
+export async function markStaleJobPlaceholders(projectDir, { activePlaceholderIds = [], timeoutMs = 2 * 60_000, canvasId = null } = {}) {
+  const options = { canvasId };
+  return mutateState(projectDir, options, (state) => {
+    const active = new Set(activePlaceholderIds);
+    const now = Date.now();
+    let changed = false;
+    const objects = state.objects.map((object) => {
+      if (object.type !== "job") return object;
+      if (object.status === "failed") {
+        if (object.error) return object;
+        changed = true;
+        return { ...object, error: "The image job failed before reporting an error." };
+      }
+      if (active.has(object.id)) return object;
+      const createdAt = Date.parse(object.createdAt || "");
+      if (!Number.isFinite(createdAt) || now - createdAt < timeoutMs) return object;
+      changed = true;
+      return {
+        ...object,
+        status: "failed",
+        error: object.error || "The image job timed out or was interrupted."
+      };
+    });
+
+    if (!changed) return { write: false, value: state };
+    return { ...state, objects };
+  });
+}
+
+export async function deleteObject(projectDir, id, options = {}) {
+  return mutateState(projectDir, options, (state) => {
+    const objects = state.objects.filter((object) => object.id !== id);
+    if (objects.length === state.objects.length) {
+      const error = new Error(`Canvas object not found: ${id}`);
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const selection = state.selection === id ? null : state.selection;
+    return {
+      state: { ...state, objects, selection },
+      value: { id, deleted: true }
+    };
+  });
+}
+
+export async function deleteObjects(projectDir, ids, options = {}) {
+  const idSet = new Set(Array.isArray(ids) ? ids.filter((id) => typeof id === "string" && id.trim()) : []);
+  if (idSet.size === 0) {
+    const error = new Error("delete_objects requires at least one object id.");
+    error.statusCode = 400;
     throw error;
   }
 
-  const selection = state.selection === id ? null : state.selection;
-  await writeState(projectDir, { ...state, objects, selection });
-  return { id, deleted: true };
+  return mutateState(projectDir, options, (state) => {
+    const objects = state.objects.filter((object) => !idSet.has(object.id));
+    const deletedIds = state.objects.filter((object) => idSet.has(object.id)).map((object) => object.id);
+    if (deletedIds.length === 0) {
+      const error = new Error("Canvas objects not found.");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const selection = state.selection && idSet.has(state.selection) ? null : state.selection;
+    return {
+      state: { ...state, objects, selection },
+      value: { ids: deletedIds, deleted: true }
+    };
+  });
 }
 
 function adjacentDerivedPosition(source) {
@@ -274,8 +401,8 @@ function normalizeObject(input) {
   };
 }
 
-async function persistImage(projectDir, input) {
-  const assetsDir = assetsDirFor(projectDir);
+async function persistImage(projectDir, input, options = {}) {
+  const assetsDir = assetsDirFor(projectDir, canvasIdFrom(options));
   await fs.mkdir(assetsDir, { recursive: true });
 
   if (input.path) {

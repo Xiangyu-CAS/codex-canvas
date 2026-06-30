@@ -29,6 +29,7 @@ const toolColorStorageKey = "agentCanvasToolColor";
 const toolColors = ["#202124", "#d93025", "#f9ab00", "#188038", "#1a73e8", "#9334e6", "#ffffff"];
 let currentProjectId = new URLSearchParams(window.location.search).get("project") || "";
 let registeredProjects = [];
+const pendingTextRecognitionCancels = new Set();
 
 const translations = {
   en: {
@@ -41,7 +42,6 @@ const translations = {
     switchCanvas: "Switch canvas",
     currentCanvas: "Current",
     textPlaceholder: "Text",
-    placeholderSuffix: "is a placeholder in this milestone.",
     quickEditPlaceholder: "Describe your edit here",
     quickEditEmpty: "Describe the edit first.",
     editTextPlaceholder: "Describe the text change here",
@@ -56,6 +56,9 @@ const translations = {
     jobRunning: "Running...",
     jobDone: "finished and was added to the canvas.",
     jobFailed: "failed.",
+    chatSendStarted: "Sending image to bound chat...",
+    chatSendDone: "Image sent to bound chat.",
+    chatNotBound: "Bind this canvas to a Codex thread first.",
     uploadDone: "Image uploaded.",
     uploadFailed: "Image upload failed.",
     actions: {
@@ -64,7 +67,10 @@ const translations = {
       "remove-bg": "Remove BG",
       "eraser": "Eraser",
       "edit-elements": "Edit Elements",
+      "reset-layer-group": "Reset group",
+      "group-layer-group": "Group",
       "edit-text": "Edit Text",
+      "send-to-chat": "Send to chat",
       "download": "Download"
     },
     actionNames: {
@@ -73,7 +79,10 @@ const translations = {
       "remove-bg": "Remove BG",
       "eraser": "Eraser",
       "edit-elements": "Edit Elements",
+      "reset-layer-group": "Reset group",
+      "group-layer-group": "Group",
       "edit-text": "Edit Text",
+      "send-to-chat": "Send to chat",
       "download": "Download"
     },
     tools: {
@@ -88,10 +97,7 @@ const translations = {
       "upload-image": "Upload image"
     },
     controls: {
-      reset: "Reset view",
-      layers: "Layers",
-      search: "Search",
-      export: "Export"
+      reset: "Reset view"
     }
   },
   zh: {
@@ -104,7 +110,6 @@ const translations = {
     switchCanvas: "切换画布",
     currentCanvas: "当前",
     textPlaceholder: "文字",
-    placeholderSuffix: "在当前版本中还是占位功能。",
     quickEditPlaceholder: "描述你想怎么改这张图",
     quickEditEmpty: "先描述你想怎么改。",
     editTextPlaceholder: "描述要替换或修改的文字",
@@ -119,6 +124,9 @@ const translations = {
     jobRunning: "运行中...",
     jobDone: "已完成并添加到画布。",
     jobFailed: "失败。",
+    chatSendStarted: "正在发送图片到已绑定对话...",
+    chatSendDone: "图片已发送到已绑定对话。",
+    chatNotBound: "请先把画布绑定到 Codex thread。",
     uploadDone: "图片已上传。",
     uploadFailed: "图片上传失败。",
     actions: {
@@ -127,7 +135,10 @@ const translations = {
       "remove-bg": "去背景",
       "eraser": "橡皮工具",
       "edit-elements": "编辑元素",
+      "reset-layer-group": "重置组",
+      "group-layer-group": "成组",
       "edit-text": "编辑文字",
+      "send-to-chat": "发送到对话",
       "download": "下载"
     },
     actionNames: {
@@ -136,7 +147,10 @@ const translations = {
       "remove-bg": "去背景",
       "eraser": "橡皮工具",
       "edit-elements": "编辑元素",
+      "reset-layer-group": "重置组",
+      "group-layer-group": "成组",
       "edit-text": "编辑文字",
+      "send-to-chat": "发送到对话",
       "download": "下载"
     },
     tools: {
@@ -151,16 +165,14 @@ const translations = {
       "upload-image": "上传图片"
     },
     controls: {
-      reset: "重置视图",
-      layers: "图层",
-      search: "搜索",
-      export: "导出"
+      reset: "重置视图"
     }
   }
 };
 
 let state = null;
 let selectedId = null;
+let selectedIds = new Set();
 let hasUserSelection = false;
 let activeTool = "select";
 let activeColor = loadToolColor();
@@ -169,6 +181,7 @@ let language = loadLanguage();
 let drag = null;
 let resize = null;
 let drawing = null;
+let marquee = null;
 let viewport = { x: 0, y: 0, zoom: 0.72 };
 let pan = null;
 let viewportSaveTimer = null;
@@ -227,18 +240,6 @@ settingsMenu.addEventListener("click", (event) => {
 });
 
 toolDock.addEventListener("click", (event) => {
-  const viewButton = event.target.closest("[data-view-action]");
-  if (viewButton?.dataset.viewAction === "reset") {
-    event.preventDefault();
-    resetViewport();
-    return;
-  }
-  if (viewButton?.dataset.viewAction === "upload") {
-    event.preventDefault();
-    imageUploadInput.click();
-    return;
-  }
-
   const button = event.target.closest("[data-tool]");
   if (!button) return;
   event.preventDefault();
@@ -260,6 +261,20 @@ colorPalette.addEventListener("click", (event) => {
 });
 
 document.addEventListener("click", (event) => {
+  const viewButton = event.target.closest("[data-view-action]");
+  if (viewButton) {
+    event.stopPropagation();
+    event.preventDefault();
+    if (viewButton.dataset.viewAction === "reset") {
+      resetViewport();
+      return;
+    }
+    if (viewButton.dataset.viewAction === "upload") {
+      imageUploadInput.click();
+      return;
+    }
+  }
+
   const action = event.target.closest("[data-action]")?.dataset.action;
   if (action) {
     event.stopPropagation();
@@ -274,7 +289,7 @@ document.addEventListener("click", (event) => {
       openImageActionComposer(action);
       return;
     }
-    if (action === "remove-bg") {
+    if (action === "remove-bg" || action === "edit-elements") {
       startImageJob(action);
       return;
     }
@@ -282,12 +297,24 @@ document.addEventListener("click", (event) => {
       downloadSelectedImage();
       return;
     }
-    showToast(`${labelAction(action)} ${t("placeholderSuffix")}`);
+    if (action === "reset-layer-group") {
+      resetSelectedLayerGroup();
+      return;
+    }
+    if (action === "group-layer-group") {
+      toggleSelectedLayerGroupLock();
+      return;
+    }
+    if (action === "send-to-chat") {
+      sendSelectedImageToChat();
+      return;
+    }
+    showToast(labelAction(action));
   }
 });
 
 document.addEventListener("keydown", (event) => {
-  if (!selectedId) return;
+  if (!selectedIds.size && !selectedId) return;
   if (["Backspace", "Delete"].includes(event.key)) {
     if (isDeleteEditingTarget(event.target)) return;
     event.preventDefault();
@@ -296,6 +323,7 @@ document.addEventListener("keydown", (event) => {
   }
   if (isShortcutEditingTarget(event.target)) return;
   if (event.key === "Enter" || event.key === " ") {
+    if (selectedIds.size > 1) return;
     const object = state.objects.find((item) => item.id === selectedId);
     if (!object || (object.type || "image") !== "image") return;
     event.preventDefault();
@@ -313,8 +341,11 @@ board.addEventListener("pointerdown", (event) => {
       createTextObject(event);
       return;
     }
-    selectObject(null);
-    startPan(event);
+    if (event.button === 1 || event.altKey) {
+      startPan(event);
+      return;
+    }
+    startMarqueeSelection(event);
   }
 });
 
@@ -329,7 +360,7 @@ document.addEventListener("pointerdown", (event) => {
     projectMenu.hidden = true;
   }
   if (isSettingsEvent) return;
-  if (!selectedId) return;
+  if (!selectedId && selectedIds.size === 0) return;
   if (event.target.closest(".canvas-object, .selection-toolbar, .selection-more-menu, .quick-edit-composer, .color-palette")) return;
   selectObject(null);
 });
@@ -372,10 +403,15 @@ board.addEventListener("wheel", (event) => {
 }, { passive: false });
 
 async function loadState() {
-  if (drag || resize || isComposerActive()) return;
+  if (drag || resize || marquee || isComposerActive()) return;
   const response = await fetch(apiPath("/api/state"));
   state = await response.json();
-  if (!hasUserSelection || !state.objects.some((object) => object.id === selectedId)) {
+  selectedIds = new Set([...selectedIds].filter((id) => state.objects.some((object) => object.id === id)));
+  if (selectedId && !state.objects.some((object) => object.id === selectedId)) {
+    selectedId = null;
+  }
+  if (!hasUserSelection || (!selectedId && selectedIds.size === 0)) {
+    selectedIds.clear();
     selectedId = null;
     hasUserSelection = false;
   }
@@ -462,10 +498,14 @@ function render() {
   }
   applyViewport();
 
+  const selectedGroupId = selectedLayerGroupId();
+  const visibleSelection = selectedObjectIds();
   for (const object of state.objects) {
     const element = document.createElement("div");
     const objectType = object.type || "image";
-    element.className = `canvas-object ${objectType}-object${object.hasAlpha ? " alpha-image-object" : ""}${object.id === selectedId ? " selected" : ""}`;
+    const isSelectedObject = visibleSelection.has(object.id) && !selectedGroupId;
+    const isSelectedGroupMember = selectedGroupId && object.layerGroupId === selectedGroupId;
+    element.className = `canvas-object ${objectType}-object${object.hasAlpha ? " alpha-image-object" : ""}${isSelectedObject ? " selected" : ""}${isSelectedGroupMember ? " layer-group-member-selected" : ""}`;
     element.style.left = `${object.x}px`;
     element.style.top = `${object.y}px`;
     element.style.width = `${object.width}px`;
@@ -486,7 +526,7 @@ function render() {
       element.append(image);
     }
 
-    if ((object.type || "image") === "image" && object.id === selectedId && hasUserSelection) {
+    if ((object.type || "image") === "image" && object.id === selectedId && selectedIds.size <= 1 && hasUserSelection && !selectedGroupId) {
       const meta = document.createElement("div");
       meta.className = "object-meta";
 
@@ -514,9 +554,7 @@ function render() {
       if ((object.type || "image") === "image" && event.detail >= 2) {
         event.preventDefault();
         event.stopPropagation();
-        selectedId = object.id;
-        hasUserSelection = true;
-        if (state) state.selection = object.id;
+        setLocalSelection([object.id]);
         frameSelectedImageForViewing(object);
         fetch(apiPath("/api/selection"), {
           method: "POST",
@@ -529,8 +567,43 @@ function render() {
     });
     objectLayer.append(element);
   }
+  if (selectedGroupId && hasUserSelection) {
+    objectLayer.append(renderLayerGroupSelection(selectedGroupId));
+  }
 
   updateSelectionUi();
+}
+
+function renderLayerGroupSelection(groupId) {
+  const bounds = layerGroupBounds(groupId);
+  const anchor = layerGroupMembers(groupId)[0];
+  const element = document.createElement("div");
+  element.className = "layer-group-selection";
+  element.dataset.layerGroupId = groupId;
+  element.style.left = `${bounds.x}px`;
+  element.style.top = `${bounds.y}px`;
+  element.style.width = `${bounds.width}px`;
+  element.style.height = `${bounds.height}px`;
+
+  const label = document.createElement("div");
+  label.className = "layer-group-label";
+  label.textContent = `${layerGroupLabel(groupId)} · ${layerGroupMembers(groupId).length} layers`;
+  if (anchor) {
+    label.addEventListener("pointerdown", (event) => startDrag(event, anchor, { forceGroup: true }));
+  }
+  element.append(label);
+  return element;
+}
+
+function updateLayerGroupSelectionElement(groupId) {
+  if (!groupId) return;
+  const element = objectLayer.querySelector(`.layer-group-selection[data-layer-group-id="${CSS.escape(groupId)}"]`);
+  if (!element) return;
+  const bounds = layerGroupBounds(groupId);
+  element.style.left = `${bounds.x}px`;
+  element.style.top = `${bounds.y}px`;
+  element.style.width = `${bounds.width}px`;
+  element.style.height = `${bounds.height}px`;
 }
 
 function renderDrawingObject(object) {
@@ -562,8 +635,7 @@ function renderTextObject(object) {
   text.addEventListener("dblclick", (event) => {
     event.stopPropagation();
     editingTextId = object.id;
-    selectedId = object.id;
-    hasUserSelection = true;
+    setLocalSelection([object.id], { fromUser: true });
     render();
     focusTextObject(object.id);
   });
@@ -630,10 +702,12 @@ function renderResizeHandles(object) {
   return fragment;
 }
 
-function startDrag(event, object) {
+function startDrag(event, object, options = {}) {
   event.preventDefault();
   event.stopPropagation();
   const element = event.currentTarget;
+  const useLayerGroup = object.layerGroupId && (options.forceGroup || object.layerGroupLocked);
+  const groupMembers = useLayerGroup ? layerGroupMembers(object.layerGroupId) : [];
   if (element.setPointerCapture) {
     try {
       element.setPointerCapture(event.pointerId);
@@ -641,12 +715,12 @@ function startDrag(event, object) {
       // Continue with window-level pointer listeners if capture is unavailable.
     }
   }
-  selectedId = object.id;
-  hasUserSelection = true;
-  if (state) state.selection = object.id;
+  setLocalSelection([object.id], { fromUser: true });
   element.classList.add("selected", "dragging");
   drag = {
     id: object.id,
+    groupId: useLayerGroup ? object.layerGroupId : null,
+    members: groupMembers.map((item) => ({ id: item.id, x: item.x, y: item.y })),
     element,
     pointerId: event.pointerId,
     startX: event.clientX,
@@ -668,12 +742,29 @@ function startDrag(event, object) {
 
 function moveDrag(event) {
   if (!drag) return;
-  const object = state.objects.find((item) => item.id === drag.id);
-  if (!object) return;
-  object.x = Math.round(drag.objectX + (event.clientX - drag.startX) / viewport.zoom);
-  object.y = Math.round(drag.objectY + (event.clientY - drag.startY) / viewport.zoom);
-  drag.element.style.left = `${object.x}px`;
-  drag.element.style.top = `${object.y}px`;
+  const dx = Math.round((event.clientX - drag.startX) / viewport.zoom);
+  const dy = Math.round((event.clientY - drag.startY) / viewport.zoom);
+  if (drag.groupId) {
+    for (const memberStart of drag.members) {
+      const member = state.objects.find((item) => item.id === memberStart.id);
+      if (!member) continue;
+      member.x = memberStart.x + dx;
+      member.y = memberStart.y + dy;
+      const memberElement = objectLayer.querySelector(`[data-id="${member.id}"]`);
+      if (memberElement) {
+        memberElement.style.left = `${member.x}px`;
+        memberElement.style.top = `${member.y}px`;
+      }
+    }
+  } else {
+    const object = state.objects.find((item) => item.id === drag.id);
+    if (!object) return;
+    object.x = Math.round(drag.objectX + dx);
+    object.y = Math.round(drag.objectY + dy);
+    drag.element.style.left = `${object.x}px`;
+    drag.element.style.top = `${object.y}px`;
+  }
+  updateLayerGroupSelectionElement(drag.groupId || selectedLayerGroupId());
   updateSelectionUi();
 }
 
@@ -682,18 +773,22 @@ async function endDrag(event) {
   window.removeEventListener("pointerup", endDrag);
   window.removeEventListener("pointercancel", endDrag);
   if (!drag) return;
-  const object = state.objects.find((item) => item.id === drag.id);
-  const element = drag.element;
+  const activeDrag = drag;
+  const object = state.objects.find((item) => item.id === activeDrag.id);
+  const element = activeDrag.element;
   element.classList.remove("dragging");
   if (element.releasePointerCapture) {
     try {
-      element.releasePointerCapture(drag.pointerId);
+      element.releasePointerCapture(activeDrag.pointerId);
     } catch {
       // Pointer capture may already be gone after cancellation.
     }
   }
   drag = null;
-  if (object) {
+  if (activeDrag.groupId) {
+    await patchLayerGroupMembersSequentially(layerGroupMembers(activeDrag.groupId), (member) => ({ x: member.x, y: member.y }));
+    render();
+  } else if (object) {
     await fetch(apiPath(`/api/objects/${object.id}`), {
       method: "PATCH",
       headers: { "content-type": "application/json" },
@@ -707,9 +802,7 @@ function startResize(event, object, direction) {
   event.preventDefault();
   event.stopPropagation();
   const element = event.currentTarget.closest(".canvas-object");
-  selectedId = object.id;
-  hasUserSelection = true;
-  if (state) state.selection = object.id;
+  setLocalSelection([object.id], { fromUser: true });
   element?.classList.add("resizing");
   resize = {
     id: object.id,
@@ -825,11 +918,9 @@ function resizedImageRect(start, dx, dy) {
 }
 
 async function selectObject(id, { fromUser = false, renderNow = true } = {}) {
-  selectedId = id;
-  hasUserSelection = Boolean(id) && fromUser;
+  setLocalSelection(id ? [id] : [], { fromUser });
   if (editingTextId && editingTextId !== id) editingTextId = null;
   if (!id) isMoreMenuOpen = false;
-  if (state) state.selection = id;
   if (renderNow) render();
   else updateSelectionUi();
   await fetch(apiPath("/api/selection"), {
@@ -839,19 +930,151 @@ async function selectObject(id, { fromUser = false, renderNow = true } = {}) {
   });
 }
 
+function setLocalSelection(ids, { fromUser = true } = {}) {
+  const nextIds = ids.filter(Boolean);
+  selectedIds = new Set(nextIds);
+  selectedId = nextIds.length === 1 ? nextIds[0] : null;
+  hasUserSelection = nextIds.length > 0 && fromUser;
+  if (state) state.selection = selectedId;
+}
+
+function selectedObjectIds() {
+  if (!hasUserSelection) return new Set();
+  if (selectedIds.size) return selectedIds;
+  return selectedId ? new Set([selectedId]) : new Set();
+}
+
+function startMarqueeSelection(event) {
+  event.preventDefault();
+  closeQuickEdit({ keepPrompt: true });
+  setLocalSelection([]);
+  render();
+  board.setPointerCapture(event.pointerId);
+
+  const start = pointerToWorld(event);
+  const element = document.createElement("div");
+  element.className = "marquee-selection";
+  element.hidden = true;
+  objectLayer.append(element);
+
+  marquee = {
+    pointerId: event.pointerId,
+    start,
+    current: start,
+    startClientX: event.clientX,
+    startClientY: event.clientY,
+    element,
+    moved: false
+  };
+
+  board.addEventListener("pointermove", moveMarqueeSelection);
+  board.addEventListener("pointerup", endMarqueeSelection, { once: true });
+  board.addEventListener("pointercancel", cancelMarqueeSelection, { once: true });
+}
+
+function moveMarqueeSelection(event) {
+  if (!marquee) return;
+  marquee.current = pointerToWorld(event);
+  marquee.moved ||= Math.hypot(event.clientX - marquee.startClientX, event.clientY - marquee.startClientY) > 4;
+  const rect = normalizedRect(marquee.start, marquee.current);
+
+  marquee.element.hidden = !marquee.moved;
+  marquee.element.style.left = `${rect.x}px`;
+  marquee.element.style.top = `${rect.y}px`;
+  marquee.element.style.width = `${rect.width}px`;
+  marquee.element.style.height = `${rect.height}px`;
+
+  const ids = marquee.moved
+    ? state.objects
+      .filter((object) => (object.type || "image") === "image" && rectsIntersect(rect, object))
+      .map((object) => object.id)
+    : [];
+  setLocalSelection(ids, { fromUser: true });
+  updateSelectionClasses();
+  updateSelectionUi();
+}
+
+async function endMarqueeSelection() {
+  board.removeEventListener("pointermove", moveMarqueeSelection);
+  board.removeEventListener("pointercancel", cancelMarqueeSelection);
+  if (!marquee) return;
+  const activeMarquee = marquee;
+  marquee = null;
+  activeMarquee.element.remove();
+  releaseBoardPointer(activeMarquee.pointerId);
+  if (!activeMarquee.moved) setLocalSelection([]);
+  render();
+  await fetch(apiPath("/api/selection"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ selection: selectedId })
+  }).catch(() => {});
+}
+
+function cancelMarqueeSelection() {
+  board.removeEventListener("pointermove", moveMarqueeSelection);
+  if (!marquee) return;
+  const activeMarquee = marquee;
+  marquee = null;
+  activeMarquee.element.remove();
+  releaseBoardPointer(activeMarquee.pointerId);
+  setLocalSelection([]);
+  render();
+}
+
+function releaseBoardPointer(pointerId) {
+  try {
+    board.releasePointerCapture(pointerId);
+  } catch {
+    // Pointer capture may already be released by the browser.
+  }
+}
+
+function updateSelectionClasses() {
+  const ids = selectedObjectIds();
+  objectLayer.querySelectorAll(".canvas-object").forEach((element) => {
+    element.classList.toggle("selected", ids.has(element.dataset.id));
+  });
+}
+
+function normalizedRect(a, b) {
+  const left = Math.min(a.x, b.x);
+  const top = Math.min(a.y, b.y);
+  const right = Math.max(a.x, b.x);
+  const bottom = Math.max(a.y, b.y);
+  return {
+    x: Math.round(left),
+    y: Math.round(top),
+    width: Math.max(1, Math.round(right - left)),
+    height: Math.max(1, Math.round(bottom - top))
+  };
+}
+
+function rectsIntersect(a, object) {
+  return a.x <= object.x + object.width
+    && a.x + a.width >= object.x
+    && a.y <= object.y + object.height
+    && a.y + a.height >= object.y;
+}
+
 function updateSelectionUi() {
   const object = state.objects.find((item) => item.id === selectedId);
+  const groupId = selectedLayerGroupId();
+  const isGroupSelection = Boolean(groupId);
 
-  if (!object || object.type !== "image" || !hasUserSelection) {
+  if (selectedIds.size > 1 || !object || object.type !== "image" || !hasUserSelection) {
     toolbar.hidden = true;
     moreMenu.hidden = true;
     closeQuickEdit({ keepPrompt: true });
     return;
   }
 
+  updateToolbarForSelection(isGroupSelection);
+  if (isGroupSelection) closeQuickEdit({ keepPrompt: true });
   toolbar.hidden = Boolean(quickEditObjectId);
-  const topLeft = worldToScreen(object.x, object.y);
-  const bottomRight = worldToScreen(object.x + object.width, object.y + object.height);
+  const bounds = isGroupSelection ? layerGroupBounds(groupId) : boundsForObjects([object]);
+  const topLeft = worldToScreen(bounds.x, bounds.y);
+  const bottomRight = worldToScreen(bounds.x + bounds.width, bounds.y + bounds.height);
   const toolbarRect = toolbar.getBoundingClientRect();
   const boardRect = board.getBoundingClientRect();
   const objectCenter = (topLeft.x + bottomRight.x) / 2;
@@ -933,9 +1156,7 @@ async function endDrawing() {
     stroke: activeColor,
     strokeWidth: 4
   });
-  selectedId = object.id;
-  hasUserSelection = true;
-  state.selection = object.id;
+  setLocalSelection([object.id], { fromUser: true });
   render();
   setActiveTool("select");
 }
@@ -966,10 +1187,8 @@ async function createTextObject(event) {
     fontSize: 28,
     color: activeColor
   });
-  selectedId = object.id;
-  hasUserSelection = true;
+  setLocalSelection([object.id], { fromUser: true });
   editingTextId = object.id;
-  state.selection = object.id;
   render();
   focusTextObject(object.id);
   setActiveTool("select");
@@ -987,16 +1206,35 @@ async function createObject(payload) {
 }
 
 async function deleteSelectedObject() {
-  const id = selectedId;
-  if (!id) return;
-  selectedId = null;
-  hasUserSelection = false;
+  const ids = selectedIds.size ? [...selectedIds] : (selectedId ? [selectedId] : []);
+  if (!ids.length) return;
+  const groupId = ids.length === 1 ? selectedLayerGroupId() : null;
+  if (groupId) {
+    const members = layerGroupMembers(groupId);
+    setLocalSelection([]);
+    editingTextId = null;
+    isMoreMenuOpen = false;
+    state.objects = state.objects.filter((object) => object.layerGroupId !== groupId);
+    state.selection = null;
+    render();
+    await deleteObjectsById(members.map((object) => object.id));
+    return;
+  }
+  setLocalSelection([]);
   editingTextId = null;
   isMoreMenuOpen = false;
-  state.objects = state.objects.filter((object) => object.id !== id);
-  state.selection = null;
+  state.objects = state.objects.filter((object) => !ids.includes(object.id));
   render();
-  await fetch(apiPath(`/api/objects/${id}`), { method: "DELETE" }).catch(() => {});
+  await deleteObjectsById(ids);
+}
+
+async function deleteObjectsById(ids) {
+  if (!ids.length) return;
+  await fetch(apiPath("/api/objects"), {
+    method: "DELETE",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ids })
+  }).catch(() => {});
 }
 
 async function uploadImageFiles(files) {
@@ -1031,8 +1269,7 @@ async function uploadImageFiles(files) {
     }
 
     if (lastObject) {
-      selectedId = lastObject.id;
-      hasUserSelection = true;
+      setLocalSelection([lastObject.id], { fromUser: true });
       await loadState();
       showToast(t("uploadDone"));
     }
@@ -1107,6 +1344,31 @@ async function startImageJob(action, options = {}) {
   }
 }
 
+async function sendSelectedImageToChat() {
+  const object = state.objects.find((item) => item.id === selectedId);
+  if (!object || (object.type || "image") !== "image") return;
+
+  showToast(t("chatSendStarted"));
+  try {
+    const response = await fetch(apiPath("/api/chat-turn"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "send-to-chat",
+        objectId: object.id
+      })
+    });
+    const result = await response.json();
+    if (!response.ok) {
+      const fallback = response.status === 409 ? t("chatNotBound") : `${labelAction("send-to-chat")} ${t("jobFailed")}`;
+      throw new Error(result.error || fallback);
+    }
+    showToast(t("chatSendDone"));
+  } catch (error) {
+    showToast(error?.message || `${labelAction("send-to-chat")} ${t("jobFailed")}`);
+  }
+}
+
 function openImageActionComposer(action) {
   const object = state.objects.find((item) => item.id === selectedId);
   if (!object || (object.type || "image") !== "image" || !hasUserSelection) return;
@@ -1126,7 +1388,15 @@ function openImageActionComposer(action) {
   }
 }
 
-function closeQuickEdit({ keepPrompt = false } = {}) {
+function closeQuickEdit({ keepPrompt = false, cancelTextSession = true } = {}) {
+  const textRecognitionId = quickEditAction === "edit-text" ? activeTextRecognitionId : null;
+  if (cancelTextSession && textRecognitionId) {
+    if (textRecognitionId.startsWith("text_")) {
+      cancelTextRecognitionSession(textRecognitionId);
+    } else {
+      pendingTextRecognitionCancels.add(textRecognitionId);
+    }
+  }
   quickEditComposer.hidden = true;
   quickEditObjectId = null;
   quickEditAction = null;
@@ -1153,8 +1423,7 @@ async function submitQuickEdit() {
   }
   const objectId = quickEditObjectId;
   if (!objectId) return;
-  selectedId = objectId;
-  hasUserSelection = true;
+  setLocalSelection([objectId], { fromUser: true });
   closeQuickEdit();
   await startImageJob(action, { prompt });
 }
@@ -1178,32 +1447,18 @@ async function submitEditText() {
     return;
   }
 
-  const replacements = changes
-    .map((item) => `${item.index}. Replace "${item.from}" with "${item.to}"${item.location ? ` (${item.location})` : ""}.`)
-    .join("\n");
-  selectedId = objectId;
-  hasUserSelection = true;
+  setLocalSelection([objectId], { fromUser: true });
   quickEditRun.disabled = true;
-
-  const prompt = [
-    "Edit only the user-modified text fields in the attached image.",
-    "",
-    "Apply these exact text replacements:",
-    replacements,
-    "",
-    "Do not change any visible text that is not listed above.",
-    "Preserve the original layout, typography style, colors, image content, and aspect ratio."
-  ].join("\n");
 
   try {
     const response = await fetch(apiPath(`/api/text-recognition/${sessionId}/run`), {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ prompt, changes })
+      body: JSON.stringify({ action: "edit-text", changes })
     });
     const job = await response.json();
     if (!response.ok) throw new Error(job.error || `${labelAction("edit-text")} ${t("jobFailed")}`);
-    closeQuickEdit();
+    closeQuickEdit({ cancelTextSession: false });
     await loadState();
     frameJobPlacement(objectId, job.placeholder || null);
     pollEditTextSession(job.id);
@@ -1247,6 +1502,10 @@ async function startTextRecognition(objectId) {
     });
     const job = await response.json();
     if (!response.ok) throw new Error(job.error || t("jobFailed"));
+    if (pendingTextRecognitionCancels.delete(recognitionToken) || activeTextRecognitionId !== recognitionToken) {
+      cancelTextRecognitionSession(job.id);
+      return;
+    }
     activeTextRecognitionId = job.id;
     pollTextRecognitionJob(job.id);
   } catch (error) {
@@ -1254,6 +1513,14 @@ async function startTextRecognition(objectId) {
     editTextStatus.textContent = error?.message || t("jobFailed");
     quickEditRun.disabled = true;
   }
+}
+
+function cancelTextRecognitionSession(sessionId) {
+  fetch(apiPath(`/api/text-recognition/${sessionId}/run`), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action: "edit-text", cancelled: true })
+  }).catch(() => {});
 }
 
 function pollTextRecognitionJob(jobId) {
@@ -1420,10 +1687,9 @@ function focusTextObject(id) {
 function frameSelectedImageForViewing(object) {
   if (!object || (object.type || "image") !== "image") return;
   closeQuickEdit({ keepPrompt: true });
-  hasUserSelection = true;
-  selectedId = object.id;
-  if (state) state.selection = object.id;
-  frameWorldBounds(boundsForObjects([object]), {
+  setLocalSelection([object.id], { fromUser: true });
+  const groupId = selectedLayerGroupId();
+  frameWorldBounds(groupId ? layerGroupBounds(groupId) : boundsForObjects([object]), {
     paddingX: 88,
     paddingTop: 104,
     paddingBottom: 148,
@@ -1576,13 +1842,7 @@ function applyLanguage() {
     button.setAttribute("aria-label", label);
   });
 
-  const controlMap = ["reset", "layers", "search", "export"];
-  document.querySelectorAll(".canvas-controls button").forEach((button, index) => {
-    const label = translations[language].controls[controlMap[index]];
-    if (!label) return;
-    button.title = label;
-    button.setAttribute("aria-label", label);
-  });
+  if (state) updateSelectionUi();
 }
 
 function t(key) {
@@ -1791,6 +2051,77 @@ function boundsForObjects(objects) {
   };
 }
 
+function selectedLayerGroupId() {
+  const groupId = selectedObjectLayerGroupId();
+  return groupId && isLayerGroupLocked(groupId) ? groupId : null;
+}
+
+function selectedObjectLayerGroupId() {
+  if (!hasUserSelection || !selectedId || !state?.objects) return null;
+  const object = state.objects.find((item) => item.id === selectedId);
+  return object?.layerGroupId || null;
+}
+
+function layerGroupMembers(groupId) {
+  if (!groupId || !state?.objects) return [];
+  return state.objects
+    .filter((object) => object.layerGroupId === groupId)
+    .sort((a, b) => (a.layerGroupIndex || 0) - (b.layerGroupIndex || 0));
+}
+
+function layerGroupBounds(groupId) {
+  const members = layerGroupMembers(groupId);
+  return members.length ? boundsForObjects(members) : { x: 0, y: 0, width: 1, height: 1 };
+}
+
+function isLayerGroupLocked(groupId) {
+  return layerGroupMembers(groupId).some((member) => member.layerGroupLocked === true);
+}
+
+function layerGroupLabel(groupId) {
+  const member = layerGroupMembers(groupId)[0];
+  return member?.layerGroupName || "Layer group";
+}
+
+function layerGroupOrigin(groupId) {
+  const members = layerGroupMembers(groupId);
+  const anchor = members.find((item) => item.layerGroupKind === "background")
+    || members.find((item) => item.layerGroupRelativeX === 0 && item.layerGroupRelativeY === 0)
+    || members[0];
+  if (!anchor) return { x: 0, y: 0 };
+  return {
+    x: anchor.x - (Number.isFinite(anchor.layerGroupRelativeX) ? anchor.layerGroupRelativeX : 0),
+    y: anchor.y - (Number.isFinite(anchor.layerGroupRelativeY) ? anchor.layerGroupRelativeY : 0)
+  };
+}
+
+function updateToolbarForSelection(isGroupSelection) {
+  const groupOnly = new Set(["reset-layer-group", "group-layer-group"]);
+  const singleOnly = new Set(["quick-edit", "remove-bg", "edit-elements", "edit-text", "send-to-chat", "download"]);
+  const selectedGroupMemberId = selectedObjectLayerGroupId();
+  toolbar.querySelectorAll("[data-action]").forEach((button) => {
+    const action = button.dataset.action;
+    if (groupOnly.has(action)) button.hidden = !selectedGroupMemberId;
+    if (singleOnly.has(action)) button.hidden = isGroupSelection;
+  });
+  updateGroupActionButton(isGroupSelection);
+}
+
+function updateGroupActionButton(isGroupSelection) {
+  const button = toolbar.querySelector('[data-action="group-layer-group"]');
+  if (!button) return;
+  const groupId = selectedObjectLayerGroupId();
+  const locked = isGroupSelection && groupId && isLayerGroupLocked(groupId);
+  const label = locked
+    ? (language === "zh" ? "取消成组" : "Ungroup")
+    : actionLabel("group-layer-group");
+  button.dataset.tooltip = label;
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  const span = button.querySelector("span:not(.context-icon)");
+  if (span) span.textContent = label;
+}
+
 function worldToScreen(x, y) {
   return {
     x: viewport.x + x * viewport.zoom,
@@ -1850,11 +2181,60 @@ function downloadName(object) {
   return hasExt ? name : `${name}.png`;
 }
 
+async function resetSelectedLayerGroup() {
+  const groupId = selectedObjectLayerGroupId();
+  if (!groupId) return;
+  const origin = layerGroupOrigin(groupId);
+  const members = layerGroupMembers(groupId);
+  for (const member of members) {
+    const relativeX = Number.isFinite(member.layerGroupRelativeX) ? member.layerGroupRelativeX : member.x - origin.x;
+    const relativeY = Number.isFinite(member.layerGroupRelativeY) ? member.layerGroupRelativeY : member.y - origin.y;
+    member.x = Math.round(origin.x + relativeX);
+    member.y = Math.round(origin.y + relativeY);
+    if (Number.isFinite(member.layerGroupOriginalLayerWidth)) member.width = member.layerGroupOriginalLayerWidth;
+    if (Number.isFinite(member.layerGroupOriginalLayerHeight)) member.height = member.layerGroupOriginalLayerHeight;
+  }
+  render();
+  await patchLayerGroupMembersSequentially(members, (member) => ({
+    x: member.x,
+    y: member.y,
+    width: member.width,
+    height: member.height
+  }));
+}
+
+async function toggleSelectedLayerGroupLock() {
+  const groupId = selectedObjectLayerGroupId();
+  if (!groupId) return;
+  const members = layerGroupMembers(groupId);
+  if (!members.length) return;
+  const nextLocked = !isLayerGroupLocked(groupId);
+  for (const member of members) {
+    member.layerGroupLocked = nextLocked;
+  }
+  render();
+  await patchLayerGroupMembersSequentially(members, () => ({ layerGroupLocked: nextLocked }));
+}
+
+async function patchLayerGroupMembersSequentially(members, patchForMember) {
+  for (const member of members) {
+    await fetch(apiPath(`/api/objects/${member.id}`), {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patchForMember(member))
+    }).catch(() => {});
+  }
+}
+
 function updateMoreMenuPosition() {
   moreMenu.hidden = !isMoreMenuOpen || toolbar.hidden;
   if (moreMenu.hidden) return;
 
   const moreButton = toolbar.querySelector('[data-action="more"]');
+  if (!moreButton) {
+    moreMenu.hidden = true;
+    return;
+  }
   const buttonRect = moreButton.getBoundingClientRect();
   const menuRect = moreMenu.getBoundingClientRect();
   const boardRect = board.getBoundingClientRect();
