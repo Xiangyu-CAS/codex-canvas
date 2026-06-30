@@ -227,14 +227,55 @@ async function testMcpCanvasStatus() {
     if (!listed.tools?.some((tool) => tool.name === "canvas_status")) {
       throw new Error("MCP tools/list should expose canvas_status.");
     }
+    assertMcpToolSchema(listed.tools);
     const status = await client.request("tools/call", {
       name: "canvas_status",
       arguments: { projectDir }
     });
     assertEqual(status.structuredContent?.objects, 1, "MCP canvas_status should read default canvas state");
     assertEqual(status.structuredContent?.chatBound, false, "MCP canvas_status should not infer chat binding without threadId");
+    await assertRejects(
+      () => client.request("tools/call", {
+        name: "canvas_status",
+        arguments: {}
+      }),
+      "MCP tool call requires projectDir.",
+      "MCP canvas_status should reject missing projectDir instead of using cwd"
+    );
   } finally {
     await client.stop();
+  }
+}
+
+function assertMcpToolSchema(tools = []) {
+  const byName = new Map(tools.map((tool) => [tool.name, tool]));
+  for (const name of ["open_canvas", "canvas_status", "collect_recent_images"]) {
+    const required = byName.get(name)?.inputSchema?.required || [];
+    if (!required.includes("projectDir")) {
+      throw new Error(`MCP ${name} should require projectDir.`);
+    }
+  }
+  const addImageSchema = byName.get("add_image")?.inputSchema || {};
+  if (!addImageSchema.required?.includes("projectDir")) {
+    throw new Error("MCP add_image should require projectDir.");
+  }
+  const addImageAnyOf = JSON.stringify(addImageSchema.anyOf || []);
+  for (const imageInput of ["path", "url", "dataUrl"]) {
+    if (!addImageAnyOf.includes(imageInput)) {
+      throw new Error(`MCP add_image should declare ${imageInput} as an accepted image input.`);
+    }
+  }
+  const startImageJobRequired = byName.get("start_image_job")?.inputSchema?.required || [];
+  for (const field of ["projectDir", "objectId", "action"]) {
+    if (!startImageJobRequired.includes(field)) {
+      throw new Error(`MCP start_image_job should require ${field}.`);
+    }
+  }
+  const sendToChatRequired = byName.get("send_to_chat")?.inputSchema?.required || [];
+  for (const field of ["projectDir", "objectId", "threadId"]) {
+    if (!sendToChatRequired.includes(field)) {
+      throw new Error(`MCP send_to_chat should require ${field}.`);
+    }
   }
 }
 
@@ -644,6 +685,18 @@ function assertEqual(actual, expected, message) {
   if (actual !== expected) {
     throw new Error(`${message}. Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}.`);
   }
+}
+
+async function assertRejects(fn, expectedMessage, message) {
+  try {
+    await fn();
+  } catch (error) {
+    if (!String(error?.message || "").includes(expectedMessage)) {
+      throw new Error(`${message}. Expected rejection containing ${JSON.stringify(expectedMessage)}, got ${JSON.stringify(error?.message || String(error))}.`);
+    }
+    return;
+  }
+  throw new Error(`${message}. Expected rejection.`);
 }
 
 function assertSetEqual(actual, expected, message) {

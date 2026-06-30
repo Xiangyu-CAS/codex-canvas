@@ -50,6 +50,7 @@ async function handle(method, params) {
           description: "Start the Agent-Canvas local server and return the browser URL.",
           inputSchema: {
             type: "object",
+            required: ["projectDir"],
             properties: {
               projectDir: { type: "string", description: "Absolute path to the active Codex project." },
               port: { type: "number", description: "Local port. Defaults to 43217." },
@@ -62,6 +63,12 @@ async function handle(method, params) {
           description: "Copy or register an image into the current project canvas.",
           inputSchema: {
             type: "object",
+            required: ["projectDir"],
+            anyOf: [
+              { required: ["path"] },
+              { required: ["url"] },
+              { required: ["dataUrl"] }
+            ],
             properties: {
               projectDir: { type: "string" },
               path: { type: "string", description: "Local image path to copy into the canvas assets folder." },
@@ -78,6 +85,7 @@ async function handle(method, params) {
           description: "Read Agent-Canvas state for the active project.",
           inputSchema: {
             type: "object",
+            required: ["projectDir"],
             properties: {
               projectDir: { type: "string" },
               threadId: { type: "string", description: "Codex thread id whose canvas status should be read. Pass this explicitly for thread-scoped canvases; omitted means the default project canvas." }
@@ -89,6 +97,7 @@ async function handle(method, params) {
           description: "Scan recent generated and project images and import them into Agent-Canvas. Use as a fallback after imagegen when exact output paths are not known.",
           inputSchema: {
             type: "object",
+            required: ["projectDir"],
             properties: {
               projectDir: { type: "string" },
               roots: {
@@ -146,7 +155,7 @@ async function handle(method, params) {
   if (method === "tools/call") {
     const args = params.arguments || {};
     if (params.name === "open_canvas") {
-      const projectDir = resolveProjectDir(args.projectDir);
+      const projectDir = requireProjectDir(args);
       const entrypoint = path.join(pluginRoot, "bin", "agent-canvas.mjs");
       const cliArgs = ["open", "--project", projectDir, "--port", String(args.port || 43217)];
       if (args.threadId) cliArgs.push("--thread-id", args.threadId);
@@ -159,14 +168,14 @@ async function handle(method, params) {
     }
 
     if (params.name === "add_image") {
-      const projectDir = resolveProjectDir(args.projectDir);
+      const projectDir = requireProjectDir(args);
       const canvas = await resolveCanvasOptions(projectDir, args);
       const object = await addImage(projectDir, args, { canvasId: canvas.canvasId });
       return textResult(`Added image to Agent-Canvas: ${object.name}`, object);
     }
 
     if (params.name === "canvas_status") {
-      const projectDir = resolveProjectDir(args.projectDir);
+      const projectDir = requireProjectDir(args);
       const canvas = await resolveCanvasOptions(projectDir, args);
       const state = await readState(projectDir, { canvasId: canvas.canvasId });
       return textResult(`Agent-Canvas has ${state.objects.length} object(s).`, {
@@ -181,7 +190,7 @@ async function handle(method, params) {
     }
 
     if (params.name === "collect_recent_images") {
-      const projectDir = resolveProjectDir(args.projectDir);
+      const projectDir = requireProjectDir(args);
       const canvas = await resolveCanvasOptions(projectDir, args);
       const sinceMinutes = Number(args.sinceMinutes || 120);
       const result = await collectRecentImages(projectDir, {
@@ -196,7 +205,7 @@ async function handle(method, params) {
     }
 
     if (params.name === "start_image_job") {
-      const projectDir = resolveProjectDir(args.projectDir);
+      const projectDir = requireProjectDir(args);
       const canvas = await resolveCanvasOptions(projectDir, args);
       const job = await createImageJob(projectDir, {
         objectId: args.objectId,
@@ -207,7 +216,7 @@ async function handle(method, params) {
     }
 
     if (params.name === "send_to_chat") {
-      const projectDir = resolveProjectDir(args.projectDir);
+      const projectDir = requireProjectDir(args);
       const canvas = await resolveCanvasOptions(projectDir, args);
       if (!canvas.threadId) {
         const error = new Error("send_to_chat requires an explicit Codex threadId.");
@@ -237,6 +246,15 @@ async function handle(method, params) {
   }
 
   throw new Error(`Unsupported MCP method: ${method}`);
+}
+
+function requireProjectDir(args = {}) {
+  if (typeof args.projectDir !== "string" || !args.projectDir.trim()) {
+    const error = new Error("MCP tool call requires projectDir.");
+    error.statusCode = 400;
+    throw error;
+  }
+  return resolveProjectDir(args.projectDir);
 }
 
 function textResult(text, data) {
