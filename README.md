@@ -101,11 +101,10 @@ node ./bin/agent-canvas.mjs collect --project . --since-minutes 30 --limit 5
 本地开发时可以把当前仓库暴露给 Codex personal marketplace：
 
 ```bash
-mkdir -p ~/plugins ~/.agents/plugins
-ln -sfn /Users/zhuxiangyu/workspace/agent-canvas ~/plugins/agent-canvas
+npm run install:personal
 ```
 
-`~/.agents/plugins/marketplace.json` 中需要包含：
+该命令会跨平台创建或更新 `~/plugins/agent-canvas`，并把 `agent-canvas` 写入 `~/.agents/plugins/marketplace.json`。写入的插件条目形如：
 
 ```json
 {

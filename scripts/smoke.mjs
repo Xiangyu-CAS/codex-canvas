@@ -28,6 +28,7 @@ async function main() {
     ["mcp canvas status", testMcpCanvasStatus],
     ["auto collector watermark", testAutoCollectorWatermark],
     ["package optional dependency scripts", testPackageOptionalDependencyScripts],
+    ["personal plugin installer", testPersonalPluginInstaller],
     ["cli collect help", testCliCollectHelp],
     ["doctor optional deps without python", testDoctorOptionalDepsWithoutPython],
     ["chat binding alias", testChatBindingAlias],
@@ -353,10 +354,67 @@ async function testPackageOptionalDependencyScripts() {
     throw new Error("package.json should not install optional Python dependencies from postinstall.");
   }
   assertEqual(
+    packageJson.scripts?.["install:personal"],
+    "node ./scripts/install-personal-plugin.mjs",
+    "package.json should expose a deterministic personal marketplace installer"
+  );
+  assertEqual(
     packageJson.scripts?.["doctor:deps"],
     "node ./bin/agent-canvas.mjs doctor-deps --json",
     "package.json should expose a non-installing optional dependency doctor script"
   );
+}
+
+async function testPersonalPluginInstaller() {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-personal-plugin-"));
+  const marketplacePath = path.join(tmp, ".agents", "plugins", "marketplace.json");
+  await fs.mkdir(path.dirname(marketplacePath), { recursive: true });
+  await fs.writeFile(marketplacePath, `${JSON.stringify({
+    name: "personal",
+    interface: { displayName: "Personal" },
+    plugins: [
+      {
+        name: "other-plugin",
+        source: { source: "local", path: "./plugins/other-plugin" },
+        policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" },
+        category: "Productivity"
+      }
+    ]
+  }, null, 2)}\n`);
+
+  const env = {
+    ...process.env,
+    AGENT_CANVAS_PERSONAL_HOME: tmp
+  };
+  for (let run = 0; run < 2; run += 1) {
+    const { stdout } = await execFileAsync(process.execPath, [
+      path.join(process.cwd(), "scripts", "install-personal-plugin.mjs"),
+      "--json"
+    ], {
+      cwd: process.cwd(),
+      env,
+      maxBuffer: 1024 * 1024,
+      windowsHide: true
+    });
+    const result = JSON.parse(stdout);
+    assertEqual(result.ok, true, "personal plugin installer should report success");
+    assertEqual(result.sourcePath, "./plugins/agent-canvas", "personal plugin installer should use the marketplace-relative plugin path");
+  }
+
+  const marketplace = JSON.parse(await fs.readFile(marketplacePath, "utf8"));
+  const agentEntries = marketplace.plugins.filter((plugin) => plugin.name === "agent-canvas");
+  assertEqual(agentEntries.length, 1, "personal plugin installer should keep one agent-canvas entry after repeated runs");
+  assertEqual(agentEntries[0].source?.source, "local", "personal plugin entry should use a local source");
+  assertEqual(agentEntries[0].source?.path, "./plugins/agent-canvas", "personal plugin entry should point at the deterministic link");
+  assertEqual(agentEntries[0].policy?.installation, "AVAILABLE", "personal plugin entry should be installable");
+  if (!marketplace.plugins.some((plugin) => plugin.name === "other-plugin")) {
+    throw new Error("personal plugin installer should preserve existing marketplace plugins.");
+  }
+
+  const linkPath = path.join(tmp, "plugins", "agent-canvas");
+  const linkedRealPath = await fs.realpath(linkPath);
+  const repoRealPath = await fs.realpath(process.cwd());
+  assertEqual(linkedRealPath, repoRealPath, "personal plugin link should resolve to this repository");
 }
 
 async function testCliCollectHelp() {
