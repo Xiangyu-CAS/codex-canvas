@@ -61,7 +61,7 @@ async function main() {
 }
 
 async function captureReferenceViewport(browser, viewport, screenshotCase) {
-  const projectDir = await fsp.mkdtemp(path.join(os.tmpdir(), `agent-canvas-regression-${viewport.name}-`));
+  const projectDir = await fsp.mkdtemp(path.join(os.tmpdir(), `codex-canvas-regression-${viewport.name}-`));
   const source = await addImage(projectDir, {
     dataUrl: `data:image/png;base64,${pngOne}`,
     name: "reference-source.png",
@@ -118,13 +118,9 @@ async function captureReferenceViewport(browser, viewport, screenshotCase) {
       await page.locator(`.canvas-object[data-id="${source.id}"]`).click();
       await waitForVisible(page, "#selectionToolbar", "selection toolbar should be visible");
       await page.locator('[data-action="expand"]').click();
-      await waitForVisible(page, ".quick-edit-composer.quick-edit-mode", "Expand composer should be visible");
-      await page.waitForFunction(() => document.activeElement?.id === "quickEditPrompt", null, { timeout: 5000 });
-      await page.locator("#quickEditPrompt").fill("Extend the product scene with more studio background on every side");
-      await page.locator("#quickEditPrompt").evaluate((element) => {
-        element.style.caretColor = "transparent";
-        element.blur();
-      });
+      await waitForVisible(page, ".quick-edit-composer.expand-mode", "Expand composer should be visible");
+      await waitForVisible(page, "#expandPanel", "Expand controls should be visible");
+      await page.locator("#expandPanel").evaluate((element) => element.querySelector("input, button, select")?.blur?.());
       await page.waitForTimeout(50);
     } else if (screenshotCase === "crop") {
       await page.locator(`.canvas-object[data-id="${source.id}"]`).click();
@@ -276,7 +272,7 @@ async function createServer(options = {}) {
 
 async function persistentRegistryPathForVisualRegression() {
   if (!visualProjectRegistryPath) {
-    const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-canvas-regression-registry-"));
+    const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), "codex-canvas-regression-registry-"));
     visualProjectRegistryPath = path.join(tmp, "projects.json");
   }
   return visualProjectRegistryPath;

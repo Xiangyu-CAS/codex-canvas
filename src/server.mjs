@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { collectRecentImages } from "./collector.mjs";
-import { sendImageToBoundChat } from "./codex-chat.mjs";
+import { sendImageToBoundChat, sendMentionToBoundChat } from "./codex-chat.mjs";
 import { createImageJob, createTextRecognitionJob, getActivePlaceholderIds, getIgnoredGeneratedImagePaths, getImageJob, getTextRecognitionJob, hasRunningImageJobs, submitTextRecognitionEdit } from "./jobs.mjs";
 import { assetsDirFor, projectRegistryPath, publicDir, runtimePathFor } from "./paths.mjs";
 import { exportLayerGroupPsd } from "./psd-export.mjs";
@@ -69,7 +69,7 @@ export async function createServer({ projectDir, host = "127.0.0.1", port = 4321
 }
 
 async function handleRequest(request, response, context) {
-  const requestUrl = new URL(request.url, "http://agent-canvas.local");
+  const requestUrl = new URL(request.url, "http://codex-canvas.local");
   const pathname = decodePathname(requestUrl.pathname);
 
   if (request.method === "GET" && pathname === "/api/projects") {
@@ -209,7 +209,7 @@ async function handleRequest(request, response, context) {
     const body = await readJson(request, context.registry);
     const threadId = normalizeThreadId(body.threadId);
     if (!threadId) {
-      const error = new Error("A Codex threadId is required to bind Agent-Canvas to chat.");
+      const error = new Error("A Codex threadId is required to bind Codex-Canvas to chat.");
       error.statusCode = 400;
       throw error;
     }
@@ -338,7 +338,7 @@ function sendBinary(response, status, buffer, headers = {}) {
 }
 
 function headerSafeFilename(filename) {
-  return String(filename || "agent-canvas-layers.psd").replace(/["\\\r\n]/g, "_");
+  return String(filename || "codex-canvas-layers.psd").replace(/["\\\r\n]/g, "_");
 }
 
 function parsePositiveIntegerQueryParam(searchParams, name, defaultValue, fallbackName = null) {
@@ -450,7 +450,7 @@ async function restorePersistedProjects(registry) {
       canvasId: entry.canvasId || null,
       registeredAt: typeof entry.registeredAt === "string" ? entry.registeredAt : null
     }).catch((error) => {
-      console.error(`Agent-Canvas skipped persisted project ${entry.projectDir}: ${error.message}`);
+      console.error(`Codex-Canvas skipped persisted project ${entry.projectDir}: ${error.message}`);
     });
   }
   for (const alias of aliases) {
@@ -471,7 +471,7 @@ async function readPersistedRegistry(registryPath) {
     };
   } catch (error) {
     if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return { projects: [], aliases: [] };
-    console.error(`Agent-Canvas could not read project registry ${registryPath}: ${error.message}`);
+    console.error(`Codex-Canvas could not read project registry ${registryPath}: ${error.message}`);
     return { projects: [], aliases: [] };
   }
 }
@@ -506,7 +506,7 @@ async function persistProjectRegistrySafely(registry) {
   try {
     await persistProjectRegistry(registry);
   } catch (error) {
-    console.error(`Agent-Canvas could not write project registry ${registry.persistentRegistryPath}: ${error.message}`);
+    console.error(`Codex-Canvas could not write project registry ${registry.persistentRegistryPath}: ${error.message}`);
   }
 }
 
@@ -524,7 +524,7 @@ function startAutoCollector(project, registry) {
   const intervalMs = registry.autoCollectIntervalMs || 5000;
   project.collectorTimer = setInterval(() => {
     runAutoCollectorPass(project).catch((error) => {
-      console.error(`Agent-Canvas auto-collect failed for ${project.projectDir}: ${error.message}`);
+      console.error(`Codex-Canvas auto-collect failed for ${project.projectDir}: ${error.message}`);
     });
   }, intervalMs);
   project.collectorTimer.unref?.();
@@ -562,7 +562,7 @@ function scheduleAutoCollectorPass(project, debounceMs = 250) {
   project.collectorWatchDebounceTimer = setTimeout(() => {
     project.collectorWatchDebounceTimer = null;
     runAutoCollectorPass(project).catch((error) => {
-      console.error(`Agent-Canvas auto-collect watcher failed for ${project.projectDir}: ${error.message}`);
+      console.error(`Codex-Canvas auto-collect watcher failed for ${project.projectDir}: ${error.message}`);
     });
   }, Math.max(25, debounceMs));
   project.collectorWatchDebounceTimer.unref?.();
@@ -596,7 +596,7 @@ async function runAutoCollectorPass(project) {
     await collectRecentImages(project.projectDir, {
       sinceMs: project.collectSinceMs,
       limit: 10,
-      prompt: "Auto-collected while Agent-Canvas was open",
+      prompt: "Auto-collected while Codex-Canvas was open",
       excludePaths: getIgnoredGeneratedImagePaths(jobScopeFor(project)),
       canvasId: project.canvasId
     });
@@ -661,14 +661,14 @@ async function publicProject(project) {
 }
 
 async function sendObjectToBoundChat(projectDir, project, body = {}) {
-  if (body.action !== "send-to-chat") {
-    const error = new Error("Send to chat requires the stable send-to-chat action.");
+  if (!["send-to-chat", "mention-file"].includes(body.action)) {
+    const error = new Error("Send to chat requires a stable chat action.");
     error.statusCode = 400;
     throw error;
   }
   const threadId = normalizeThreadId(project.chatThreadId);
   if (!threadId) {
-    const error = new Error("Agent-Canvas is not bound to a Codex thread.");
+    const error = new Error("Codex-Canvas is not bound to a Codex thread.");
     error.statusCode = 409;
     throw error;
   }
@@ -681,21 +681,34 @@ async function sendObjectToBoundChat(projectDir, project, body = {}) {
     throw error;
   }
   const imagePath = object.assetPath || object.sourcePath;
-  const result = await sendImageToBoundChat({
-    projectDir,
-    threadId,
-    imagePath,
-    prompt: sendToChatPrompt()
-  });
+  const result = body.action === "mention-file"
+    ? await sendMentionToBoundChat({
+      projectDir,
+      threadId,
+      filePath: imagePath,
+      prompt: mentionFilePrompt(object),
+      includeImage: body.includeImage === true
+    })
+    : await sendImageToBoundChat({
+      projectDir,
+      threadId,
+      imagePath,
+      prompt: sendToChatPrompt()
+    });
   return {
     ...result,
+    action: body.action,
     objectId: object.id,
     imagePath
   };
 }
 
 function sendToChatPrompt() {
-  return "Use this selected Agent-Canvas image as context.";
+  return "Use this selected Codex-Canvas image as context.";
+}
+
+function mentionFilePrompt(object) {
+  return `Codex-Canvas mentioned @${object.name || "selected-image"} as a file context. Do not analyze or edit it yet. Reply only that the file is available and wait for the next instruction.`;
 }
 
 async function bindProjectToThread(registry, project, threadId) {

@@ -26,12 +26,12 @@ export async function main(args, context = {}) {
   const projectDir = resolveProjectDir(optionValue(options, ["project"], "--project"));
 
   if (command === "start") {
-    const port = normalizePort(optionValue(options, ["port"], "--port") ?? process.env.AGENT_CANVAS_PORT);
-    const host = optionValue(options, ["host"], "--host") || process.env.AGENT_CANVAS_HOST || "127.0.0.1";
+    const port = normalizePort(optionValue(options, ["port"], "--port") ?? process.env.CODEX_CANVAS_PORT);
+    const host = optionValue(options, ["host"], "--host") || process.env.CODEX_CANVAS_HOST || "127.0.0.1";
     const autoCollect = options["no-auto-collect"] !== true;
     const chatThreadId = normalizeThreadId(optionValue(options, ["thread-id", "threadId"], "--thread-id") || environmentThreadId());
     const { url } = await createServer({ projectDir, host, port, autoCollect, chatThreadId });
-    console.log(`Agent-Canvas listening on ${url}`);
+    console.log(`Codex-Canvas listening on ${url}`);
     console.log(`Project: ${projectDir}`);
     console.log(`Auto-collect: ${autoCollect ? "enabled" : "disabled"}`);
     console.log(`Chat thread: ${chatThreadId || "(not bound)"}`);
@@ -40,8 +40,8 @@ export async function main(args, context = {}) {
   }
 
   if (command === "open") {
-    const port = normalizePort(optionValue(options, ["port"], "--port") ?? process.env.AGENT_CANVAS_PORT);
-    const host = optionValue(options, ["host"], "--host") || process.env.AGENT_CANVAS_HOST || "127.0.0.1";
+    const port = normalizePort(optionValue(options, ["port"], "--port") ?? process.env.CODEX_CANVAS_PORT);
+    const host = optionValue(options, ["host"], "--host") || process.env.CODEX_CANVAS_HOST || "127.0.0.1";
     const defaultUrl = `http://${host}:${port}/`;
     const autoCollect = options["no-auto-collect"] !== true;
     const chatThreadId = normalizeThreadId(optionValue(options, ["thread-id", "threadId"], "--thread-id") || environmentThreadId());
@@ -69,7 +69,7 @@ export async function main(args, context = {}) {
       stdio: "ignore",
       env: {
         ...process.env,
-        AGENT_CANVAS_PROJECT_DIR: projectDir
+        CODEX_CANVAS_PROJECT_DIR: projectDir
       }
     });
     child.unref();
@@ -205,7 +205,7 @@ export async function main(args, context = {}) {
     if (flagEnabled(options.json)) {
       console.log(JSON.stringify(result, null, 2));
     } else if (checkOnly) {
-      console.log(`Agent-Canvas ${result.version}`);
+      console.log(`Codex-Canvas ${result.version}`);
       console.log(result.canUpdate
         ? `Git branch ${result.git.branch} tracks ${result.git.upstream}.`
         : "Automatic git update is unavailable for this install.");
@@ -213,7 +213,7 @@ export async function main(args, context = {}) {
         ? `Update available: ${result.git.behind} commit(s) behind.`
         : "No update available.");
     } else {
-      console.log(result.output || "Agent-Canvas update completed.");
+      console.log(result.output || "Codex-Canvas update completed.");
       console.log(`Current version: ${result.version}`);
       console.log(`Current git head: ${result.git.head || "(unknown)"}`);
     }
@@ -274,7 +274,7 @@ export async function main(args, context = {}) {
     return;
   }
 
-  throw usageError(`Unknown command: ${command}. Run "agent-canvas help" for usage.`);
+  throw usageError(`Unknown command: ${command}. Run "codex-canvas help" for usage.`);
 }
 
 function parseOptions(args) {
@@ -371,7 +371,7 @@ async function waitForRuntime(projectDir, timeoutMs) {
     if (runtime?.url && await isAgentCanvasAlive(runtime.url)) return runtime.url;
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
-  throw new Error("Agent-Canvas server did not start in time");
+  throw new Error("Codex-Canvas server did not start in time");
 }
 
 async function resolveCanvasOptions(projectDir, options = {}, runtime = null) {
@@ -432,7 +432,7 @@ async function servesAgentCanvasApp(url) {
   const contentType = response.headers.get("content-type") || "";
   if (!contentType.includes("text/html")) return false;
   const html = await response.text().catch(() => "");
-  return html.includes("<title>Agent-Canvas</title>");
+  return html.includes("<title>Codex-Canvas</title>");
 }
 
 function apiUrl(baseUrl, pathname) {
@@ -466,11 +466,11 @@ async function registerRemoteProject(baseUrl, projectDir, { autoCollect = true, 
     body: JSON.stringify({ projectDir, autoCollect, chatThreadId })
   }, 2000);
   if (!response) {
-    throw new Error("Agent-Canvas server did not respond to project registration.");
+    throw new Error("Codex-Canvas server did not respond to project registration.");
   }
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload.error || "Agent-Canvas server did not accept the project registration.");
+    throw new Error(payload.error || "Codex-Canvas server did not accept the project registration.");
   }
   const project = payload.project || {};
   return {
@@ -490,29 +490,29 @@ async function registerRemoteProject(baseUrl, projectDir, { autoCollect = true, 
 }
 
 function environmentThreadId() {
-  return process.env.AGENT_CANVAS_CODEX_THREAD_ID || process.env.CODEX_THREAD_ID || null;
+  return process.env.CODEX_CANVAS_CODEX_THREAD_ID || process.env.CODEX_THREAD_ID || null;
 }
 
 function printHelp() {
   console.log(`
-Agent-Canvas
+Codex-Canvas
 
 Usage:
-  agent-canvas open [--project <dir>] [--host 127.0.0.1] [--port 43217] [--thread-id <codex-thread-id>]
-  agent-canvas start [--project <dir>] [--host 127.0.0.1] [--port 43217] [--thread-id <codex-thread-id>] [--no-auto-collect]
-  agent-canvas import <image-path> [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--prompt <text>] [--name <name>]
-  agent-canvas collect [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--from <dir,dir>] [--since-minutes 120] [--limit 20]
-  agent-canvas search [query] [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--type image|text|drawing|job] [--limit 20] [--json]
-  agent-canvas prompts [query] [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--limit 20] [--json]
-  agent-canvas versions [query] [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--group-by sourceObjectId|batchId|layoutMode|prompt] [--limit 20] [--object-limit 20] [--json]
-  agent-canvas status [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--json]
-  agent-canvas update [--check] [--json]
-  agent-canvas setup-deps [--json]
-  agent-canvas setup-ocr [--optional] [--json]
-  agent-canvas setup-image-deps [--optional] [--json]
-  agent-canvas doctor-ocr [--json]
-  agent-canvas doctor-image-deps [--json]
-  agent-canvas doctor-deps [--json]
+  codex-canvas open [--project <dir>] [--host 127.0.0.1] [--port 43217] [--thread-id <codex-thread-id>]
+  codex-canvas start [--project <dir>] [--host 127.0.0.1] [--port 43217] [--thread-id <codex-thread-id>] [--no-auto-collect]
+  codex-canvas import <image-path> [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--prompt <text>] [--name <name>]
+  codex-canvas collect [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--from <dir,dir>] [--since-minutes 120] [--limit 20]
+  codex-canvas search [query] [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--type image|text|drawing|job] [--limit 20] [--json]
+  codex-canvas prompts [query] [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--limit 20] [--json]
+  codex-canvas versions [query] [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--group-by sourceObjectId|batchId|layoutMode|prompt] [--limit 20] [--object-limit 20] [--json]
+  codex-canvas status [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--json]
+  codex-canvas update [--check] [--json]
+  codex-canvas setup-deps [--json]
+  codex-canvas setup-ocr [--optional] [--json]
+  codex-canvas setup-image-deps [--optional] [--json]
+  codex-canvas doctor-ocr [--json]
+  codex-canvas doctor-image-deps [--json]
+  codex-canvas doctor-deps [--json]
 
 Commands:
   open      Start the local server in the background and print the canvas URL.
@@ -523,7 +523,7 @@ Commands:
   prompts   List recent unique prompts from canvas objects.
   versions  Group canvas object version history by sourceObjectId, batchId, layoutMode, or prompt.
   status    Print current canvas runtime and object count.
-  update    Check for or apply a git fast-forward update for this Agent-Canvas install.
+  update    Check for or apply a git fast-forward update for this Codex-Canvas install.
   setup-ocr Explicitly install RapidOCR for local Edit Text recognition.
   setup-image-deps Explicitly install Pillow and numpy for Edit Elements local layer processing.
   setup-deps Explicitly install optional Python dependencies for OCR and Edit Elements.
@@ -533,6 +533,6 @@ Commands:
 
 Canvas scope:
   --thread-id selects the canvas bound to a Codex thread.
-  --canvas-id selects an explicit Agent-Canvas canvas scope and overrides --thread-id.
+  --canvas-id selects an explicit Codex-Canvas canvas scope and overrides --thread-id.
 `.trim());
 }

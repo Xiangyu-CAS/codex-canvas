@@ -56,7 +56,7 @@ export async function exportLayerGroupPsd(projectDir, groupId, options = {}) {
 
   return {
     buffer,
-    filename: `${safeDownloadName(members[0]?.layerGroupName || "agent-canvas-layers")}.psd`,
+    filename: `${safeDownloadName(members[0]?.layerGroupName || "codex-canvas-layers")}.psd`,
     layerCount: children.length
   };
 }
@@ -114,10 +114,10 @@ function layerName(member) {
 }
 
 function safeDownloadName(name) {
-  const cleaned = String(name || "agent-canvas-layers")
+  const cleaned = String(name || "codex-canvas-layers")
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, "-")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 80);
-  return cleaned || "agent-canvas-layers";
+  return cleaned || "codex-canvas-layers";
 }

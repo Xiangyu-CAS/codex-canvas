@@ -1,12 +1,12 @@
 {
-  "name": "agent-canvas",
+  "name": "codex-canvas",
   "version": "0.1.1+codex.20260630000000",
   "description": "Local infinite canvas for Codex image generation and editing workflows.",
   "author": {
-    "name": "Agent-Canvas Contributors"
+    "name": "Codex-Canvas Contributors"
   },
-  "homepage": "https://github.com/agent-canvas/agent-canvas",
-  "repository": "https://github.com/agent-canvas/agent-canvas",
+  "homepage": "https://github.com/codex-canvas/codex-canvas",
+  "repository": "https://github.com/codex-canvas/codex-canvas",
   "license": "MIT",
   "keywords": [
     "codex",
@@ -17,21 +17,21 @@
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
-    "displayName": "Agent Canvas",
+    "displayName": "Codex Canvas",
     "shortDescription": "Open a local infinite canvas for Codex images.",
-    "longDescription": "Agent Canvas adds a project-local infinite canvas to Codex. It can open a browser canvas, collect ImageGen outputs, run background image-edit jobs, split images into editable element layers, and send selected canvas images back to a bound Codex thread.",
-    "developerName": "Agent-Canvas Contributors",
+    "longDescription": "Codex Canvas adds a project-local infinite canvas to Codex. It can open a browser canvas, collect ImageGen outputs, run background image-edit jobs, split images into editable element layers, and send selected canvas images back to a bound Codex thread.",
+    "developerName": "Codex-Canvas Contributors",
     "category": "Productivity",
     "capabilities": [
       "Interactive",
       "Read",
       "Write"
     ],
-    "websiteURL": "https://github.com/agent-canvas/agent-canvas",
-    "privacyPolicyURL": "https://github.com/agent-canvas/agent-canvas",
-    "termsOfServiceURL": "https://github.com/agent-canvas/agent-canvas",
+    "websiteURL": "https://github.com/codex-canvas/codex-canvas",
+    "privacyPolicyURL": "https://github.com/codex-canvas/codex-canvas",
+    "termsOfServiceURL": "https://github.com/codex-canvas/codex-canvas",
     "defaultPrompt": [
-      "Open the Agent-Canvas board",
+      "Open the Codex-Canvas board",
       "Generate an image and collect it on canvas",
       "Show the current canvas status"
     ],

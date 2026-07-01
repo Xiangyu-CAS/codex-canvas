@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Agent-Canvas</title>
+    <title>Codex-Canvas</title>
     <link rel="icon" href="/icon.png" type="image/png" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
@@ -76,7 +76,7 @@
             </div>
           </div>
 
-          <div id="board" class="board" tabindex="0" aria-label="Agent canvas">
+          <div id="board" class="board" tabindex="0" aria-label="Codex canvas">
             <div id="emptyState" class="empty-state">
             </div>
             <div id="world" class="world">
@@ -176,6 +176,12 @@
                 <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M14.536 21.686a.5.5 0 0 0 .937 -.024l6.5 -19a.496 .496 0 0 0 -.635 -.635l-19 6.5a.5 .5 0 0 0 -.024 .937l7.93 3.18a2 2 0 0 1 1.112 1.11z" />
                   <path d="m21.854 2.147 -10.94 10.939" />
+                </svg>
+              </button>
+              <button class="icon-only" data-action="copy-file-mention" data-tooltip="Copy @file" title="Copy @file" aria-label="Copy @file">
+                <svg class="context-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="12" cy="12" r="4" />
+                  <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8" />
                 </svg>
               </button>
               <button class="icon-only" data-action="download" data-tooltip="Download" title="Download" aria-label="Download">

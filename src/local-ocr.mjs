@@ -6,7 +6,7 @@ const execFileAsync = promisify(execFile);
 const ocrTimeoutMs = 25_000;
 
 export async function recognizeTextLocal(imagePath, { outputPath = null } = {}) {
-  if (process.env.AGENT_CANVAS_LOCAL_OCR === "0") {
+  if (process.env.CODEX_CANVAS_LOCAL_OCR === "0") {
     return { backend: "disabled", items: [], error: "Local OCR is disabled." };
   }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compose Agent-Canvas Quick Edit annotations onto a temporary PNG input."""
+"""Compose Codex-Canvas Quick Edit annotations onto a temporary PNG input."""
 
 from __future__ import annotations
 

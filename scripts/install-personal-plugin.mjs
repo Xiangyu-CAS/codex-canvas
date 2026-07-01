@@ -3,14 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const pluginName = "agent-canvas";
+const pluginName = "codex-canvas";
 const pluginCategory = "Productivity";
 const marketplaceName = "personal";
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  const homeDir = path.resolve(process.env.AGENT_CANVAS_PERSONAL_HOME || os.homedir());
+  const homeDir = path.resolve(process.env.CODEX_CANVAS_PERSONAL_HOME || os.homedir());
   const linkPath = path.join(homeDir, "plugins", pluginName);
   const marketplacePath = path.join(homeDir, ".agents", "plugins", "marketplace.json");
   const sourcePath = `./plugins/${pluginName}`;
@@ -33,7 +33,7 @@ async function main() {
   if (options.json) {
     console.log(JSON.stringify(payload, null, 2));
   } else {
-    console.log(`Agent-Canvas personal plugin entry is available at ${marketplacePath}`);
+    console.log(`Codex-Canvas personal plugin entry is available at ${marketplacePath}`);
     console.log(`Plugin link: ${linkPath} -> ${rootDir}`);
   }
 }
@@ -53,7 +53,7 @@ async function ensurePluginLink(linkPath, targetPath) {
   if (existing) {
     await fs.rm(linkPath, { force: true, recursive: true });
   } else if (await pathExists(linkPath)) {
-    throw new Error(`Refusing to replace non-symlink plugin path: ${linkPath}. Remove that path or choose a different AGENT_CANVAS_PERSONAL_HOME.`);
+    throw new Error(`Refusing to replace non-symlink plugin path: ${linkPath}. Remove that path or choose a different CODEX_CANVAS_PERSONAL_HOME.`);
   }
 
   try {

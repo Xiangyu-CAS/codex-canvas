@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import path from "node:path";
 import net from "node:net";
 import { resolveCodexExecutable, spawnCodexProcess } from "./codex-runner.mjs";
 
@@ -7,7 +8,7 @@ const chatTurnTimeoutMs = 120000;
 
 export async function sendImageToBoundChat({ projectDir, threadId, imagePath, prompt }) {
   if (!threadId) {
-    const error = new Error("Agent-Canvas is not bound to a Codex thread.");
+    const error = new Error("Codex-Canvas is not bound to a Codex thread.");
     error.statusCode = 409;
     throw error;
   }
@@ -16,12 +17,66 @@ export async function sendImageToBoundChat({ projectDir, threadId, imagePath, pr
     error.statusCode = 400;
     throw error;
   }
+  return sendInputsToBoundChat({
+    projectDir,
+    threadId,
+    input: [
+      {
+        type: "text",
+        text: prompt || "Use this selected Codex-Canvas image as context.",
+        text_elements: []
+      },
+      {
+        type: "localImage",
+        path: imagePath
+      }
+    ]
+  });
+}
+
+export async function sendMentionToBoundChat({ projectDir, threadId, filePath, prompt, includeImage = false }) {
+  if (!threadId) {
+    const error = new Error("Codex-Canvas is not bound to a Codex thread.");
+    error.statusCode = 409;
+    throw error;
+  }
+  if (!filePath) {
+    const error = new Error("The selected image must be a local canvas asset before mentioning it in chat.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const input = [
+    {
+      type: "text",
+      text: prompt || "Mention this Codex-Canvas file as context and wait for the next instruction.",
+      text_elements: []
+    },
+    {
+      type: "mention",
+      name: path.basename(filePath),
+      path: filePath
+    }
+  ];
+  if (includeImage) {
+    input.push({
+      type: "localImage",
+      path: filePath
+    });
+  }
+  return sendInputsToBoundChat({
+    projectDir,
+    threadId,
+    input
+  });
+}
+
+async function sendInputsToBoundChat({ projectDir, threadId, input }) {
   const server = await startAppServer();
   const client = new JsonRpcWebSocketClient(`ws://127.0.0.1:${server.port}`);
   try {
     await client.open();
     await client.request("initialize", {
-      clientInfo: { name: "agent-canvas", version: "0.1.1" },
+      clientInfo: { name: "codex-canvas", version: "0.1.1" },
       capabilities: null
     });
     await client.request("thread/resume", {
@@ -31,17 +86,7 @@ export async function sendImageToBoundChat({ projectDir, threadId, imagePath, pr
 
     const turnResponse = await client.request("turn/start", {
       threadId,
-      input: [
-        {
-          type: "text",
-          text: prompt || "Use this selected Agent-Canvas image as context.",
-          text_elements: []
-        },
-        {
-          type: "localImage",
-          path: imagePath
-        }
-      ]
+      input
     });
     const turnId = turnResponse?.turn?.id || null;
     const completion = await client.waitForNotification((message) => {

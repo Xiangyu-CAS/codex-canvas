@@ -1,8 +1,8 @@
-# Agent-Canvas Development Notes
+# Codex-Canvas Development Notes
 
 ## Cross-Platform Requirement
 
-- Agent-Canvas must remain compatible with both macOS and Windows.
+- Codex-Canvas must remain compatible with both macOS and Windows.
 - Do not implement core app behavior with OS-specific UI automation such as AppleScript, `osascript`, System Events, Windows UI Automation, coordinate clicking, or simulated keystrokes into the Codex desktop app.
 - Prefer browser, plugin, MCP/tool, or other Codex-supported integration surfaces that work consistently across macOS and Windows.
 

@@ -23,7 +23,7 @@ export async function appUpdateStatus({ checkRemote = false } = {}) {
 export async function updateApp() {
   const before = await appUpdateStatus({ checkRemote: true });
   if (!before.git.available) {
-    const error = new Error("Agent-Canvas is not installed from a git checkout, so in-app git update is unavailable.");
+    const error = new Error("Codex-Canvas is not installed from a git checkout, so in-app git update is unavailable.");
     error.statusCode = 409;
     throw error;
   }
@@ -59,7 +59,7 @@ async function readPackageInfo() {
     pluginVersion = null;
   }
   return {
-    name: packageJson.name || "agent-canvas",
+    name: packageJson.name || "codex-canvas",
     version: packageJson.version || "0.0.0",
     pluginVersion
   };

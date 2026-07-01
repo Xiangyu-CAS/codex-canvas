@@ -17,6 +17,7 @@ const expectedSingleImageActions = [
   "edit-elements",
   "edit-text",
   "send-to-chat",
+  "copy-file-mention",
   "download"
 ];
 const viewports = [
@@ -86,7 +87,7 @@ async function createServer(options = {}) {
 
 async function persistentRegistryPathForVisualSmoke() {
   if (!visualProjectRegistryPath) {
-    const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-canvas-visual-registry-"));
+    const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), "codex-canvas-visual-registry-"));
     visualProjectRegistryPath = path.join(tmp, "projects.json");
   }
   return visualProjectRegistryPath;
@@ -150,7 +151,7 @@ async function importPlaywrightFromNpmExecPath() {
 }
 
 async function runViewportSmoke(browser, viewport) {
-  const projectDir = await fsp.mkdtemp(path.join(os.tmpdir(), `agent-canvas-visual-${viewport.name}-`));
+  const projectDir = await fsp.mkdtemp(path.join(os.tmpdir(), `codex-canvas-visual-${viewport.name}-`));
   const image = await addImage(projectDir, {
     dataUrl: `data:image/png;base64,${pngOne}`,
     name: `${viewport.name}-visual.png`,
@@ -370,7 +371,7 @@ async function canvasObjectRects(page, ids) {
 
 async function runEditElementsLayerSmoke(browser) {
   const viewport = { name: "edit-elements", width: 1280, height: 800 };
-  const projectDir = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-canvas-visual-elements-"));
+  const projectDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codex-canvas-visual-elements-"));
   const groupId = "layer_group_visual_edit_elements";
   const background = await addImage(projectDir, {
     dataUrl: `data:image/png;base64,${pngOne}`,
@@ -462,7 +463,7 @@ async function runEditElementsLayerSmoke(browser) {
 }
 
 async function runUploadPartialFailureSmoke(browser) {
-  const projectDir = await fsp.mkdtemp(path.join(os.tmpdir(), "agent-canvas-visual-upload-"));
+  const projectDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codex-canvas-visual-upload-"));
   const { server, url } = await createServer({ projectDir, port: 0, autoCollect: false });
   const context = await browser.newContext({
     viewport: { width: 900, height: 620 }
@@ -478,9 +479,9 @@ async function runUploadPartialFailureSmoke(browser) {
     await page.goto(url, { waitUntil: "networkidle" });
     await waitForVisible(page, "#board", "board should be visible before upload");
     await page.evaluate(() => {
-      window.__agentCanvasUploadSeen = [];
+      window.__codexCanvasUploadSeen = [];
       document.querySelector("#imageUploadInput")?.addEventListener("change", (event) => {
-        window.__agentCanvasUploadSeen = [...event.target.files].map((file) => ({
+        window.__codexCanvasUploadSeen = [...event.target.files].map((file) => ({
           name: file.name,
           type: file.type,
           size: file.size
@@ -505,14 +506,14 @@ async function runUploadPartialFailureSmoke(browser) {
         .then((state) => state.objects.length === 1);
     }, null, { timeout: 5000 }).catch(async (error) => {
       const debug = await page.evaluate(() => ({
-        seen: window.__agentCanvasUploadSeen || [],
+        seen: window.__codexCanvasUploadSeen || [],
         toast: document.querySelector("#toast")?.textContent || ""
       }));
       throw new Error(`partial upload should persist one valid image before refreshing UI: ${error.message}; debug=${JSON.stringify(debug)}`);
     });
     await waitForVisible(page, ".canvas-object", "valid upload should render even when a later file fails").catch(async (error) => {
       const debug = await page.evaluate(() => ({
-        seen: window.__agentCanvasUploadSeen || [],
+        seen: window.__codexCanvasUploadSeen || [],
         toast: document.querySelector("#toast")?.textContent || "",
         domObjects: document.querySelectorAll(".canvas-object").length,
         objectLayerHtml: document.querySelector("#objects")?.innerHTML || "",
@@ -681,7 +682,7 @@ async function assertEditElementsLayerSelection(page, { backgroundId, foreground
   assert(selection.labelText === "", "Edit Elements unlocked selection should not show a group overlay label");
   assertDeepEqual(
     selection.visibleActions,
-    ["quick-edit", "remove-bg", "expand", "crop", "edit-elements", "reset-layer-group", "layer-down", "layer-up", "group-layer-group", "edit-text", "send-to-chat", "download"],
+    ["quick-edit", "remove-bg", "expand", "crop", "edit-elements", "reset-layer-group", "layer-down", "layer-up", "group-layer-group", "edit-text", "send-to-chat", "copy-file-mention", "download"],
     "Edit Elements unlocked layer selection should expose image actions plus group actions"
   );
   assert(

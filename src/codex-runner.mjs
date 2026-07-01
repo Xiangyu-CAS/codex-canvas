@@ -6,7 +6,7 @@ import path from "node:path";
 const executableNames = process.platform === "win32" ? ["codex.exe", "codex.cmd", "codex"] : ["codex"];
 
 export async function resolveCodexExecutable() {
-  const configured = process.env.AGENT_CANVAS_CODEX_CLI;
+  const configured = process.env.CODEX_CANVAS_CODEX_CLI;
   const candidates = [
     configured,
     ...platformBundledCandidates(),
@@ -17,7 +17,7 @@ export async function resolveCodexExecutable() {
     if (await isExecutable(candidate)) return candidate;
   }
 
-  const error = new Error("Codex CLI was not found. Open or install Codex App, or set AGENT_CANVAS_CODEX_CLI.");
+  const error = new Error("Codex CLI was not found. Open or install Codex App, or set CODEX_CANVAS_CODEX_CLI.");
   error.statusCode = 503;
   throw error;
 }
@@ -28,8 +28,8 @@ export async function startCodexImageJob({ projectDir, action, imagePath, output
   await fs.mkdir(path.dirname(logPath), { recursive: true });
 
   const prompt = promptForAction({ action, outputDir, userPrompt });
-  const model = process.env.AGENT_CANVAS_CODEX_MODEL;
-  const requestedReasoningEffort = process.env.AGENT_CANVAS_CODEX_REASONING_EFFORT || "low";
+  const model = process.env.CODEX_CANVAS_CODEX_MODEL;
+  const requestedReasoningEffort = process.env.CODEX_CANVAS_CODEX_REASONING_EFFORT || "low";
   const reasoningEffort = requestedReasoningEffort === "minimal" ? "low" : requestedReasoningEffort;
   const imagePaths = (Array.isArray(imagePath) ? imagePath : [imagePath]).filter(Boolean);
   const args = [
@@ -53,7 +53,7 @@ export async function startCodexImageJob({ projectDir, action, imagePath, output
     cwd: projectDir,
     env: {
       ...process.env,
-      AGENT_CANVAS_JOB_OUTPUT_DIR: outputDir,
+      CODEX_CANVAS_JOB_OUTPUT_DIR: outputDir,
       NO_COLOR: "1"
     },
     stdio: ["ignore", "pipe", "pipe"],
@@ -108,7 +108,7 @@ function summarizeCodexFailure(log) {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-    .filter((line) => !line.startsWith("[agent-canvas]"))
+    .filter((line) => !line.startsWith("[codex-canvas]"))
     .filter((line) => !/^Reading additional input from stdin/i.test(line));
   const detail = lines.at(-1);
   if (!detail) return "";
@@ -185,7 +185,7 @@ function promptForAction({ action, outputDir, userPrompt }) {
     const textInventoryPath = path.join(outputDir, "recognized-text.json");
     const editPlanPath = path.join(outputDir, "edit-plan.json");
     return [
-      "Use the canvas-edit-text skill and the imagegen skill for an Agent-Canvas Edit Text session.",
+      "Use the canvas-edit-text skill and the imagegen skill for an Codex-Canvas Edit Text session.",
       "This is an interactive background session coordinated through files. Do not exit after recognition.",
       "Optimize for latency: do not inspect unrelated repository files and do not run broad filesystem searches.",
       "",
@@ -312,7 +312,7 @@ function promptForAction({ action, outputDir, userPrompt }) {
       "Use a descriptive filename ending in .png, such as edit-elements-segmentation.png.",
       "As soon as the generated PNG exists, copy it into the output directory and finish.",
       "Do not modify source files outside that output directory.",
-      "Do not ask follow-up questions. Do not run the local splitting algorithm yourself; Agent-Canvas will do that after collection.",
+      "Do not ask follow-up questions. Do not run the local splitting algorithm yourself; Codex-Canvas will do that after collection.",
       "",
       "Finish with a concise message containing the saved segmentation map path."
     ].join("\n");
@@ -320,7 +320,7 @@ function promptForAction({ action, outputDir, userPrompt }) {
 
   if (action === "edit-elements-background") {
     return [
-      "Use the canvas-edit-elements skill and the imagegen skill to complete an Agent-Canvas Edit Elements background layer.",
+      "Use the canvas-edit-elements skill and the imagegen skill to complete an Codex-Canvas Edit Elements background layer.",
       "Optimize for latency: do not inspect unrelated repository files, do not produce variants, and do not run broad filesystem searches before generation.",
       "",
       "Attached image 1 is the original source image.",
@@ -337,7 +337,7 @@ function promptForAction({ action, outputDir, userPrompt }) {
       "Use a descriptive filename ending in .png, such as edit-elements-background-completed.png.",
       "As soon as the generated PNG exists, copy it into the output directory and finish.",
       "Do not modify source files outside that output directory.",
-      "Do not ask follow-up questions. Do not run the local splitting algorithm yourself; Agent-Canvas will integrate the completed background after collection.",
+      "Do not ask follow-up questions. Do not run the local splitting algorithm yourself; Codex-Canvas will integrate the completed background after collection.",
       "",
       "Finish with a concise message containing the saved completed background path."
     ].join("\n");
@@ -357,7 +357,7 @@ function promptForAction({ action, outputDir, userPrompt }) {
     "Generate the foreground subject on a perfectly flat solid #ff00ff chroma-key background.",
     "The background must be one uniform #ff00ff color with no shadows, gradients, texture, reflections, floor plane, or lighting variation.",
     "Do not use #ff00ff anywhere in the subject. Keep the subject fully separated from the background with crisp edges and generous padding.",
-    "Agent-Canvas will remove the chroma key locally and verify the final PNG alpha channel before collecting it.",
+    "Codex-Canvas will remove the chroma key locally and verify the final PNG alpha channel before collecting it.",
     "",
     `Save or copy the final image into this exact directory: ${outputDir}`,
     "Use a descriptive filename ending in .png, such as remove-bg-chroma-source.png.",

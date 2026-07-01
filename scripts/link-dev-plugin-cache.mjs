@@ -6,9 +6,9 @@ import { fileURLToPath } from "node:url";
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  const homeDir = path.resolve(options.home || process.env.AGENT_CANVAS_PERSONAL_HOME || os.homedir());
+  const homeDir = path.resolve(options.home || process.env.CODEX_CANVAS_PERSONAL_HOME || os.homedir());
   const manifest = JSON.parse(await fs.readFile(path.join(rootDir, ".codex-plugin", "plugin.json"), "utf8"));
-  const pluginName = manifest.name || "agent-canvas";
+  const pluginName = manifest.name || "codex-canvas";
   const pluginVersion = manifest.version;
 
   if (!pluginVersion) {

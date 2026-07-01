@@ -36,8 +36,8 @@ const zoomWheelSensitivity = 0.0024;
 const maxWheelZoomDelta = 160;
 const uploadMaxDisplaySize = 420;
 const searchDebounceMs = 180;
-const languageStorageKey = "agentCanvasLanguage";
-const toolColorStorageKey = "agentCanvasToolColor";
+const languageStorageKey = "codexCanvasLanguage";
+const toolColorStorageKey = "codexCanvasToolColor";
 const toolColors = ["#202124", "#d93025", "#f9ab00", "#188038", "#1a73e8", "#9334e6", "#ffffff"];
 const initialSearchParams = new URLSearchParams(window.location.search);
 let currentProjectId = initialSearchParams.get("project") || "";
@@ -47,7 +47,7 @@ const pendingTextRecognitionCancels = new Set();
 
 const translations = {
   en: {
-    agentCanvas: "Agent canvas",
+    codexCanvas: "Codex canvas",
     canvasTools: "Canvas tools",
     canvasViewControls: "Canvas view controls",
     settings: "Settings",
@@ -121,6 +121,8 @@ const translations = {
     jobFailed: "failed.",
     chatSendStarted: "Sending image to bound chat...",
     chatSendDone: "Image sent to bound chat.",
+    fileMentionCopied: "@file reference copied. Paste it into the Codex chat box.",
+    fileMentionCopyFailed: "Could not copy @file reference.",
     chatNotBound: "Bind this canvas to a Codex thread first.",
     uploadDone: "Image uploaded.",
     uploadFailed: "Image upload failed.",
@@ -137,6 +139,7 @@ const translations = {
       "group-layer-group": "Group",
       "edit-text": "Edit Text",
       "send-to-chat": "Send to chat",
+      "copy-file-mention": "Copy @file",
       "download": "Download"
     },
     actionNames: {
@@ -151,6 +154,7 @@ const translations = {
       "group-layer-group": "Group",
       "edit-text": "Edit Text",
       "send-to-chat": "Send to chat",
+      "copy-file-mention": "Copy @file",
       "download": "Download"
     },
     tools: {
@@ -170,7 +174,7 @@ const translations = {
     }
   },
   zh: {
-    agentCanvas: "Agent 画布",
+    codexCanvas: "Agent 画布",
     canvasTools: "画布工具",
     canvasViewControls: "画布视图控制",
     settings: "设置",
@@ -244,6 +248,8 @@ const translations = {
     jobFailed: "失败。",
     chatSendStarted: "正在发送图片到已绑定对话...",
     chatSendDone: "图片已发送到已绑定对话。",
+    fileMentionCopied: "@file 引用已复制，请粘贴到 Codex 聊天框。",
+    fileMentionCopyFailed: "无法复制 @file 引用。",
     chatNotBound: "请先把画布绑定到 Codex thread。",
     uploadDone: "图片已上传。",
     uploadFailed: "图片上传失败。",
@@ -260,6 +266,7 @@ const translations = {
       "group-layer-group": "成组",
       "edit-text": "编辑文字",
       "send-to-chat": "发送到对话",
+      "copy-file-mention": "复制 @文件",
       "download": "下载"
     },
     actionNames: {
@@ -274,6 +281,7 @@ const translations = {
       "group-layer-group": "成组",
       "edit-text": "编辑文字",
       "send-to-chat": "发送到对话",
+      "copy-file-mention": "复制 @文件",
       "download": "下载"
     },
     tools: {
@@ -340,7 +348,8 @@ const singleSelectionActions = new Set([
   ...composerImageActions,
   ...immediateImageJobActions,
   "crop",
-  "send-to-chat"
+  "send-to-chat",
+  "copy-file-mention"
 ]);
 
 initPromptHistoryUi();
@@ -519,6 +528,10 @@ document.addEventListener("click", (event) => {
     }
     if (action === "send-to-chat") {
       sendSelectedImageToChat();
+      return;
+    }
+    if (action === "copy-file-mention") {
+      copySelectedFileMention();
       return;
     }
     showToast(labelAction(action));
@@ -1410,6 +1423,9 @@ function render() {
     element.style.width = `${object.width}px`;
     element.style.height = `${object.height}px`;
     element.dataset.id = object.id;
+    if ((object.type || "image") === "image") {
+      applyImageAnnotationMetadata(element, object);
+    }
 
     if (object.type === "drawing") {
       element.append(renderDrawingObject(object));
@@ -1808,12 +1824,42 @@ function renderImageObject(object) {
   frame.className = "image-content";
 
   const image = document.createElement("img");
+  const label = imageAnnotationLabel(object);
   image.src = assetUrl(object.src, object);
   image.alt = object.name || "Canvas image";
+  image.title = label;
+  image.setAttribute("aria-label", label);
+  image.dataset.objectId = object.id;
+  if (object.assetPath) image.dataset.fileMention = `@${object.assetPath}`;
+  if (object.assetPath) image.dataset.assetPath = object.assetPath;
+  if (object.sourcePath) image.dataset.sourcePath = object.sourcePath;
   image.draggable = false;
   applyImageCrop(image, object);
   frame.append(image);
   return frame;
+}
+
+function applyImageAnnotationMetadata(element, object) {
+  const label = imageAnnotationLabel(object);
+  element.setAttribute("role", "img");
+  element.setAttribute("aria-label", label);
+  element.title = label;
+  element.dataset.objectName = object.name || "Canvas image";
+  if (object.assetPath) element.dataset.fileMention = `@${object.assetPath}`;
+  if (object.assetPath) element.dataset.assetPath = object.assetPath;
+  if (object.sourcePath) element.dataset.sourcePath = object.sourcePath;
+}
+
+function imageAnnotationLabel(object) {
+  const parts = [
+    `Codex-Canvas image`,
+    `name: ${object.name || "Image"}`,
+    `objectId: ${object.id}`,
+    imageSizeLabel(object) ? `size: ${imageSizeLabel(object)}` : "",
+    object.assetPath ? `@file: ${object.assetPath}` : "",
+    object.sourcePath ? `source: ${object.sourcePath}` : ""
+  ].filter(Boolean);
+  return parts.join(" | ");
 }
 
 function applyImageCrop(image, object) {
@@ -3018,6 +3064,40 @@ async function sendSelectedImageToChat() {
   }
 }
 
+async function copySelectedFileMention() {
+  const object = state.objects.find((item) => item.id === selectedId);
+  if (!object || (object.type || "image") !== "image") return;
+  const filePath = object.assetPath || object.sourcePath || "";
+  if (!filePath) {
+    showToast(t("fileMentionCopyFailed"));
+    return;
+  }
+
+  try {
+    await copyTextToClipboard(`@${filePath}`);
+    showToast(t("fileMentionCopied"));
+  } catch {
+    showToast(t("fileMentionCopyFailed"));
+  }
+}
+
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.append(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("copy failed");
+}
+
 function openImageActionComposer(action) {
   const object = state.objects.find((item) => item.id === selectedId);
   if (!object || (object.type || "image") !== "image" || !hasUserSelection) return;
@@ -3661,7 +3741,7 @@ function applyLanguage() {
   projectOptionsButton.setAttribute("aria-label", t("projectOptions"));
   settingsButton.title = t("settings");
   settingsButton.setAttribute("aria-label", t("settings"));
-  board.setAttribute("aria-label", t("agentCanvas"));
+  board.setAttribute("aria-label", t("codexCanvas"));
   toolDock.setAttribute("aria-label", t("canvasTools"));
   canvasSearch.input.placeholder = t("searchPlaceholder");
   canvasSearch.input.setAttribute("aria-label", t("searchLabel"));

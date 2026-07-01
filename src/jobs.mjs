@@ -303,7 +303,7 @@ async function runJob(projectDir, job, startedAtMs) {
   job.status = "running";
   job.startedAt = new Date().toISOString();
   await fs.mkdir(job.outputDir, { recursive: true });
-  await appendJobLog(job, `Agent-Canvas job started: ${job.action}`);
+  await appendJobLog(job, `Codex-Canvas job started: ${job.action}`);
   const codexInput = await prepareCodexInputForJob(job);
 
   const codexJob = await startCodexImageJob({
@@ -350,7 +350,7 @@ async function runTextRecognitionJob(projectDir, job, startedAtMs) {
   job.stage = "recognizing";
   job.startedAt = new Date().toISOString();
   await fs.mkdir(job.outputDir, { recursive: true });
-  await appendJobLog(job, "Agent-Canvas edit text session started");
+  await appendJobLog(job, "Codex-Canvas edit text session started");
 
   const localOcr = await recognizeTextLocal(job.imagePath, { outputPath: job.textInventoryPath }).catch((error) => ({
     backend: "local-ocr",
@@ -738,7 +738,7 @@ function buildExpandPrompt(job) {
   return [
     instruction,
     "",
-    "The attached image is a padded outpaint input prepared by Agent-Canvas.",
+    "The attached image is a padded outpaint input prepared by Codex-Canvas.",
     "The original source image is pasted inside the padded canvas at the user-chosen position and must remain visually unchanged.",
     "Fill and complete the padded surrounding area so the final image becomes one coherent full-frame image.",
     "Do not leave blurred padding, blank margins, checkerboards, or artificial borders in the final output.",
@@ -766,7 +766,7 @@ function quickEditAnnotationTextSummary(annotations) {
   return [
     "",
     "",
-    "Text annotations captured by Agent-Canvas:",
+    "Text annotations captured by Codex-Canvas:",
     ...textItems.map((text, index) => `${index + 1}. ${text}`)
   ].join("\n");
 }
@@ -1538,14 +1538,14 @@ function startElementBackgroundCompletion(projectDir, job, manifest, backgroundO
 }
 
 export async function placeImportedElementLayersForTest(projectDir, job) {
-  if (process.env.AGENT_CANVAS_TEST_HELPERS !== "1") {
+  if (process.env.CODEX_CANVAS_TEST_HELPERS !== "1") {
     throw new Error("Edit Elements test helpers are disabled.");
   }
   return placeImportedElementLayers(projectDir, job);
 }
 
 export async function markTextRecognitionCancelledForTest(job, startedAtMs = Date.now()) {
-  if (process.env.AGENT_CANVAS_TEST_HELPERS !== "1") {
+  if (process.env.CODEX_CANVAS_TEST_HELPERS !== "1") {
     throw new Error("Text recognition test helpers are disabled.");
   }
   return markTextRecognitionCancelled(job, startedAtMs);
@@ -1591,7 +1591,7 @@ async function readJsonFile(filePath) {
 
 async function appendJobLog(job, message) {
   try {
-    await fs.appendFile(job.logPath, `[agent-canvas] ${new Date().toISOString()} ${message}\n`);
+    await fs.appendFile(job.logPath, `[codex-canvas] ${new Date().toISOString()} ${message}\n`);
   } catch {
     // Logging should not affect image job completion.
   }

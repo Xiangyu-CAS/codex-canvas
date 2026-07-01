@@ -2,7 +2,7 @@ import readline from "node:readline";
 import path from "node:path";
 import { main as cliMain, normalizePort } from "./cli.mjs";
 import { collectRecentImages } from "./collector.mjs";
-import { sendImageToBoundChat } from "./codex-chat.mjs";
+import { sendImageToBoundChat, sendMentionToBoundChat } from "./codex-chat.mjs";
 import { createImageJob } from "./jobs.mjs";
 import { addImage, promptHistory, readState, searchObjects, versionGroups } from "./store.mjs";
 import { pluginRoot, resolveProjectDir } from "./paths.mjs";
@@ -43,7 +43,7 @@ async function handle(method, params) {
     return {
       protocolVersion: params.protocolVersion || "2024-11-05",
       capabilities: { tools: {} },
-      serverInfo: { name: "agent-canvas", version: "0.1.1" }
+      serverInfo: { name: "codex-canvas", version: "0.1.1" }
     };
   }
 
@@ -52,14 +52,14 @@ async function handle(method, params) {
       tools: [
         {
           name: "open_canvas",
-          description: "Start the Agent-Canvas local server and return the browser URL.",
+          description: "Start the Codex-Canvas local server and return the browser URL.",
           inputSchema: {
             type: "object",
             required: ["projectDir"],
             properties: {
               projectDir: { type: "string", description: "Absolute path to the active Codex project." },
               port: { type: "number", description: "Local port. Defaults to 43217." },
-              threadId: { type: "string", description: "Codex thread id to bind this canvas to for canvas-to-chat and thread-scoped canvas state." }
+              threadId: { type: "string", description: "Codex thread id to bind this canvas to for canvas-to-chat and thread-scoped canvas state. Defaults to the current Codex thread when available." }
             }
           }
         },
@@ -82,26 +82,26 @@ async function handle(method, params) {
               name: { type: "string" },
               prompt: { type: "string" },
               threadId: { type: "string", description: "Codex thread id whose canvas should receive the image. Pass this explicitly for thread-scoped canvases; omitted means the default project canvas." },
-              canvasId: { type: "string", description: "Explicit Agent-Canvas canvas id. Overrides the canvas id derived from threadId." }
+              canvasId: { type: "string", description: "Explicit Codex-Canvas canvas id. Overrides the canvas id derived from threadId." }
             }
           }
         },
         {
           name: "canvas_status",
-          description: "Read Agent-Canvas state for the active project.",
+          description: "Read Codex-Canvas state for the active project.",
           inputSchema: {
             type: "object",
             required: ["projectDir"],
             properties: {
               projectDir: { type: "string", description: "Absolute path to the active Codex project." },
               threadId: { type: "string", description: "Codex thread id whose canvas status should be read. Pass this explicitly for thread-scoped canvases; omitted means the default project canvas." },
-              canvasId: { type: "string", description: "Explicit Agent-Canvas canvas id. Overrides the canvas id derived from threadId." }
+              canvasId: { type: "string", description: "Explicit Codex-Canvas canvas id. Overrides the canvas id derived from threadId." }
             }
           }
         },
         {
           name: "search_canvas",
-          description: "Search Agent-Canvas objects by name, prompt, text, source path, or layer metadata.",
+          description: "Search Codex-Canvas objects by name, prompt, text, source path, or layer metadata.",
           inputSchema: {
             type: "object",
             required: ["projectDir"],
@@ -111,13 +111,13 @@ async function handle(method, params) {
               type: { type: "string", enum: ["image", "text", "drawing", "job"], description: "Optional canvas object type filter." },
               limit: { type: "number", description: "Maximum number of results. Defaults to 20, capped at 100." },
               threadId: { type: "string", description: "Codex thread id whose canvas should be searched. Pass explicitly for thread-scoped canvases; omitted means the default project canvas." },
-              canvasId: { type: "string", description: "Explicit Agent-Canvas canvas id. Overrides the canvas id derived from threadId." }
+              canvasId: { type: "string", description: "Explicit Codex-Canvas canvas id. Overrides the canvas id derived from threadId." }
             }
           }
         },
         {
           name: "prompt_history",
-          description: "List recent unique prompts used by Agent-Canvas objects.",
+          description: "List recent unique prompts used by Codex-Canvas objects.",
           inputSchema: {
             type: "object",
             required: ["projectDir"],
@@ -126,13 +126,13 @@ async function handle(method, params) {
               query: { type: "string", description: "Optional text to filter prompts." },
               limit: { type: "number", description: "Maximum number of prompts. Defaults to 20, capped at 100." },
               threadId: { type: "string", description: "Codex thread id whose canvas prompt history should be read. Pass explicitly for thread-scoped canvases; omitted means the default project canvas." },
-              canvasId: { type: "string", description: "Explicit Agent-Canvas canvas id. Overrides the canvas id derived from threadId." }
+              canvasId: { type: "string", description: "Explicit Codex-Canvas canvas id. Overrides the canvas id derived from threadId." }
             }
           }
         },
         {
           name: "version_groups",
-          description: "Group Agent-Canvas object version history by sourceObjectId, batchId, layoutMode, or prompt.",
+          description: "Group Codex-Canvas object version history by sourceObjectId, batchId, layoutMode, or prompt.",
           inputSchema: {
             type: "object",
             required: ["projectDir"],
@@ -143,13 +143,13 @@ async function handle(method, params) {
               limit: { type: "number", description: "Maximum number of groups. Defaults to 20, capped at 100." },
               objectLimit: { type: "number", description: "Maximum number of objects returned per group. Defaults to 20, capped at 100." },
               threadId: { type: "string", description: "Codex thread id whose canvas version groups should be read. Pass explicitly for thread-scoped canvases; omitted means the default project canvas." },
-              canvasId: { type: "string", description: "Explicit Agent-Canvas canvas id. Overrides the canvas id derived from threadId." }
+              canvasId: { type: "string", description: "Explicit Codex-Canvas canvas id. Overrides the canvas id derived from threadId." }
             }
           }
         },
         {
           name: "collect_recent_images",
-          description: "Scan recent generated and project images and import them into Agent-Canvas. Use as a fallback after imagegen when exact output paths are not known.",
+          description: "Scan recent generated and project images and import them into Codex-Canvas. Use as a fallback after imagegen when exact output paths are not known.",
           inputSchema: {
             type: "object",
             required: ["projectDir"],
@@ -165,7 +165,7 @@ async function handle(method, params) {
                 description: "When collecting an image generated from a selected canvas object, place results in a row to the right of that source object."
               },
               threadId: { type: "string", description: "Codex thread id whose canvas should receive collected images. Pass this explicitly for thread-scoped canvases; omitted means the default project canvas." },
-              canvasId: { type: "string", description: "Explicit Agent-Canvas canvas id. Overrides the canvas id derived from threadId." },
+              canvasId: { type: "string", description: "Explicit Codex-Canvas canvas id. Overrides the canvas id derived from threadId." },
               sinceMinutes: { type: "number", description: "Only import images modified in the last N minutes. Defaults to 120." },
               limit: { type: "number", description: "Maximum number of images to import. Defaults to 20." },
               prompt: { type: "string" }
@@ -174,7 +174,7 @@ async function handle(method, params) {
         },
         {
           name: "start_image_job",
-          description: "Start an Agent-Canvas background image action for a selected canvas image using a stable action id.",
+          description: "Start an Codex-Canvas background image action for a selected canvas image using a stable action id.",
           inputSchema: {
             type: "object",
             required: ["projectDir", "objectId", "action"],
@@ -184,30 +184,31 @@ async function handle(method, params) {
               action: {
                 type: "string",
                 enum: ["quick-edit", "remove-bg", "expand", "edit-elements"],
-                description: "Stable Agent-Canvas action id."
+                description: "Stable Codex-Canvas action id."
               },
               prompt: { type: "string", description: "Optional user guidance for quick-edit or expand." },
               threadId: { type: "string", description: "Codex thread id whose canvas owns the selected object. Pass explicitly for thread-scoped canvases." },
-              canvasId: { type: "string", description: "Explicit Agent-Canvas canvas id. Overrides the canvas id derived from threadId." }
+              canvasId: { type: "string", description: "Explicit Codex-Canvas canvas id. Overrides the canvas id derived from threadId." }
             }
           }
         },
         {
           name: "send_to_chat",
-          description: "Send a selected Agent-Canvas image to the explicitly bound Codex thread.",
+          description: "Send a selected Codex-Canvas image to the explicitly bound Codex thread.",
           inputSchema: {
             type: "object",
-            required: ["projectDir", "objectId", "threadId", "action"],
+            required: ["projectDir", "objectId", "action"],
             properties: {
               projectDir: { type: "string", description: "Absolute path to the active Codex project." },
               action: {
                 type: "string",
-                enum: ["send-to-chat"],
-                description: "Stable Agent-Canvas action id."
+                enum: ["send-to-chat", "mention-file"],
+                description: "Stable Codex-Canvas chat action id. send-to-chat sends visual input; mention-file sends a Codex @file-style mention."
               },
               objectId: { type: "string", description: "Canvas image object id to send." },
-              threadId: { type: "string", description: "Codex thread id to receive the selected image." },
-              canvasId: { type: "string", description: "Explicit Agent-Canvas canvas id. Overrides the canvas id derived from threadId." }
+              threadId: { type: "string", description: "Codex thread id to receive the selected image. Defaults to the current Codex thread when available." },
+              canvasId: { type: "string", description: "Explicit Codex-Canvas canvas id. Overrides the canvas id derived from threadId." },
+              includeImage: { type: "boolean", description: "For mention-file only, also attach the local image visual input in the same turn." }
             }
           }
         }
@@ -219,7 +220,7 @@ async function handle(method, params) {
     const args = params.arguments || {};
     if (params.name === "open_canvas") {
       const projectDir = requireProjectDir(args);
-      const entrypoint = path.join(pluginRoot, "bin", "agent-canvas.mjs");
+      const entrypoint = path.join(pluginRoot, "bin", "codex-canvas.mjs");
       const cliArgs = ["open", "--project", projectDir, "--port", String(normalizePort(args.port))];
       if (args.threadId) cliArgs.push("--thread-id", args.threadId);
       const output = await captureConsole(() => cliMain(
@@ -227,7 +228,7 @@ async function handle(method, params) {
         { entrypoint }
       ));
       const url = output.trim().split(/\s+/).pop();
-      return textResult(`Agent-Canvas is available at ${url}`, { url, projectDir, threadId: args.threadId || null });
+      return textResult(`Codex-Canvas is available at ${url}`, { url, projectDir, threadId: normalizeThreadId(args.threadId) || environmentThreadId() });
     }
 
     if (params.name === "add_image") {
@@ -235,14 +236,14 @@ async function handle(method, params) {
       requireSingleImageInput(args);
       const canvas = await resolveCanvasOptions(projectDir, args);
       const object = await addImage(projectDir, args, { canvasId: canvas.canvasId });
-      return textResult(`Added image to Agent-Canvas: ${object.name}`, object);
+      return textResult(`Added image to Codex-Canvas: ${object.name}`, object);
     }
 
     if (params.name === "canvas_status") {
       const projectDir = requireProjectDir(args);
       const canvas = await resolveCanvasOptions(projectDir, args);
       const state = await readState(projectDir, { canvasId: canvas.canvasId });
-      return textResult(`Agent-Canvas has ${state.objects.length} object(s).`, {
+      return textResult(`Codex-Canvas has ${state.objects.length} object(s).`, {
         projectDir,
         canvasId: canvas.canvasId,
         objects: state.objects.length,
@@ -262,7 +263,7 @@ async function handle(method, params) {
         limit: normalizeToolLimit(args.limit),
         canvasId: canvas.canvasId
       });
-      return textResult(`Found ${result.total} Agent-Canvas object(s).`, result);
+      return textResult(`Found ${result.total} Codex-Canvas object(s).`, result);
     }
 
     if (params.name === "prompt_history") {
@@ -273,7 +274,7 @@ async function handle(method, params) {
         limit: normalizeToolLimit(args.limit),
         canvasId: canvas.canvasId
       });
-      return textResult(`Found ${result.total} Agent-Canvas prompt(s).`, result);
+      return textResult(`Found ${result.total} Codex-Canvas prompt(s).`, result);
     }
 
     if (params.name === "version_groups") {
@@ -286,7 +287,7 @@ async function handle(method, params) {
         objectLimit: normalizeToolLimit(args.objectLimit),
         canvasId: canvas.canvasId
       });
-      return textResult(`Found ${result.total} Agent-Canvas version group(s).`, result);
+      return textResult(`Found ${result.total} Codex-Canvas version group(s).`, result);
     }
 
     if (params.name === "collect_recent_images") {
@@ -300,7 +301,7 @@ async function handle(method, params) {
         sourceObjectId: args.sourceObjectId || null,
         canvasId: canvas.canvasId
       });
-      return textResult(`Collected ${result.imported.length} recent image(s) into Agent-Canvas.`, result);
+      return textResult(`Collected ${result.imported.length} recent image(s) into Codex-Canvas.`, result);
     }
 
     if (params.name === "start_image_job") {
@@ -311,7 +312,7 @@ async function handle(method, params) {
         action: args.action,
         prompt: args.prompt || ""
       }, { canvasId: canvas.canvasId });
-      return textResult(`Started ${args.action} for Agent-Canvas object ${args.objectId}.`, job);
+      return textResult(`Started ${args.action} for Codex-Canvas object ${args.objectId}.`, job);
     }
 
     if (params.name === "send_to_chat") {
@@ -331,14 +332,23 @@ async function handle(method, params) {
         throw error;
       }
       const imagePath = object.assetPath || object.sourcePath;
-      const result = await sendImageToBoundChat({
-        projectDir,
-        threadId: canvas.threadId,
-        imagePath,
-        prompt: "Use this selected Agent-Canvas image as context."
-      });
-      return textResult(`Sent Agent-Canvas object ${object.id} to Codex thread ${canvas.threadId}.`, {
+      const result = args.action === "mention-file"
+        ? await sendMentionToBoundChat({
+          projectDir,
+          threadId: canvas.threadId,
+          filePath: imagePath,
+          prompt: `Codex-Canvas mentioned @${object.name || "selected-image"} as a file context. Do not analyze or edit it yet. Reply only that the file is available and wait for the next instruction.`,
+          includeImage: args.includeImage === true
+        })
+        : await sendImageToBoundChat({
+          projectDir,
+          threadId: canvas.threadId,
+          imagePath,
+          prompt: "Use this selected Codex-Canvas image as context."
+        });
+      return textResult(`Sent Codex-Canvas object ${object.id} to Codex thread ${canvas.threadId}.`, {
         ...result,
+        action: args.action,
         objectId: object.id,
         imagePath
       });
@@ -379,8 +389,8 @@ function requireSingleImageInput(args = {}) {
 }
 
 function requireSendToChatAction(args = {}) {
-  if (args.action === "send-to-chat") return;
-  const error = new Error("send_to_chat requires the stable send-to-chat action.");
+  if (args.action === "send-to-chat" || args.action === "mention-file") return;
+  const error = new Error("send_to_chat requires a stable chat action: send-to-chat or mention-file.");
   error.statusCode = 400;
   throw error;
 }
@@ -453,10 +463,14 @@ async function captureConsole(fn) {
 async function resolveCanvasOptions(projectDir, args = {}, runtime = null) {
   const explicitThreadId = normalizeThreadId(args.threadId);
   const explicitCanvasId = normalizeThreadId(args.canvasId);
-  const threadId = explicitThreadId;
+  const threadId = explicitThreadId || environmentThreadId();
   const canvasId = explicitCanvasId || canvasIdForThread(explicitThreadId);
   return {
     threadId,
-    canvasId: canvasId || null
+    canvasId: canvasId || canvasIdForThread(threadId) || null
   };
+}
+
+function environmentThreadId() {
+  return normalizeThreadId(process.env.CODEX_CANVAS_CODEX_THREAD_ID || process.env.CODEX_THREAD_ID);
 }

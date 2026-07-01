@@ -1,0 +1,3 @@
+[mcp_servers.codex-canvas]
+command = "node"
+args = ["./src/mcp-server.mjs"]

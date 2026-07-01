@@ -53,12 +53,12 @@ print(json.dumps({"available": False, "backend": None, "version": None}))
 }
 
 export async function installRapidOcr({ optional = false } = {}) {
-  if (process.env.AGENT_CANVAS_SKIP_OCR_INSTALL === "1") {
+  if (process.env.CODEX_CANVAS_SKIP_OCR_INSTALL === "1") {
     return {
       installed: false,
       skipped: true,
       available: false,
-      message: "Skipped because AGENT_CANVAS_SKIP_OCR_INSTALL=1."
+      message: "Skipped because CODEX_CANVAS_SKIP_OCR_INSTALL=1."
     };
   }
 
@@ -75,7 +75,7 @@ export async function installRapidOcr({ optional = false } = {}) {
     };
   }
 
-  const packageName = process.env.AGENT_CANVAS_OCR_PACKAGE || defaultPackageName;
+  const packageName = process.env.CODEX_CANVAS_OCR_PACKAGE || defaultPackageName;
   const errors = [];
   for (const [command, baseArgs] of pythonCandidates([])) {
     const args = [...baseArgs, "-m", "pip", "install", "--user", packageName];
@@ -164,12 +164,12 @@ print(json.dumps(result))
 }
 
 export async function installImageProcessingDeps({ optional = false } = {}) {
-  if (process.env.AGENT_CANVAS_SKIP_IMAGE_DEPS_INSTALL === "1") {
+  if (process.env.CODEX_CANVAS_SKIP_IMAGE_DEPS_INSTALL === "1") {
     return {
       installed: false,
       skipped: true,
       available: false,
-      message: "Skipped because AGENT_CANVAS_SKIP_IMAGE_DEPS_INSTALL=1."
+      message: "Skipped because CODEX_CANVAS_SKIP_IMAGE_DEPS_INSTALL=1."
     };
   }
 
@@ -185,7 +185,7 @@ export async function installImageProcessingDeps({ optional = false } = {}) {
     };
   }
 
-  const packages = String(process.env.AGENT_CANVAS_IMAGE_DEPS_PACKAGES || imageProcessingPackages.join(" "))
+  const packages = String(process.env.CODEX_CANVAS_IMAGE_DEPS_PACKAGES || imageProcessingPackages.join(" "))
     .split(/\s+/)
     .map((item) => item.trim())
     .filter(Boolean);

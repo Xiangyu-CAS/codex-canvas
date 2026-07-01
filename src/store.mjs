@@ -178,7 +178,7 @@ async function migrateLegacyCanvasIfNeeded(projectDir, canvasId) {
   if (await fileExists(targetStatePath)) return;
 
   const legacyCanvasDir = legacyCanvasDataDirFor(projectDir, canvasId);
-  const legacyCanvasStatePath = path.join(legacyCanvasDir, "agent-canvas.json");
+  const legacyCanvasStatePath = path.join(legacyCanvasDir, "codex-canvas.json");
   if (legacyCanvasStatePath !== targetStatePath && await fileExists(legacyCanvasStatePath)) {
     await fs.mkdir(path.dirname(targetStatePath), { recursive: true });
     await fs.cp(legacyCanvasDir, path.dirname(targetStatePath), {
@@ -698,8 +698,8 @@ function sanitizePersistedImageSrc(src, safeAssetPath) {
 
 function isAssetSrc(src) {
   try {
-    const url = new URL(src, "http://agent-canvas.local");
-    return url.origin === "http://agent-canvas.local" && url.pathname.startsWith("/assets/");
+    const url = new URL(src, "http://codex-canvas.local");
+    return url.origin === "http://codex-canvas.local" && url.pathname.startsWith("/assets/");
   } catch {
     return false;
   }

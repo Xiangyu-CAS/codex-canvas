@@ -1,24 +1,24 @@
 # Canvas to Codex Chat
 
-This note records the current evidence for sending a selected Agent-Canvas image back into Codex chat.
+This note records the current evidence for sending a selected Codex-Canvas image back into Codex chat.
 
 ## Goal
 
-Agent-Canvas supports chat-to-canvas collection: generated or edited images can be imported into the project canvas. It now also has an implemented canvas-to-chat path: a user selects an image on the canvas and sends it into a bound Codex chat turn as a local image input.
+Codex-Canvas supports chat-to-canvas collection: generated or edited images can be imported into the project canvas. It now also has an implemented canvas-to-chat path: a user selects an image on the canvas and sends it into a bound Codex chat turn as a local image input.
 
 ## Working Paths
 
-One supported path for giving Codex an image from Agent-Canvas is to start a Codex CLI turn with the selected image as an initial attachment:
+One supported path for giving Codex an image from Codex-Canvas is to start a Codex CLI turn with the selected image as an initial attachment:
 
 ```bash
 codex exec --cd <project-dir> --image <absolute-image-path> -- '<prompt>'
 ```
 
-Agent-Canvas already uses this shape for background image jobs in `src/codex-runner.mjs`. It is cross-platform and does not rely on desktop UI automation.
+Codex-Canvas already uses this shape for background image jobs in `src/codex-runner.mjs`. It is cross-platform and does not rely on desktop UI automation.
 
 Limitation: this creates or uses a CLI execution context. It does not inject the image into the currently visible Codex desktop chat composer.
 
-For the visible Codex chat flow, Agent-Canvas now uses an explicit thread binding plus the Codex app-server protocol described below.
+For the visible Codex chat flow, Codex-Canvas now uses an explicit thread binding plus the Codex app-server protocol described below.
 
 ## Verified Chat Injection Evidence
 
@@ -33,7 +33,8 @@ type TurnStartParams = {
 type UserInput =
   | { type: "text"; text: string; text_elements: Array<TextElement> }
   | { type: "image"; url: string; detail?: ImageDetail }
-  | { type: "localImage"; path: string; detail?: ImageDetail };
+  | { type: "localImage"; path: string; detail?: ImageDetail }
+  | { type: "mention"; name: string; path: string };
 ```
 
 The relevant client request is `turn/start`; `turn/steer` has the same image-capable `input` shape for an already active turn. A minimal payload for a selected local canvas asset would be:
@@ -76,11 +77,11 @@ The test flow was:
 4. Send `turn/start` with text plus `{ "type": "localImage", "path": "/absolute/path/to/canvas/assets/..." }`.
 5. Wait for `turn/completed`.
 
-The server emitted a `userMessage` item containing both the text input and the `localImage` input, then completed successfully with the expected assistant response. This proves the app-server protocol accepts local canvas image paths as turn inputs when Agent-Canvas can reach an app-server and has a target `threadId`.
+The server emitted a `userMessage` item containing both the text input and the `localImage` input, then completed successfully with the expected assistant response. This proves the app-server protocol accepts local canvas image paths as turn inputs when Codex-Canvas can reach an app-server and has a target `threadId`.
 
 ## Integration Constraints
 
-There are two integration requirements for Agent-Canvas to send an image into an existing Codex chat:
+There are two integration requirements for Codex-Canvas to send an image into an existing Codex chat:
 
 1. The backend needs the target Codex `threadId`.
 2. The backend needs a supported connection to the app-server that owns that thread.
@@ -93,7 +94,7 @@ The local `codex app-server proxy` command can proxy JSON-RPC to an app-server c
 ~/.codex/app-server-control/app-server-control.sock
 ```
 
-So Agent-Canvas cannot assume that the desktop app always exposes a usable control socket.
+So Codex-Canvas cannot assume that the desktop app always exposes a usable control socket.
 
 `codex app-server daemon start` was also tested on this machine. It failed because the managed standalone Codex install was missing at:
 
@@ -101,7 +102,7 @@ So Agent-Canvas cannot assume that the desktop app always exposes a usable contr
 ~/.codex/packages/standalone/current/codex
 ```
 
-That daemon path can be enabled by installing the standalone Codex package with the Codex installer, but Agent-Canvas should not require it for core behavior.
+That daemon path can be enabled by installing the standalone Codex package with the Codex installer, but Codex-Canvas should not require it for core behavior.
 
 The direct WebSocket startup path above does work from the bundled Codex app CLI and is the best current prototype transport.
 
@@ -109,23 +110,26 @@ The direct WebSocket startup path above does work from the bundled Codex app CLI
 
 The implemented path uses an explicit thread binding and treats each Codex thread as its own canvas scope:
 
-1. When the user opens Agent-Canvas from Codex, pass a Codex thread binding for the project canvas.
-   - CLI: `agent-canvas open --thread-id <codex-thread-id>`.
+1. When the user opens Codex-Canvas from Codex, pass a Codex thread binding for the project canvas.
+   - CLI: `codex-canvas open --thread-id <codex-thread-id>`.
    - MCP: `open_canvas` accepts `threadId`.
    - HTTP: `POST /api/chat-binding` stores or replaces the binding.
-2. The binding is stored in `canvas/.agent-canvas-runtime.json` as `chatThreadId` and `canvasId`.
+2. The binding is stored in `canvas/.codex-canvas-runtime.json` as `chatThreadId` and `canvasId`.
 3. The persistent canvas state for a bound thread is stored under `canvas/threads/<canvasId>/`.
    - Different Codex threads in the same workspace receive different `projectId` values and separate canvas state/assets/jobs.
-   - An unbound canvas continues to use the legacy default `canvas/agent-canvas.json` path.
+   - An unbound canvas continues to use the legacy default `canvas/codex-canvas.json` path.
 4. `POST /api/chat-turn` accepts:
-   - `action: "send-to-chat"`
+   - `action: "send-to-chat"` for a visual `localImage` input.
+   - `action: "mention-file"` for a Codex `@file`-style `mention` input.
    - `objectId`
-5. The backend refuses requests without the stable `send-to-chat` action, and returns `409` unless the project has `chatThreadId`.
+5. The backend refuses requests without a stable chat action, and returns `409` unless the project has `chatThreadId`.
 6. The backend resolves the selected object from that thread's canvas scope to a local `assetPath`.
-7. The backend starts a temporary loopback WebSocket app-server, calls `thread/resume` for the bound thread, then sends `turn/start` with text plus `{ "type": "localImage", "path": assetPath }`.
-8. The frontend and MCP `send_to_chat` tool expose this as a stable `send-to-chat` action on selected images; the prompt text is owned by the backend, not the frontend.
+7. The backend starts a temporary loopback WebSocket app-server, calls `thread/resume` for the bound thread, then sends `turn/start` with either:
+   - text plus `{ "type": "localImage", "path": assetPath }`
+   - text plus `{ "type": "mention", "name": basename(assetPath), "path": assetPath }`
+8. MCP `send_to_chat` and HTTP callers can explicitly use stable `send-to-chat` and `mention-file` actions on selected images; the prompt text is owned by the backend, not the frontend. The frontend `@file` toolbar button intentionally does not call `mention-file`; it prepares/copies an `@<absolute-path>` reference so the user can paste it into the Codex chat box manually without sending a turn.
 
-This keeps canvas-to-chat deterministic: Agent-Canvas never guesses a destination thread, never creates a new thread as a fallback for the button, and never shares a bound canvas between Codex threads.
+This keeps canvas-to-chat deterministic: Codex-Canvas never guesses a destination thread, never creates a new thread as a fallback for the button, and never shares a bound canvas between Codex threads. The `mention-file` action is still a real chat turn, not a native Codex composer draft, but it uses Codex's file-mention input type instead of only a visual image input.
 
 ## Fallback UX
 
@@ -146,4 +150,4 @@ Do not implement canvas-to-chat by:
 - Clipboard-only image paste automation.
 - DOM scraping or mutation of the desktop app chat UI.
 
-These approaches are fragile and violate Agent-Canvas' macOS/Windows portability requirement.
+These approaches are fragile and violate Codex-Canvas' macOS/Windows portability requirement.

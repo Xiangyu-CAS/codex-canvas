@@ -1491,7 +1491,7 @@ button {
 .selection-toolbar.has-layer-group-actions {
   display: grid;
   grid-auto-rows: 30px;
-  grid-template-columns: repeat(7, max-content);
+  grid-template-columns: repeat(8, max-content);
   width: max-content;
   gap: 2px 0;
 }
@@ -1532,6 +1532,11 @@ button {
 
 .selection-toolbar.has-layer-group-actions [data-action="send-to-chat"] {
   grid-column: 7;
+  grid-row: 1;
+}
+
+.selection-toolbar.has-layer-group-actions [data-action="copy-file-mention"] {
+  grid-column: 8;
   grid-row: 1;
 }
 

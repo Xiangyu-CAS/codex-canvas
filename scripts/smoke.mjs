@@ -81,14 +81,14 @@ async function createServer(options = {}) {
 
 async function persistentRegistryPathForSmoke() {
   if (!smokeProjectRegistryPath) {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-registry-smoke-"));
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-registry-smoke-"));
     smokeProjectRegistryPath = path.join(tmp, "projects.json");
   }
   return smokeProjectRegistryPath;
 }
 
 async function testObjectPatchSanitization() {
-  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-patch-"));
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-patch-"));
   const image = await addImage(projectDir, {
     dataUrl: `data:image/png;base64,${pngOne}`,
     name: "safe.png",
@@ -121,7 +121,7 @@ async function testObjectPatchSanitization() {
 }
 
 async function testObjectInputSanitization() {
-  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-object-input-"));
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-object-input-"));
   const image = await addImage(projectDir, {
     dataUrl: `data:image/png;base64,${pngOne}`,
     name: "oversized-image.png",
@@ -175,7 +175,7 @@ async function testObjectInputSanitization() {
   assertEqual(drawing.points[0].x, 1000000, "addObject should cap drawing point x coordinates");
   assertEqual(drawing.points[0].y, -1000000, "addObject should cap drawing point y coordinates");
 
-  const corruptProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-object-state-"));
+  const corruptProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-object-state-"));
   const corruptAssetsDir = assetsDirFor(corruptProjectDir);
   const safePersistedAssetPath = path.join(corruptAssetsDir, "safe-persisted.png");
   const safePersistedSourcePath = path.join(os.tmpdir(), "safe-persisted-source.png");
@@ -222,7 +222,7 @@ async function testObjectInputSanitization() {
 }
 
 async function testSelectionSanitization() {
-  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-selection-"));
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-selection-"));
   const image = await addImage(projectDir, {
     dataUrl: `data:image/png;base64,${pngOne}`,
     name: "selectable.png"
@@ -234,7 +234,7 @@ async function testSelectionSanitization() {
   const state = await readState(projectDir);
   assertEqual(state.selection, null, "selection state should not persist orphan object ids");
 
-  const corruptProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-corrupt-state-"));
+  const corruptProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-corrupt-state-"));
   await fs.mkdir(path.dirname(statePathFor(corruptProjectDir)), { recursive: true });
   await fs.writeFile(statePathFor(corruptProjectDir), `${JSON.stringify({
     version: 1,
@@ -250,7 +250,7 @@ async function testSelectionSanitization() {
 }
 
 async function testViewportSanitization() {
-  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-viewport-"));
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-viewport-"));
   const minZoom = await updateViewport(projectDir, { x: 10, y: 20, zoom: -4 });
   assertEqual(minZoom.x, 10, "updateViewport should keep finite x");
   assertEqual(minZoom.y, 20, "updateViewport should keep finite y");
@@ -260,7 +260,7 @@ async function testViewportSanitization() {
   const unchanged = await updateViewport(projectDir, { zoom: "bad" });
   assertEqual(unchanged.zoom, 2.2, "updateViewport should ignore non-numeric zoom values");
 
-  const legacyProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-legacy-viewport-"));
+  const legacyProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-legacy-viewport-"));
   await fs.mkdir(path.dirname(statePathFor(legacyProjectDir)), { recursive: true });
   const legacyBaseState = await readState(legacyProjectDir);
   await fs.writeFile(statePathFor(legacyProjectDir), `${JSON.stringify({
@@ -274,7 +274,7 @@ async function testViewportSanitization() {
 }
 
 async function testCanvasIdPathIsolation() {
-  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-canvas-id-"));
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-canvas-id-"));
   const slashCanvasId = "review/canvas";
   const underscoreCanvasId = "review_canvas";
   const slashStatePath = statePathFor(projectDir, slashCanvasId);
@@ -301,9 +301,9 @@ async function testCanvasIdPathIsolation() {
   assertEqual(underscoreState.objects.length, 1, "sanitized-looking canvasId should keep a separate state file");
   assertEqual(underscoreState.objects[0].id, underscoreObject.id, "underscore canvas should read its own object");
 
-  const legacyProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-legacy-canvas-id-"));
+  const legacyProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-legacy-canvas-id-"));
   const legacyCanvasId = "legacy/canvas";
-  const legacyStatePath = path.join(legacyCanvasDataDirFor(legacyProjectDir, legacyCanvasId), "agent-canvas.json");
+  const legacyStatePath = path.join(legacyCanvasDataDirFor(legacyProjectDir, legacyCanvasId), "codex-canvas.json");
   const migratedStatePath = statePathFor(legacyProjectDir, legacyCanvasId);
   await fs.mkdir(path.dirname(legacyStatePath), { recursive: true });
   await fs.writeFile(legacyStatePath, `${JSON.stringify({
@@ -319,7 +319,7 @@ async function testCanvasIdPathIsolation() {
 }
 
 async function testHttpObjectPatchSanitization() {
-  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-http-patch-"));
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-http-patch-"));
   const { server, url } = await createServer({ projectDir, port: 0, autoCollect: false });
   const base = url.replace(/\?.*/, "");
   const search = new URL(url).search;
@@ -367,7 +367,7 @@ async function testHttpObjectPatchSanitization() {
 }
 
 async function testHttpImageInputBoundaries() {
-  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-http-image-"));
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-http-image-"));
   const { server, url } = await createServer({ projectDir, port: 0, autoCollect: false });
   const base = url.replace(/\?.*/, "");
   const search = new URL(url).search;
@@ -424,7 +424,7 @@ async function testHttpImageInputBoundaries() {
 }
 
 async function testCanvasObjectSearch() {
-  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-search-"));
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-search-"));
   const image = await addImage(projectDir, {
     dataUrl: `data:image/png;base64,${pngOne}`,
     name: "Sunset concept.png",
@@ -466,7 +466,7 @@ async function testCanvasObjectSearch() {
 }
 
 async function testCanvasPromptHistory() {
-  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-prompts-"));
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-prompts-"));
   const first = await addImage(projectDir, {
     dataUrl: `data:image/png;base64,${pngOne}`,
     name: "first.png",
@@ -515,7 +515,7 @@ async function testCanvasPromptHistory() {
 }
 
 async function testCanvasVersionGroups() {
-  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-versions-"));
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-versions-"));
   const source = await addImage(projectDir, {
     dataUrl: `data:image/png;base64,${pngOne}`,
     name: "source.png",
@@ -623,17 +623,17 @@ async function testCliNumericBoundaries() {
 }
 
 async function testPortNumericBoundaries() {
-  assertEqual(normalizePort(undefined), 43217, "missing port should use the default Agent-Canvas port");
-  assertEqual(normalizePort(""), 43217, "blank port should use the default Agent-Canvas port");
-  assertEqual(normalizePort(true), 43217, "flag-only port should use the default Agent-Canvas port");
+  assertEqual(normalizePort(undefined), 43217, "missing port should use the default Codex-Canvas port");
+  assertEqual(normalizePort(""), 43217, "blank port should use the default Codex-Canvas port");
+  assertEqual(normalizePort(true), 43217, "flag-only port should use the default Codex-Canvas port");
   assertEqual(normalizePort("0"), 0, "port zero should remain valid for dynamic local binding");
   assertEqual(normalizePort("49152"), 49152, "string numeric ports should be accepted");
   assertEqual(normalizePort(65535), 65535, "the maximum TCP port should be accepted");
-  assertEqual(normalizePort(-1), 43217, "negative ports should use the default Agent-Canvas port");
-  assertEqual(normalizePort(65536), 43217, "out-of-range ports should use the default Agent-Canvas port");
-  assertEqual(normalizePort(1.5), 43217, "fractional ports should use the default Agent-Canvas port");
-  assertEqual(normalizePort(Infinity), 43217, "infinite ports should use the default Agent-Canvas port");
-  assertEqual(normalizePort("not-a-port"), 43217, "non-numeric ports should use the default Agent-Canvas port");
+  assertEqual(normalizePort(-1), 43217, "negative ports should use the default Codex-Canvas port");
+  assertEqual(normalizePort(65536), 43217, "out-of-range ports should use the default Codex-Canvas port");
+  assertEqual(normalizePort(1.5), 43217, "fractional ports should use the default Codex-Canvas port");
+  assertEqual(normalizePort(Infinity), 43217, "infinite ports should use the default Codex-Canvas port");
+  assertEqual(normalizePort("not-a-port"), 43217, "non-numeric ports should use the default Codex-Canvas port");
 }
 
 async function testHttpQueryNumericBoundaries() {
@@ -665,7 +665,7 @@ async function testHttpQueryNumericBoundaries() {
 }
 
 async function testHttpJsonBoundaries() {
-  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-http-json-"));
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-http-json-"));
   const { server, url } = await createServer({
     projectDir,
     port: 0,
@@ -704,7 +704,7 @@ async function testHttpJsonBoundaries() {
       throw new Error("oversized JSON should describe the body limit.");
     }
 
-    const viewportProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-http-viewport-"));
+    const viewportProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-http-viewport-"));
     const viewportServer = await createServer({ projectDir: viewportProjectDir, port: 0, autoCollect: false });
     const viewportBase = viewportServer.url.replace(/\?.*/, "");
     const viewportSearch = new URL(viewportServer.url).search;
@@ -732,7 +732,7 @@ async function testHttpJsonBoundaries() {
 }
 
 async function testHttpFileResponseBoundaries() {
-  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-http-files-"));
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-http-files-"));
   const { server, url } = await createServer({ projectDir, port: 0, autoCollect: false });
   const base = url.replace(/\?.*/, "");
   const search = new URL(url).search;
@@ -742,7 +742,7 @@ async function testHttpFileResponseBoundaries() {
       const body = await response.json();
       assertEqual(response.status, 404, `missing ${pathname} should return not found`);
       assertEqual(body.error, "File not found.", `missing ${pathname} should not disclose filesystem paths`);
-      if (/file:|\/Users\/|\\\\Users\\\\|agent-canvas-http-files/.test(JSON.stringify(body))) {
+      if (/file:|\/Users\/|\\\\Users\\\\|codex-canvas-http-files/.test(JSON.stringify(body))) {
         throw new Error(`missing ${pathname} response should not include local filesystem paths.`);
       }
     }
@@ -755,7 +755,7 @@ async function testHttpFileResponseBoundaries() {
 }
 
 async function testHttpProjectRegistrationBoundaries() {
-  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-http-projects-"));
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-http-projects-"));
   const { server, url } = await createServer({
     projectDir,
     port: 0,
@@ -764,7 +764,7 @@ async function testHttpProjectRegistrationBoundaries() {
   const base = url.replace(/\?.*/, "");
   const search = new URL(url).search;
   try {
-    assertEqual(new URL(url).searchParams.get("token"), null, "Agent-Canvas URLs should not expose runtime capability tokens");
+    assertEqual(new URL(url).searchParams.get("token"), null, "Codex-Canvas URLs should not expose runtime capability tokens");
 
     const missing = await postJson(`${base}api/projects${search}`, {});
     assertEqual(missing.status, 400, "HTTP project registration should reject missing projectDir");
@@ -775,7 +775,7 @@ async function testHttpProjectRegistrationBoundaries() {
     const relative = await postJson(`${base}api/projects${search}`, { projectDir: "relative-project" });
     assertEqual(relative.status, 400, "HTTP project registration should reject relative projectDir");
 
-    const registeredDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-http-projects-registered-"));
+    const registeredDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-http-projects-registered-"));
     const registered = await postJson(`${base}api/projects${search}`, {
       projectDir: registeredDir,
       autoCollect: false
@@ -825,7 +825,7 @@ async function testFrontendActionContract() {
 }
 
 async function assertHttpImageJobActionsAccepted() {
-  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-actions-"));
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-actions-"));
   const { server, url } = await createServer({ projectDir, port: 0, autoCollect: false });
   const base = url.replace(/\?.*/, "");
   const search = new URL(url).search;
@@ -879,7 +879,7 @@ async function testImageJobErrorContract() {
 }
 
 async function testThreadMigrationAssetPaths() {
-  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-migrate-"));
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-migrate-"));
   const defaultImage = await addImage(projectDir, {
     dataUrl: `data:image/png;base64,${pngOne}`,
     name: "default.png"
@@ -896,10 +896,10 @@ async function testThreadMigrationAssetPaths() {
 }
 
 async function testPersistentProjectRegistry() {
-  const firstProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-registry-first-"));
-  const secondProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-registry-second-"));
-  const reboundProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-registry-rebound-"));
-  const registryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-registry-file-"));
+  const firstProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-registry-first-"));
+  const secondProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-registry-second-"));
+  const reboundProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-registry-rebound-"));
+  const registryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-registry-file-"));
   const persistentRegistryPath = path.join(registryRoot, "projects.json");
   const first = await createServer({
     projectDir: firstProjectDir,
@@ -956,12 +956,12 @@ async function testPersistentProjectRegistry() {
     persistentRegistryPath
   });
   const secondBase = second.url.replace(/\?.*/, "");
-  assertEqual(new URL(second.url).searchParams.get("token"), null, "Restarted Agent-Canvas URLs should not include runtime capability tokens");
+  assertEqual(new URL(second.url).searchParams.get("token"), null, "Restarted Codex-Canvas URLs should not include runtime capability tokens");
   try {
     const projectsResponse = await fetch(`${secondBase}api/projects`);
     const projectsBody = await projectsResponse.json();
     const restored = projectsBody.projects?.find((project) => project.id === restoredProjectId);
-    if (!restored) throw new Error("Restarted Agent-Canvas server should restore registered projects from the persistent registry.");
+    if (!restored) throw new Error("Restarted Codex-Canvas server should restore registered projects from the persistent registry.");
     assertEqual(restored.projectDir, secondProjectDir, "Restored project should keep its projectDir");
     assertEqual(restored.chatThreadId, "thread-persisted-registry", "Restored project should keep its chat binding");
     assertEqual(restored.chatBound, true, "Restored project should report chat binding");
@@ -989,7 +989,7 @@ async function testPersistentProjectRegistry() {
     const projectsResponse = await fetch(`${thirdBase}api/projects`);
     const projectsBody = await projectsResponse.json();
     const restoredInitial = projectsBody.projects?.find((project) => project.id === firstProjectId);
-    if (!restoredInitial) throw new Error("Restarted Agent-Canvas server should restore the initial project from the persistent registry.");
+    if (!restoredInitial) throw new Error("Restarted Codex-Canvas server should restore the initial project from the persistent registry.");
     assertEqual(restoredInitial.autoCollect, false, "Initial projects with persisted auto-collection opt-out should stay disabled after restart");
 
     const imagePath = path.join(firstProjectDir, `initial-opt-out-${Date.now()}.png`);
@@ -1006,9 +1006,9 @@ async function testPersistentProjectRegistry() {
 }
 
 async function testPersistentProjectRegistryRestoredAutoCollector() {
-  const firstProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-registry-auto-first-"));
-  const restoredProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-registry-auto-restored-"));
-  const registryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-registry-auto-file-"));
+  const firstProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-registry-auto-first-"));
+  const restoredProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-registry-auto-restored-"));
+  const registryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-registry-auto-file-"));
   const persistentRegistryPath = path.join(registryRoot, "projects.json");
   const first = await createServer({
     projectDir: firstProjectDir,
@@ -1045,7 +1045,7 @@ async function testPersistentProjectRegistryRestoredAutoCollector() {
     const projectsResponse = await fetch(`${secondBase}api/projects`);
     const projectsBody = await projectsResponse.json();
     const restored = projectsBody.projects?.find((project) => project.id === restoredProjectId);
-    if (!restored) throw new Error("Restarted Agent-Canvas server should restore the auto-collecting project.");
+    if (!restored) throw new Error("Restarted Codex-Canvas server should restore the auto-collecting project.");
     assertEqual(restored.projectDir, restoredProjectDir, "Restored auto-collecting project should keep its projectDir");
     assertEqual(restored.autoCollect, true, "Restored auto-collecting project should resume auto-collection when the service enables it");
 
@@ -1063,7 +1063,7 @@ async function testPersistentProjectRegistryRestoredAutoCollector() {
 }
 
 async function testAutoCollectorWatermark() {
-  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-collector-"));
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-collector-"));
   const { server, url } = await createServer({
     projectDir,
     port: 0,
@@ -1100,7 +1100,7 @@ async function testAutoCollectorWatermark() {
 }
 
 async function testMcpCanvasStatus() {
-  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-mcp-"));
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-mcp-"));
   await addObject(projectDir, { type: "text", text: "mcp searchable note", name: "MCP Note", x: 10, y: 10 });
   const promptImage = await addImage(projectDir, {
     dataUrl: `data:image/png;base64,${pngOne}`,
@@ -1122,7 +1122,11 @@ async function testMcpCanvasStatus() {
       arguments: { projectDir }
     });
     assertEqual(status.structuredContent?.objects, 2, "MCP canvas_status should read default canvas state");
-    assertEqual(status.structuredContent?.chatBound, false, "MCP canvas_status should not infer chat binding without threadId");
+    assertEqual(
+      status.structuredContent?.chatBound,
+      Boolean(process.env.CODEX_CANVAS_CODEX_THREAD_ID || process.env.CODEX_THREAD_ID),
+      "MCP canvas_status should infer chat binding only when a Codex thread environment is available"
+    );
     const customCanvasId = "mcp-custom-canvas";
     await client.request("tools/call", {
       name: "add_image",
@@ -1255,8 +1259,8 @@ async function assertMcpActionBoundaries(client, projectDir, imageObjectId) {
       name: "send_to_chat",
       arguments: { projectDir, threadId: "thread-mcp-send", objectId: imageObjectId }
     }),
-    "send_to_chat requires the stable send-to-chat action",
-    "MCP send_to_chat should require the stable send-to-chat action",
+    "send_to_chat requires a stable chat action",
+    "MCP send_to_chat should require a stable chat action",
     { code: -32602, statusCode: 400 }
   );
 
@@ -1265,7 +1269,7 @@ async function assertMcpActionBoundaries(client, projectDir, imageObjectId) {
       name: "send_to_chat",
       arguments: { projectDir, threadId: "thread-mcp-send", objectId: imageObjectId, action: "quick-edit" }
     }),
-    "send_to_chat requires the stable send-to-chat action",
+    "send_to_chat requires a stable chat action",
     "MCP send_to_chat should reject image job actions",
     { code: -32602, statusCode: 400 }
   );
@@ -1345,7 +1349,7 @@ function assertMcpToolSchema(tools = []) {
     throw new Error("MCP start_image_job should not expose direct edit-text; Edit Text uses the text recognition workflow.");
   }
   const sendToChatRequired = byName.get("send_to_chat")?.inputSchema?.required || [];
-  for (const field of ["projectDir", "objectId", "threadId", "action"]) {
+  for (const field of ["projectDir", "objectId", "action"]) {
     if (!sendToChatRequired.includes(field)) {
       throw new Error(`MCP send_to_chat should require ${field}.`);
     }
@@ -1368,7 +1372,7 @@ async function testPackageOptionalDependencyScripts() {
   );
   assertEqual(
     packageJson.scripts?.["doctor:deps"],
-    "node ./bin/agent-canvas.mjs doctor-deps --json",
+    "node ./bin/codex-canvas.mjs doctor-deps --json",
     "package.json should expose a non-installing optional dependency doctor script"
   );
   assertEqual(
@@ -1395,7 +1399,7 @@ async function testPluginPackageManifest() {
   }
   const mcpPath = path.join(process.cwd(), manifest.mcpServers);
   const mcpConfig = JSON.parse(await fs.readFile(mcpPath, "utf8"));
-  const server = mcpConfig.mcpServers?.["agent-canvas"];
+  const server = mcpConfig.mcpServers?.["codex-canvas"];
   assertEqual(server?.command, "node", "MCP config should run through node");
   assertEqual(server?.cwd, ".", "MCP config should run from the plugin root");
   if (!server?.args?.includes("./src/mcp-server.mjs")) {
@@ -1414,7 +1418,7 @@ async function testPluginPackageManifest() {
     ".codex-plugin/plugin.json",
     ".mcp.json",
     "assets/icon.png",
-    "bin/agent-canvas.mjs",
+    "bin/codex-canvas.mjs",
     "public/app.js",
     "scripts/install-personal-plugin.mjs",
     "skills/canvas/SKILL.md",
@@ -1442,7 +1446,7 @@ function npmExecutable() {
 }
 
 async function testPersonalPluginInstaller() {
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-personal-plugin-"));
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-personal-plugin-"));
   const marketplacePath = path.join(tmp, ".agents", "plugins", "marketplace.json");
   await fs.mkdir(path.dirname(marketplacePath), { recursive: true });
   await fs.writeFile(marketplacePath, `${JSON.stringify({
@@ -1460,7 +1464,7 @@ async function testPersonalPluginInstaller() {
 
   const env = {
     ...process.env,
-    AGENT_CANVAS_PERSONAL_HOME: tmp
+    CODEX_CANVAS_PERSONAL_HOME: tmp
   };
   for (let run = 0; run < 2; run += 1) {
     const { stdout } = await execFileAsync(process.execPath, [
@@ -1474,28 +1478,28 @@ async function testPersonalPluginInstaller() {
     });
     const result = JSON.parse(stdout);
     assertEqual(result.ok, true, "personal plugin installer should report success");
-    assertEqual(result.sourcePath, "./plugins/agent-canvas", "personal plugin installer should use the marketplace-relative plugin path");
+    assertEqual(result.sourcePath, "./plugins/codex-canvas", "personal plugin installer should use the marketplace-relative plugin path");
   }
 
   const marketplace = JSON.parse(await fs.readFile(marketplacePath, "utf8"));
-  const agentEntries = marketplace.plugins.filter((plugin) => plugin.name === "agent-canvas");
-  assertEqual(agentEntries.length, 1, "personal plugin installer should keep one agent-canvas entry after repeated runs");
+  const agentEntries = marketplace.plugins.filter((plugin) => plugin.name === "codex-canvas");
+  assertEqual(agentEntries.length, 1, "personal plugin installer should keep one codex-canvas entry after repeated runs");
   assertEqual(agentEntries[0].source?.source, "local", "personal plugin entry should use a local source");
-  assertEqual(agentEntries[0].source?.path, "./plugins/agent-canvas", "personal plugin entry should point at the deterministic link");
+  assertEqual(agentEntries[0].source?.path, "./plugins/codex-canvas", "personal plugin entry should point at the deterministic link");
   assertEqual(agentEntries[0].policy?.installation, "AVAILABLE", "personal plugin entry should be installable");
   if (!marketplace.plugins.some((plugin) => plugin.name === "other-plugin")) {
     throw new Error("personal plugin installer should preserve existing marketplace plugins.");
   }
 
-  const linkPath = path.join(tmp, "plugins", "agent-canvas");
+  const linkPath = path.join(tmp, "plugins", "codex-canvas");
   const linkedRealPath = await fs.realpath(linkPath);
   const repoRealPath = await fs.realpath(process.cwd());
   assertEqual(linkedRealPath, repoRealPath, "personal plugin link should resolve to this repository");
 
-  const aliasTmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-personal-plugin-alias-"));
+  const aliasTmp = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-personal-plugin-alias-"));
   const aliasPath = path.join(aliasTmp, "repo-alias");
   const aliasHome = path.join(aliasTmp, "home");
-  const aliasLinkPath = path.join(aliasHome, "plugins", "agent-canvas");
+  const aliasLinkPath = path.join(aliasHome, "plugins", "codex-canvas");
   const linkType = process.platform === "win32" ? "junction" : "dir";
   await fs.symlink(process.cwd(), aliasPath, linkType);
   await fs.mkdir(path.dirname(aliasLinkPath), { recursive: true });
@@ -1507,7 +1511,7 @@ async function testPersonalPluginInstaller() {
     cwd: process.cwd(),
     env: {
       ...process.env,
-      AGENT_CANVAS_PERSONAL_HOME: aliasHome
+      CODEX_CANVAS_PERSONAL_HOME: aliasHome
     },
     maxBuffer: 1024 * 1024,
     windowsHide: true
@@ -1515,8 +1519,8 @@ async function testPersonalPluginInstaller() {
   const aliasLinkedRealPath = await fs.realpath(aliasLinkPath);
   assertEqual(aliasLinkedRealPath, repoRealPath, "personal plugin installer should accept existing links that resolve to this repository");
 
-  const blockedTmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-personal-plugin-blocked-"));
-  const blockedLinkPath = path.join(blockedTmp, "plugins", "agent-canvas");
+  const blockedTmp = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-personal-plugin-blocked-"));
+  const blockedLinkPath = path.join(blockedTmp, "plugins", "codex-canvas");
   await fs.mkdir(blockedLinkPath, { recursive: true });
   const blocked = await execFileAsync(process.execPath, [
     path.join(process.cwd(), "scripts", "install-personal-plugin.mjs"),
@@ -1525,7 +1529,7 @@ async function testPersonalPluginInstaller() {
     cwd: process.cwd(),
     env: {
       ...process.env,
-      AGENT_CANVAS_PERSONAL_HOME: blockedTmp
+      CODEX_CANVAS_PERSONAL_HOME: blockedTmp
     },
     maxBuffer: 1024 * 1024,
     windowsHide: true
@@ -1540,7 +1544,7 @@ async function testPersonalPluginInstaller() {
 }
 
 async function testDevPluginCacheLinker() {
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-dev-cache-"));
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-dev-cache-"));
   const manifest = JSON.parse(await fs.readFile(path.join(process.cwd(), ".codex-plugin", "plugin.json"), "utf8"));
   const cachePath = path.join(tmp, ".codex", "plugins", "cache", "personal", manifest.name, manifest.version);
   const markerPath = path.join(cachePath, "cache-marker.txt");
@@ -1593,30 +1597,30 @@ async function testDevPluginCacheLinker() {
 }
 
 async function testCliCollectHelp() {
-  const { stdout } = await execFileAsync(process.execPath, [path.join(process.cwd(), "bin", "agent-canvas.mjs"), "help"], {
+  const { stdout } = await execFileAsync(process.execPath, [path.join(process.cwd(), "bin", "codex-canvas.mjs"), "help"], {
     cwd: process.cwd(),
     maxBuffer: 1024 * 1024,
     windowsHide: true
   });
-  if (!stdout.includes("agent-canvas import <image-path> [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--prompt <text>] [--name <name>]")) {
+  if (!stdout.includes("codex-canvas import <image-path> [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--prompt <text>] [--name <name>]")) {
     throw new Error("CLI help should document import canvas scope flags.");
   }
-  if (!stdout.includes("agent-canvas collect [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--from <dir,dir>] [--since-minutes 120] [--limit 20]")) {
+  if (!stdout.includes("codex-canvas collect [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--from <dir,dir>] [--since-minutes 120] [--limit 20]")) {
     throw new Error("CLI help should document collect flags.");
   }
-  if (!stdout.includes("agent-canvas search [query] [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--type image|text|drawing|job] [--limit 20] [--json]")) {
+  if (!stdout.includes("codex-canvas search [query] [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--type image|text|drawing|job] [--limit 20] [--json]")) {
     throw new Error("CLI help should document search flags.");
   }
-  if (!stdout.includes("agent-canvas prompts [query] [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--limit 20] [--json]")) {
+  if (!stdout.includes("codex-canvas prompts [query] [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--limit 20] [--json]")) {
     throw new Error("CLI help should document prompt history flags.");
   }
-  if (!stdout.includes("agent-canvas versions [query] [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--group-by sourceObjectId|batchId|layoutMode|prompt] [--limit 20] [--object-limit 20] [--json]")) {
+  if (!stdout.includes("codex-canvas versions [query] [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--group-by sourceObjectId|batchId|layoutMode|prompt] [--limit 20] [--object-limit 20] [--json]")) {
     throw new Error("CLI help should document version grouping flags.");
   }
-  if (!stdout.includes("agent-canvas status [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--json]")) {
+  if (!stdout.includes("codex-canvas status [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--json]")) {
     throw new Error("CLI help should document status canvas scope flags.");
   }
-  if (!stdout.includes("--canvas-id selects an explicit Agent-Canvas canvas scope and overrides --thread-id.")) {
+  if (!stdout.includes("--canvas-id selects an explicit Codex-Canvas canvas scope and overrides --thread-id.")) {
     throw new Error("CLI help should document explicit canvas scope precedence.");
   }
   if (!stdout.includes("Import recent image files from ~/.codex/generated_images and the project.")) {
@@ -1646,7 +1650,7 @@ async function testCliArgumentParsingAndErrors() {
   assertEqual(collected.body.imported.length, 1, "CLI collect should apply equals-form limit values");
   assertEqual(collected.body.scannedRoots[0], collectFixture.imagesDir, "CLI collect should apply equals-form --from paths");
 
-  const importProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-cli-import-"));
+  const importProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-cli-import-"));
   const sourcePath = path.join(importProjectDir, "source.png");
   await fs.writeFile(sourcePath, Buffer.from(pngOne, "base64"));
   const imported = await runCliJson([
@@ -1702,18 +1706,18 @@ async function testCliArgumentParsingAndErrors() {
 }
 
 async function testCliCodexThreadEnvironment() {
-  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-cli-thread-env-"));
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-cli-thread-env-"));
   const codexThreadId = "thread-from-codex-env";
   const agentThreadId = "thread-from-agent-env";
   const baseEnv = {
     ...process.env,
-    AGENT_CANVAS_PROJECT_DIR: projectDir
+    CODEX_CANVAS_PROJECT_DIR: projectDir
   };
 
   const codexEnvStatus = await runCliJson(["status", "--project", projectDir, "--json"], {
     env: {
       ...baseEnv,
-      AGENT_CANVAS_CODEX_THREAD_ID: "",
+      CODEX_CANVAS_CODEX_THREAD_ID: "",
       CODEX_THREAD_ID: codexThreadId
     }
   });
@@ -1723,16 +1727,16 @@ async function testCliCodexThreadEnvironment() {
   const agentEnvStatus = await runCliJson(["status", "--project", projectDir, "--json"], {
     env: {
       ...baseEnv,
-      AGENT_CANVAS_CODEX_THREAD_ID: agentThreadId,
+      CODEX_CANVAS_CODEX_THREAD_ID: agentThreadId,
       CODEX_THREAD_ID: codexThreadId
     }
   });
-  assertEqual(agentEnvStatus.body.canvasId, canvasIdForThread(agentThreadId), "AGENT_CANVAS_CODEX_THREAD_ID should override CODEX_THREAD_ID for explicit plugin launches");
+  assertEqual(agentEnvStatus.body.canvasId, canvasIdForThread(agentThreadId), "CODEX_CANVAS_CODEX_THREAD_ID should override CODEX_THREAD_ID for explicit plugin launches");
 
   const explicitStatus = await runCliJson(["status", "--project", projectDir, "--thread-id", "thread-from-flag", "--json"], {
     env: {
       ...baseEnv,
-      AGENT_CANVAS_CODEX_THREAD_ID: agentThreadId,
+      CODEX_CANVAS_CODEX_THREAD_ID: agentThreadId,
       CODEX_THREAD_ID: codexThreadId
     }
   });
@@ -1740,13 +1744,13 @@ async function testCliCodexThreadEnvironment() {
 }
 
 async function testDoctorOptionalDepsWithoutPython() {
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-no-python-"));
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-no-python-"));
   const emptyPath = path.join(tmp, "empty-path");
   await fs.mkdir(emptyPath);
   const env = {
     ...withoutPathEnv(process.env),
     PATH: emptyPath,
-    AGENT_CANVAS_PROJECT_DIR: tmp
+    CODEX_CANVAS_PROJECT_DIR: tmp
   };
   for (const command of ["doctor-ocr", "doctor-image-deps", "doctor-deps", "setup-deps"]) {
     const result = await runCliJson([command, "--json"], { env });
@@ -1762,12 +1766,12 @@ async function testDoctorOptionalDepsWithoutPython() {
 }
 
 async function testChatTurnActionContract() {
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-chat-turn-"));
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-chat-turn-"));
   const fakeCodex = path.join(tmp, process.platform === "win32" ? "codex.cmd" : "codex");
   await fs.writeFile(fakeCodex, fakeCodexAppServerScript(), { mode: 0o755 });
 
-  const previousCli = process.env.AGENT_CANVAS_CODEX_CLI;
-  process.env.AGENT_CANVAS_CODEX_CLI = fakeCodex;
+  const previousCli = process.env.CODEX_CANVAS_CODEX_CLI;
+  process.env.CODEX_CANVAS_CODEX_CLI = fakeCodex;
   const { server, url } = await createServer({
     projectDir: tmp,
     port: 0,
@@ -1807,13 +1811,13 @@ async function testChatTurnActionContract() {
     assertEqual(sent.status, 200, "chat turn with stable action should succeed");
     assertEqual(sent.body.status, "completed", "chat turn should complete through fake app-server");
   } finally {
-    process.env.AGENT_CANVAS_CODEX_CLI = previousCli;
+    process.env.CODEX_CANVAS_CODEX_CLI = previousCli;
     await new Promise((resolve) => server.close(resolve));
   }
 }
 
 async function testStoreConcurrency() {
-  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-store-"));
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-store-"));
   const created = await Promise.all(Array.from({ length: 20 }, (_, index) => (
     addObject(projectDir, { type: "text", text: `item-${index}`, x: index, y: index })
   )));
@@ -1843,7 +1847,7 @@ async function testStoreConcurrency() {
 }
 
 async function testDeleteUndoRestore() {
-  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-undo-"));
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-undo-"));
   const first = await addObject(projectDir, { type: "text", text: "first", x: 1, y: 1 });
   const second = await addObject(projectDir, { type: "text", text: "second", x: 2, y: 2 });
   const third = await addObject(projectDir, { type: "text", text: "third", x: 3, y: 3 });
@@ -1866,7 +1870,7 @@ async function testDeleteUndoRestore() {
 }
 
 async function testChatBindingAlias() {
-  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-rebind-"));
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-rebind-"));
   const { server, url } = await createServer({ projectDir, port: 0, autoCollect: false });
   const base = url.replace(/\?.*/, "");
   const search = new URL(url).search;
@@ -1883,15 +1887,15 @@ async function testChatBindingAlias() {
 }
 
 async function testChatWebSocketFallback() {
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-chat-"));
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-chat-"));
   const fakeCodex = path.join(tmp, process.platform === "win32" ? "codex.cmd" : "codex");
   const imagePath = path.join(tmp, "image.png");
   await fs.writeFile(imagePath, Buffer.from(pngOne, "base64"));
   await fs.writeFile(fakeCodex, fakeCodexAppServerScript(), { mode: 0o755 });
 
-  const previousCli = process.env.AGENT_CANVAS_CODEX_CLI;
+  const previousCli = process.env.CODEX_CANVAS_CODEX_CLI;
   const previousWebSocket = globalThis.WebSocket;
-  process.env.AGENT_CANVAS_CODEX_CLI = fakeCodex;
+  process.env.CODEX_CANVAS_CODEX_CLI = fakeCodex;
   globalThis.WebSocket = undefined;
   try {
     const result = await sendImageToBoundChat({
@@ -1902,16 +1906,16 @@ async function testChatWebSocketFallback() {
     });
     assertEqual(result.status, "completed", "fallback WebSocket chat turn should complete");
   } finally {
-    process.env.AGENT_CANVAS_CODEX_CLI = previousCli;
+    process.env.CODEX_CANVAS_CODEX_CLI = previousCli;
     globalThis.WebSocket = previousWebSocket;
   }
 }
 
 async function testEditTextCancellationCleanup() {
-  const previous = process.env.AGENT_CANVAS_TEST_HELPERS;
-  process.env.AGENT_CANVAS_TEST_HELPERS = "1";
+  const previous = process.env.CODEX_CANVAS_TEST_HELPERS;
+  process.env.CODEX_CANVAS_TEST_HELPERS = "1";
   try {
-    const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-edit-text-cancel-"));
+    const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-edit-text-cancel-"));
     const source = await addImage(projectDir, {
       dataUrl: `data:image/png;base64,${pngOne}`,
       name: "source.png"
@@ -1936,8 +1940,8 @@ async function testEditTextCancellationCleanup() {
     }
     await fs.access(logPath);
   } finally {
-    if (previous === undefined) delete process.env.AGENT_CANVAS_TEST_HELPERS;
-    else process.env.AGENT_CANVAS_TEST_HELPERS = previous;
+    if (previous === undefined) delete process.env.CODEX_CANVAS_TEST_HELPERS;
+    else process.env.CODEX_CANVAS_TEST_HELPERS = previous;
   }
 }
 
@@ -1948,7 +1952,7 @@ async function testQuickEditAnnotations() {
     return;
   }
 
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-quick-edit-annotations-"));
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-quick-edit-annotations-"));
   const fakeCodex = path.join(tmp, process.platform === "win32" ? "codex.cmd" : "codex");
   const makeSource = path.join(tmp, "make-source.py");
   await fs.writeFile(makeSource, [
@@ -1964,10 +1968,10 @@ async function testQuickEditAnnotations() {
   await runPython([makeSource, tmp]);
   await fs.writeFile(fakeCodex, fakeCodexCaptureImageJobScript(), { mode: 0o755 });
 
-  const previousCli = process.env.AGENT_CANVAS_CODEX_CLI;
-  process.env.AGENT_CANVAS_CODEX_CLI = fakeCodex;
+  const previousCli = process.env.CODEX_CANVAS_CODEX_CLI;
+  process.env.CODEX_CANVAS_CODEX_CLI = fakeCodex;
   try {
-    const plainProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-quick-edit-plain-"));
+    const plainProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-quick-edit-plain-"));
     const plainSource = await addImage(plainProjectDir, {
       path: path.join(tmp, "source.png"),
       name: "plain-source.png",
@@ -1988,7 +1992,7 @@ async function testQuickEditAnnotations() {
       throw new Error("Quick Edit without annotations should not append the annotation prompt suffix.");
     }
 
-    const annotatedProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-quick-edit-marked-"));
+    const annotatedProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-quick-edit-marked-"));
     const markedSource = await addImage(annotatedProjectDir, {
       path: path.join(tmp, "source.png"),
       name: "marked-source.png",
@@ -2039,7 +2043,7 @@ async function testQuickEditAnnotations() {
     if (!imageArg.endsWith(path.join("inputs", "quick-edit-annotated.png"))) {
       throw new Error(`Quick Edit with annotations should send the composed annotated PNG, got ${imageArg}.`);
     }
-    if (!/Follow the markup/.test(capture.prompt || "") || !/temporary user annotations/.test(capture.prompt || "") || !/Text annotations captured by Agent-Canvas/.test(capture.prompt || "") || !/remove this/.test(capture.prompt || "") || !/Do not keep annotation/.test(capture.prompt || "")) {
+    if (!/Follow the markup/.test(capture.prompt || "") || !/temporary user annotations/.test(capture.prompt || "") || !/Text annotations captured by Codex-Canvas/.test(capture.prompt || "") || !/remove this/.test(capture.prompt || "") || !/Do not keep annotation/.test(capture.prompt || "")) {
       throw new Error("Quick Edit with annotations should append the annotation removal prompt suffix.");
     }
 
@@ -2058,8 +2062,8 @@ async function testQuickEditAnnotations() {
     }
     await fs.access(imageArg);
   } finally {
-    if (previousCli === undefined) delete process.env.AGENT_CANVAS_CODEX_CLI;
-    else process.env.AGENT_CANVAS_CODEX_CLI = previousCli;
+    if (previousCli === undefined) delete process.env.CODEX_CANVAS_CODEX_CLI;
+    else process.env.CODEX_CANVAS_CODEX_CLI = previousCli;
   }
 }
 
@@ -2086,7 +2090,7 @@ async function testEditElementsScripts() {
     return;
   }
 
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-elements-"));
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-elements-"));
   const makeImages = path.join(tmp, "make-images.py");
   await fs.writeFile(makeImages, [
     "from pathlib import Path",
@@ -2208,17 +2212,17 @@ async function inspectPreparedBackground(tmp) {
 }
 
 async function testEditElementsLayerPlacement(tmp) {
-  const previous = process.env.AGENT_CANVAS_TEST_HELPERS;
-  const previousCli = process.env.AGENT_CANVAS_CODEX_CLI;
-  process.env.AGENT_CANVAS_TEST_HELPERS = "1";
+  const previous = process.env.CODEX_CANVAS_TEST_HELPERS;
+  const previousCli = process.env.CODEX_CANVAS_CODEX_CLI;
+  process.env.CODEX_CANVAS_TEST_HELPERS = "1";
   try {
-    const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-canvas-elements-place-"));
+    const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-elements-place-"));
     const outputDir = path.join(projectDir, "job-output");
     const elementsDir = path.join(outputDir, "elements");
     await fs.mkdir(elementsDir, { recursive: true });
     const fakeCodex = path.join(projectDir, process.platform === "win32" ? "codex.cmd" : "codex");
     await fs.writeFile(fakeCodex, fakeCodexCompletedBackgroundScript(), { mode: 0o755 });
-    process.env.AGENT_CANVAS_CODEX_CLI = fakeCodex;
+    process.env.CODEX_CANVAS_CODEX_CLI = fakeCodex;
 
     const placementSourcePath = path.join(projectDir, "placement-source.png");
     const makePlacementSource = path.join(projectDir, "make-placement-source.py");
@@ -2362,10 +2366,10 @@ async function testEditElementsLayerPlacement(tmp) {
       "--write-final-composite", path.join(elementsDir, "completed-reconstruction.png")
     ]);
   } finally {
-    if (previous === undefined) delete process.env.AGENT_CANVAS_TEST_HELPERS;
-    else process.env.AGENT_CANVAS_TEST_HELPERS = previous;
-    if (previousCli === undefined) delete process.env.AGENT_CANVAS_CODEX_CLI;
-    else process.env.AGENT_CANVAS_CODEX_CLI = previousCli;
+    if (previous === undefined) delete process.env.CODEX_CANVAS_TEST_HELPERS;
+    else process.env.CODEX_CANVAS_TEST_HELPERS = previous;
+    if (previousCli === undefined) delete process.env.CODEX_CANVAS_CODEX_CLI;
+    else process.env.CODEX_CANVAS_CODEX_CLI = previousCli;
   }
 }
 
@@ -2390,7 +2394,7 @@ async function runCliJson(args, options = {}) {
 }
 
 async function runCli(args, options = {}) {
-  return await execFileAsync(process.execPath, [path.join(process.cwd(), "bin", "agent-canvas.mjs"), ...args], {
+  return await execFileAsync(process.execPath, [path.join(process.cwd(), "bin", "codex-canvas.mjs"), ...args], {
     cwd: process.cwd(),
     env: options.env || process.env,
     maxBuffer: 1024 * 1024,
@@ -2406,7 +2410,7 @@ async function runCli(args, options = {}) {
 }
 
 async function createLimitFixtureProject(label) {
-  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), `agent-canvas-${label}-`));
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), `codex-canvas-${label}-`));
   for (let index = 0; index < 105; index += 1) {
     await addImage(projectDir, {
       dataUrl: `data:image/png;base64,${pngOne}`,
@@ -2418,14 +2422,14 @@ async function createLimitFixtureProject(label) {
 }
 
 async function createCollectFixtureProject(label, count) {
-  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), `agent-canvas-${label}-`));
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), `codex-canvas-${label}-`));
   const imagesDir = path.join(projectDir, "generated");
   await fs.mkdir(imagesDir, { recursive: true });
   const basePng = Buffer.from(pngOne, "base64");
   for (let index = 0; index < count; index += 1) {
     await fs.writeFile(path.join(imagesDir, `${label}-${index}.png`), Buffer.concat([
       basePng,
-      Buffer.from(`agent-canvas-${label}-${index}`)
+      Buffer.from(`codex-canvas-${label}-${index}`)
     ]));
   }
   return { projectDir, imagesDir };
@@ -2632,9 +2636,9 @@ function fakeCodexCompletedBackgroundScript() {
   return `#!/usr/bin/env node
 const fs = require("fs");
 const path = require("path");
-const outputDir = process.env.AGENT_CANVAS_JOB_OUTPUT_DIR;
+const outputDir = process.env.CODEX_CANVAS_JOB_OUTPUT_DIR;
 if (!outputDir) {
-  console.error("AGENT_CANVAS_JOB_OUTPUT_DIR is required");
+  console.error("CODEX_CANVAS_JOB_OUTPUT_DIR is required");
   process.exit(2);
 }
 setTimeout(() => {
@@ -2648,9 +2652,9 @@ function fakeCodexCaptureImageJobScript() {
   return `#!/usr/bin/env node
 const fs = require("fs");
 const path = require("path");
-const outputDir = process.env.AGENT_CANVAS_JOB_OUTPUT_DIR;
+const outputDir = process.env.CODEX_CANVAS_JOB_OUTPUT_DIR;
 if (!outputDir) {
-  console.error("AGENT_CANVAS_JOB_OUTPUT_DIR is required");
+  console.error("CODEX_CANVAS_JOB_OUTPUT_DIR is required");
   process.exit(2);
 }
 const args = process.argv.slice(2);
@@ -2662,7 +2666,7 @@ const prompt = args[args.length - 1] || "";
 fs.mkdirSync(outputDir, { recursive: true });
 fs.writeFileSync(path.join(outputDir, "codex-capture.json"), JSON.stringify({ args, imageArgs, prompt }, null, 2));
 fs.copyFileSync(imageArgs[0], path.join(outputDir, "quick-edit-result.png"));
-fs.appendFileSync(path.join(outputDir, "quick-edit-result.png"), Buffer.from("agent-canvas-quick-edit-output"));
+fs.appendFileSync(path.join(outputDir, "quick-edit-result.png"), Buffer.from("codex-canvas-quick-edit-output"));
 `;
 }
 

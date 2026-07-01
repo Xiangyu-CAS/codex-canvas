@@ -8,7 +8,7 @@ export const publicDir = path.join(pluginRoot, "public");
 export const maxSafePathSegmentLength = 120;
 
 export function resolveProjectDir(value) {
-  return path.resolve(value || process.env.AGENT_CANVAS_PROJECT_DIR || process.cwd());
+  return path.resolve(value || process.env.CODEX_CANVAS_PROJECT_DIR || process.cwd());
 }
 
 export function dataDirFor(projectDir) {
@@ -24,7 +24,7 @@ export function legacyCanvasDataDirFor(projectDir, canvasId = null) {
 }
 
 export function statePathFor(projectDir, canvasId = null) {
-  return path.join(canvasDataDirFor(projectDir, canvasId), "agent-canvas.json");
+  return path.join(canvasDataDirFor(projectDir, canvasId), "codex-canvas.json");
 }
 
 export function assetsDirFor(projectDir, canvasId = null) {
@@ -36,13 +36,13 @@ export function jobsDirFor(projectDir, canvasId = null) {
 }
 
 export function runtimePathFor(projectDir) {
-  return path.join(dataDirFor(projectDir), ".agent-canvas-runtime.json");
+  return path.join(dataDirFor(projectDir), ".codex-canvas-runtime.json");
 }
 
 export function projectRegistryPath() {
   return path.resolve(
-    process.env.AGENT_CANVAS_PROJECT_REGISTRY_PATH
-    || path.join(os.homedir(), ".agents", "agent-canvas", "projects.json")
+    process.env.CODEX_CANVAS_PROJECT_REGISTRY_PATH
+    || path.join(os.homedir(), ".agents", "codex-canvas", "projects.json")
   );
 }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Normalize a generated completed background for Agent-Canvas element layers."""
+"""Normalize a generated completed background for Codex-Canvas element layers."""
 
 from __future__ import annotations
 

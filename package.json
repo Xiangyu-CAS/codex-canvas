@@ -1,10 +1,10 @@
 {
-  "name": "agent-canvas",
+  "name": "codex-canvas",
   "version": "0.1.1",
   "description": "Local infinite canvas plugin for Codex image workflows.",
   "type": "module",
   "bin": {
-    "agent-canvas": "./bin/agent-canvas.mjs"
+    "codex-canvas": "./bin/codex-canvas.mjs"
   },
   "files": [
     ".codex-plugin/",
@@ -20,16 +20,16 @@
     "src/"
   ],
   "scripts": {
-    "setup:ocr": "node ./bin/agent-canvas.mjs setup-ocr",
-    "setup:image-deps": "node ./bin/agent-canvas.mjs setup-image-deps",
-    "setup:deps": "node ./bin/agent-canvas.mjs setup-deps",
+    "setup:ocr": "node ./bin/codex-canvas.mjs setup-ocr",
+    "setup:image-deps": "node ./bin/codex-canvas.mjs setup-image-deps",
+    "setup:deps": "node ./bin/codex-canvas.mjs setup-deps",
     "install:personal": "node ./scripts/install-personal-plugin.mjs",
     "install:dev-cache": "node ./scripts/link-dev-plugin-cache.mjs",
-    "doctor:ocr": "node ./bin/agent-canvas.mjs doctor-ocr --json",
-    "doctor:image-deps": "node ./bin/agent-canvas.mjs doctor-image-deps --json",
-    "doctor:deps": "node ./bin/agent-canvas.mjs doctor-deps --json",
-    "start": "node ./bin/agent-canvas.mjs start",
-    "validate": "node ./bin/agent-canvas.mjs status --json",
+    "doctor:ocr": "node ./bin/codex-canvas.mjs doctor-ocr --json",
+    "doctor:image-deps": "node ./bin/codex-canvas.mjs doctor-image-deps --json",
+    "doctor:deps": "node ./bin/codex-canvas.mjs doctor-deps --json",
+    "start": "node ./bin/codex-canvas.mjs start",
+    "validate": "node ./bin/codex-canvas.mjs status --json",
     "smoke": "node ./scripts/smoke.mjs",
     "smoke:visual": "node ./scripts/visual-smoke.mjs",
     "visual:regression": "node ./scripts/visual-regression.mjs",
@@ -42,7 +42,7 @@
     "imagegen"
   ],
   "author": {
-    "name": "Agent-Canvas Contributors"
+    "name": "Codex-Canvas Contributors"
   },
   "license": "MIT",
   "engines": {
