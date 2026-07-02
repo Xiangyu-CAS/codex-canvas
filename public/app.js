@@ -38,11 +38,13 @@ const searchDebounceMs = 180;
 const languageStorageKey = "codexCanvasLanguage";
 const toolColorStorageKey = "codexCanvasToolColor";
 const toolColors = ["#202124", "#d93025", "#f9ab00", "#188038", "#1a73e8", "#9334e6", "#ffffff"];
+const defaultQuickEditMarkColor = "#d93025";
 const initialSearchParams = new URLSearchParams(window.location.search);
 let currentProjectId = initialSearchParams.get("project") || "";
 let currentThreadId = initialSearchParams.get("threadId") || initialSearchParams.get("thread-id") || "";
 let registeredProjects = [];
 const pendingTextRecognitionCancels = new Set();
+let quickEditAutoColorPrevious = null;
 
 const translations = {
   en: {
@@ -124,7 +126,7 @@ const translations = {
     jobDone: "finished and was added to the canvas.",
     jobFailed: "failed.",
     chatSendStarted: "Sending image to bound chat...",
-    chatSendDone: "Image sent to bound chat.",
+    chatSendDone: "Image submitted through Codex app-server. If it does not appear in the visible chat, use Copy @file.",
     fileMentionCopied: "@file reference copied. Paste it into the Codex chat box.",
     fileMentionCopyFailed: "Could not copy @file reference.",
     chatNotBound: "Bind this canvas to a Codex thread first.",
@@ -256,7 +258,7 @@ const translations = {
     jobDone: "已完成并添加到画布。",
     jobFailed: "失败。",
     chatSendStarted: "正在发送图片到已绑定对话...",
-    chatSendDone: "图片已发送到已绑定对话。",
+    chatSendDone: "图片已通过 Codex app-server 提交；如果当前对话没有显示，请用“复制 @文件”。",
     fileMentionCopied: "@file 引用已复制，请粘贴到 Codex 聊天框。",
     fileMentionCopyFailed: "无法复制 @file 引用。",
     chatNotBound: "请先把画布绑定到 Codex thread。",
@@ -3138,6 +3140,7 @@ function openImageActionComposer(action) {
   quickEditObjectId = object.id;
   quickEditPrompt.placeholder = composerPlaceholder(action);
   configureComposerMode(action, object);
+  applyQuickEditDefaultMarkColor(action);
   quickEditComposer.hidden = false;
   updateColorPalette();
   frameObjectForQuickEdit(object, action);
@@ -3167,6 +3170,7 @@ function closeQuickEdit({ keepPrompt = false, cancelTextSession = true, restoreE
   quickEditComposer.hidden = true;
   quickEditObjectId = null;
   quickEditAction = null;
+  restoreQuickEditDefaultMarkColor();
   activeTextRecognitionId = null;
   editTextItems = [];
   editTextList.replaceChildren();
@@ -3179,6 +3183,22 @@ function closeQuickEdit({ keepPrompt = false, cancelTextSession = true, restoreE
   if (!keepPrompt) quickEditPrompt.value = "";
   updateColorPalette();
   updateExpandPreview();
+}
+
+function applyQuickEditDefaultMarkColor(action) {
+  if (action !== "quick-edit") return;
+  if (localStorage.getItem(toolColorStorageKey)) return;
+  if (activeColor === defaultQuickEditMarkColor) return;
+  quickEditAutoColorPrevious = activeColor;
+  activeColor = defaultQuickEditMarkColor;
+}
+
+function restoreQuickEditDefaultMarkColor() {
+  if (!quickEditAutoColorPrevious) return;
+  if (!localStorage.getItem(toolColorStorageKey) && activeColor === defaultQuickEditMarkColor) {
+    activeColor = quickEditAutoColorPrevious;
+  }
+  quickEditAutoColorPrevious = null;
 }
 
 async function submitQuickEdit() {

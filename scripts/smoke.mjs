@@ -954,6 +954,9 @@ async function testFrontendActionContract() {
   if (app.includes("image.title = label") || app.includes("element.title = label")) {
     throw new Error("canvas image objects should not expose long native hover tooltips.");
   }
+  if (!app.includes('const defaultQuickEditMarkColor = "#d93025"') || !app.includes("applyQuickEditDefaultMarkColor(action)")) {
+    throw new Error("Quick Edit should default temporary markup to red without changing the global tool color default.");
+  }
 
   const frontendImageJobActions = [...domActions].filter((action) => stableFrontendImageActions.includes(action));
   for (const action of frontendImageJobActions) {
@@ -1279,6 +1282,15 @@ async function testMcpCanvasStatus() {
       Boolean(process.env.CODEX_CANVAS_CODEX_THREAD_ID || process.env.CODEX_THREAD_ID),
       "MCP canvas_status should infer chat binding only when a Codex thread environment is available"
     );
+    const opened = await client.request("tools/call", {
+      name: "open_canvas",
+      arguments: { projectDir, autoUpdate: false }
+    });
+    const openedText = opened.content?.find((item) => item.type === "text")?.text || "";
+    if (!/Codex-Canvas is available: \[Open Codex-Canvas\]\(http:\/\/127\.0\.0\.1:\d+\/\?project=[^)]+\)/.test(openedText)) {
+      throw new Error("MCP open_canvas should return a clickable Markdown link, not only a bare URL.");
+    }
+    assertEqual(opened.structuredContent?.url?.startsWith("http://127.0.0.1:"), true, "MCP open_canvas should keep the raw URL in structured content");
     const customCanvasId = "mcp-custom-canvas";
     await client.request("tools/call", {
       name: "add_image",
@@ -1580,6 +1592,7 @@ async function testPluginPackageManifest() {
   for (const requiredPath of [
     ".codex-plugin/plugin.json",
     ".mcp.json",
+    "INSTALL.md",
     "assets/icon.png",
     "bin/codex-canvas.mjs",
     "public/app.js",
@@ -1601,6 +1614,9 @@ async function testPluginPackageManifest() {
   }
   if (!canvasSkill.includes("Do not rely on the user clicking a printed URL")) {
     throw new Error("canvas skill should avoid printed URL click fallback because it opens the default browser.");
+  }
+  if (!canvasSkill.includes("[Open Codex-Canvas](<url>)")) {
+    throw new Error("canvas skill should tell agents to present returned canvas URLs as Markdown links.");
   }
 
   for (const file of packedFiles) {
@@ -2310,8 +2326,17 @@ async function testQuickEditAnnotations() {
     if (!imageArg.endsWith(path.join("inputs", "quick-edit-annotated.png"))) {
       throw new Error(`Quick Edit with annotations should send the composed annotated PNG, got ${imageArg}.`);
     }
-    if (!/Follow the markup/.test(capture.prompt || "") || !/temporary user annotations/.test(capture.prompt || "") || !/Text annotations captured by Codex-Canvas/.test(capture.prompt || "") || !/remove this/.test(capture.prompt || "") || !/Do not keep annotation/.test(capture.prompt || "")) {
-      throw new Error("Quick Edit with annotations should append the annotation removal prompt suffix.");
+    const prompt = capture.prompt || "";
+    if (
+      !/Follow the markup/.test(prompt)
+      || !/temporary user annotations/.test(prompt)
+      || !/Codex-Canvas annotation\/mask details/.test(prompt)
+      || !/red \(#d93025\) drawing mask/.test(prompt)
+      || !/blue \(#1a73e8\) text label: "remove this"/.test(prompt)
+      || !/Treat this label as edit instruction text/.test(prompt)
+      || !/Do not keep annotation/.test(prompt)
+    ) {
+      throw new Error("Quick Edit with annotations should append color-aware annotation and removal prompt details.");
     }
 
     const manifestPath = path.join(jobsDirFor(annotatedProjectDir), annotatedJob.id, "inputs", "quick-edit-annotations.json");
@@ -2663,7 +2688,7 @@ async function testEditElementsLayerPlacement(tmp) {
       ]
     }, null, 2)}\n`);
 
-    await placeImportedElementLayersForTest(projectDir, {
+    const placementJob = {
       id: "placement-contract",
       canvasId: null,
       projectDir,
@@ -2674,7 +2699,8 @@ async function testEditElementsLayerPlacement(tmp) {
       placeholder,
       placeholderId: placeholder.id,
       imported: [topLayer, bottomLayer]
-    });
+    };
+    await placeImportedElementLayersForTest(projectDir, placementJob);
 
     const state = await readState(projectDir);
     if (state.objects.some((object) => object.id === placeholder.id)) {
@@ -2708,6 +2734,11 @@ async function testEditElementsLayerPlacement(tmp) {
     assertEqual(psd.buffer.subarray(0, 4).toString("ascii"), "8BPS", "PSD export should write a Photoshop document");
     assertEqual(psd.layerCount, 2, "PSD export should include every image layer in the Edit Elements group");
 
+    await waitForCondition(
+      () => placementJob.backgroundCompletionRunning,
+      "Edit Elements background completion should keep image jobs running so auto-collection cannot collect its raw output"
+    );
+
     await reorderLayerGroupLayer(projectDir, "layer_group_placement-contract", groupMembers[1].id, "down");
     const movedDownState = await readState(projectDir);
     const movedDownMembers = movedDownState.objects.filter((object) => object.layerGroupId === "layer_group_placement-contract");
@@ -2722,6 +2753,7 @@ async function testEditElementsLayerPlacement(tmp) {
       (object) => object.id === bottomLayer.id && object.layerGroupBackgroundStatus === "ready" && Number.isFinite(object.assetVersion),
       "Edit Elements background completion should replace the imported background layer in place"
     );
+    assertEqual(placementJob.backgroundCompletionRunning, false, "Edit Elements background completion should stop blocking auto-collection after integration");
     assertEqual(readyBackground.layerGroupKind, "background", "completed background should remain the background group layer");
     const completedBackgroundPath = path.join(outputDir, "background-completion", "edit-elements-background-completed.png");
     const ignoredPaths = getIgnoredGeneratedImagePaths({ projectDir, canvasId: null }).map((item) => path.resolve(item));
@@ -2847,6 +2879,15 @@ async function waitForLocalStateObject(projectDir, predicate, message) {
     const state = await readState(projectDir);
     const object = state.objects?.find(predicate);
     if (object) return object;
+    await delay(100);
+  }
+  throw new Error(message);
+}
+
+async function waitForCondition(predicate, message) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 4000) {
+    if (await predicate()) return;
     await delay(100);
   }
   throw new Error(message);
@@ -3023,7 +3064,7 @@ if (!outputDir) {
 setTimeout(() => {
   fs.mkdirSync(outputDir, { recursive: true });
   fs.writeFileSync(path.join(outputDir, "edit-elements-background-completed.png"), Buffer.from("${pngOne}", "base64"));
-}, 250);
+}, 1200);
 `;
 }
 

@@ -104,6 +104,7 @@ export async function createImageJob(projectDir, input, options = {}) {
     imported: [],
     placeholder: null,
     placeholderId: null,
+    backgroundCompletionRunning: false,
     error: null
   };
   const placeholder = await addJobPlaceholder(projectDir, {
@@ -270,7 +271,7 @@ export async function submitTextRecognitionEdit(projectDir, id, input = {}, opti
 }
 
 export function hasRunningImageJobs(options = {}) {
-  return Array.from(jobs.values()).some((job) => jobMatchesScope(job, options) && (job.status === "queued" || job.status === "running"))
+  return Array.from(jobs.values()).some((job) => jobMatchesScope(job, options) && (job.status === "queued" || job.status === "running" || job.backgroundCompletionRunning))
     || Array.from(textRecognitionJobs.values()).some((job) => jobMatchesScope(job, options) && job.status === "running" && job.stage === "generating");
 }
 
@@ -764,24 +765,104 @@ function buildExpandPrompt(job) {
 
 function appendQuickEditAnnotationSuffix(prompt, annotations = null) {
   const base = typeof prompt === "string" ? prompt.trim() : "";
-  const textSummary = quickEditAnnotationTextSummary(annotations);
-  return `${base || "Improve the image according to the user's selected Quick Edit request."}${quickEditAnnotationPromptSuffix}${textSummary}`;
+  const annotationSummary = quickEditAnnotationSummary(annotations);
+  return `${base || "Improve the image according to the user's selected Quick Edit request."}${quickEditAnnotationPromptSuffix}${annotationSummary}`;
 }
 
-function quickEditAnnotationTextSummary(annotations) {
+function quickEditAnnotationSummary(annotations) {
   const items = Array.isArray(annotations?.items) ? annotations.items : [];
-  const textItems = items
-    .filter((item) => item?.type === "text" && typeof item.text === "string" && item.text.trim())
-    .map((item) => item.text.trim())
-    .slice(0, 8);
-  if (!textItems.length) return "";
+  const summaries = items
+    .map(quickEditAnnotationItemSummary)
+    .filter(Boolean)
+    .slice(0, 12);
+  if (!summaries.length) return "";
 
   return [
     "",
     "",
-    "Text annotations captured by Codex-Canvas:",
-    ...textItems.map((text, index) => `${index + 1}. ${text}`)
+    "Codex-Canvas annotation/mask details:",
+    ...summaries.map((summary, index) => `${index + 1}. ${summary}`)
   ].join("\n");
+}
+
+function quickEditAnnotationItemSummary(item) {
+  if (item?.type === "drawing") {
+    const color = colorDescription(item.stroke);
+    const strokeWidth = Number.isFinite(item.strokeWidth) ? `${item.strokeWidth}px` : "unknown-width";
+    const pointCount = Array.isArray(item.points) ? item.points.length : 0;
+    const bounds = annotationPointsBounds(item.points);
+    const boundsText = bounds ? `, covering source pixels ${formatBounds(bounds)}` : "";
+    return `${color} drawing mask, ${strokeWidth} stroke, ${pointCount} points${boundsText}.`;
+  }
+
+  if (item?.type === "text" && typeof item.text === "string" && item.text.trim()) {
+    const color = colorDescription(item.color);
+    const text = truncatePromptLine(item.text.trim(), 180);
+    const bounds = annotationRectBounds(item);
+    const boundsText = bounds ? ` at source pixels ${formatBounds(bounds)}` : "";
+    return `${color} text label: ${JSON.stringify(text)}${boundsText}. Treat this label as edit instruction text.`;
+  }
+
+  return null;
+}
+
+function annotationPointsBounds(points) {
+  if (!Array.isArray(points) || !points.length) return null;
+  const validPoints = points.filter((point) => Number.isFinite(point?.x) && Number.isFinite(point?.y));
+  if (!validPoints.length) return null;
+  const xs = validPoints.map((point) => point.x);
+  const ys = validPoints.map((point) => point.y);
+  return {
+    x: Math.min(...xs),
+    y: Math.min(...ys),
+    right: Math.max(...xs),
+    bottom: Math.max(...ys)
+  };
+}
+
+function annotationRectBounds(item) {
+  if (!Number.isFinite(item?.x) || !Number.isFinite(item?.y)) return null;
+  const width = Number.isFinite(item.width) ? Math.max(1, item.width) : 1;
+  const height = Number.isFinite(item.height) ? Math.max(1, item.height) : 1;
+  return {
+    x: item.x,
+    y: item.y,
+    right: item.x + width,
+    bottom: item.y + height
+  };
+}
+
+function formatBounds(bounds) {
+  return `x ${Math.round(bounds.x)}-${Math.round(bounds.right)}, y ${Math.round(bounds.y)}-${Math.round(bounds.bottom)}`;
+}
+
+function truncatePromptLine(value, maxLength) {
+  const singleLine = String(value).replace(/\s+/g, " ").trim();
+  return singleLine.length > maxLength ? `${singleLine.slice(0, maxLength - 1)}...` : singleLine;
+}
+
+function colorDescription(value) {
+  const normalized = normalizeHexColor(value);
+  const names = {
+    "#202124": "black",
+    "#d93025": "red",
+    "#f9ab00": "yellow",
+    "#188038": "green",
+    "#1a73e8": "blue",
+    "#9334e6": "purple",
+    "#ffffff": "white"
+  };
+  if (!normalized) return "unknown-color";
+  return names[normalized] ? `${names[normalized]} (${normalized})` : `color ${normalized}`;
+}
+
+function normalizeHexColor(value) {
+  const color = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (/^#[0-9a-f]{6}$/.test(color)) return color;
+  if (/^#[0-9a-f]{3}$/.test(color)) {
+    return `#${color[1]}${color[1]}${color[2]}${color[2]}${color[3]}${color[3]}`;
+  }
+  return color || null;
 }
 
 async function collectQuickEditAnnotations(projectDir, imageObject, options = {}) {
@@ -1045,6 +1126,7 @@ async function completeElementBackground(job, manifest, layersDir, backgroundObj
   const startedAtMs = Date.now();
 
   await fs.mkdir(completionDir, { recursive: true });
+  job.backgroundCompletionRunning = true;
   await appendJobLog(job, `Completing Edit Elements background from residual layer: ${backgroundPath}`);
   const codexJob = await startCodexImageJob({
     projectDir: job.projectDir,
@@ -1110,6 +1192,7 @@ async function completeElementBackground(job, manifest, layersDir, backgroundObj
     await appendJobLog(job, `Completed Edit Elements background integrated: ${backgroundPath}`);
     return manifest;
   } finally {
+    job.backgroundCompletionRunning = false;
     stopChild(codexJob.child);
   }
 }

@@ -24,7 +24,8 @@ Use this skill to open the local Codex-Canvas board and keep generated images co
    - Use the Browser plugin / in-app browser control surface for this step. The intended result is that the canvas appears inside Codex, next to the chat.
    - Do not open the URL with the operating system default browser. Do not use `open`, `xdg-open`, `start`, PowerShell `Start-Process`, AppleScript, clipboard paste, coordinate clicking, or any desktop UI automation as a fallback.
    - Do not rely on the user clicking a printed URL; that commonly opens Chrome or the system default browser instead of Codex's in-app browser.
-   - If the Browser plugin / in-app browser control surface is unavailable in the current Codex surface, return the URL and state that Codex-Canvas is running but the in-app browser could not be opened from this surface. Do not launch an external browser.
+   - Whenever you show the canvas URL to the user, format it as a Markdown link: `[Open Codex-Canvas](<url>)`. Do not show only a bare `url` field, because some Codex surfaces do not make that clickable.
+   - If the Browser plugin / in-app browser control surface is unavailable in the current Codex surface, return a Markdown link and state that Codex-Canvas is running but the in-app browser could not be opened from this surface. Do not launch an external browser.
 4. When the user asks for image generation or image editing while this skill is active:
    - Use Codex `imagegen` for the image work.
    - Save or identify the generated image file path. Prefer saving generated images under the active workspace so Codex-Canvas auto-collection can find them.

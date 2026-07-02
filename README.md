@@ -140,84 +140,9 @@ npm run visual:regression
 
 ## Codex 插件安装
 
-### 让 Codex 自动安装
+仓库地址：https://github.com/Xiangyu-CAS/codex-canvas.git
 
-可以把下面这段作为安装任务发给 Codex。它描述的是 Codex-Canvas 自己的安装流程：先把仓库放到本机一个长期保留的目录，再运行仓库内的 personal marketplace 安装器，最后用 Codex CLI 安装这个 personal plugin。
-
-```text
-请帮我安装 Codex-Canvas 插件。
-
-仓库地址是 https://github.com/Xiangyu-CAS/codex-canvas.git。
-请把仓库 clone 到一个长期保留的本地目录，例如 ~/src/codex-canvas；如果你已有固定源码目录，也可以使用那个目录。
-然后在仓库目录里执行 npm install 和 npm run install:personal。
-
-install:personal 会把插件链接到 ~/plugins/codex-canvas，并维护 ~/.agents/plugins/marketplace.json。
-它还会 best-effort 尝试安装 RapidOCR 供 Edit Text 本地识别使用；这一步可能需要几十秒到几分钟，失败也可以继续，Edit Text 会回退到 Codex 视觉识别。
-请用 codex plugin marketplace list --json 检查 Codex 是否已经有 root 指向用户 home 目录的 personal marketplace。
-如果没有，请执行 codex plugin marketplace add ~。
-
-最后执行 codex plugin add codex-canvas@personal。
-安装完成后，请检查 Codex 是否能看到 Codex-Canvas 的 skills/MCP，并提醒我在当前 Codex 对话里使用 @Codex-Canvas 打开画布来启动，不要新开对话。
-```
-
-### 手动安装
-
-手动安装分三步：准备源码、注册到 personal marketplace、安装插件。下面使用 `~/src/codex-canvas` 作为示例路径；它不是固定要求，可以换成任意你会长期保留的目录。
-
-先准备源码：
-
-```bash
-mkdir -p ~/src
-git clone https://github.com/Xiangyu-CAS/codex-canvas.git ~/src/codex-canvas
-cd ~/src/codex-canvas
-npm install
-npm run install:personal
-```
-
-`npm run install:personal` 会创建或更新 `~/plugins/codex-canvas`，并把插件条目写进 `~/.agents/plugins/marketplace.json`。它还会 best-effort 尝试安装 `rapidocr_onnxruntime`，用于 `Edit Text` 本地 OCR；这一步通常需要几十秒到几分钟，取决于 Python、pip、网络和 wheel 缓存。如果安装失败，personal plugin 仍会安装完成，`Edit Text` 会回退到 Codex 视觉识别。若要跳过这一步，可以运行 `CODEX_CANVAS_SKIP_OCR_INSTALL=1 npm run install:personal` 或 `npm run install:personal -- --skip-ocr`。因此 Codex 侧需要把用户 home 目录作为 `personal` marketplace root。先检查当前 Codex CLI 已注册的 marketplace：
-
-```bash
-codex plugin marketplace list --json
-```
-
-如果还没有 root 指向用户 home 目录的 `personal` marketplace，注册一次：
-
-```bash
-codex plugin marketplace add ~
-```
-
-然后从 personal marketplace 安装 Codex-Canvas：
-
-```bash
-codex plugin add codex-canvas@personal
-```
-
-安装后在当前 Codex 对话里使用 `@Codex-Canvas` 打开画布来启动，不要新开对话。也可以尝试输入 `/canvas`；如果当前 Codex 版本没有把插件 skill 暴露成 slash command，可以使用 `$canvas` 或直接说“打开 Codex-Canvas 画布”。
-
-其他可选本地依赖可以按需安装；它们用于本地 OCR、Edit Elements 拆层和背景处理，不是打开画布的硬性前置条件：
-
-```bash
-npm run setup:deps
-```
-
-`npm run install:personal` 写入的插件条目形如：
-
-```json
-{
-  "name": "codex-canvas",
-  "source": {
-    "source": "local",
-    "path": "./plugins/codex-canvas"
-  },
-  "policy": {
-    "installation": "AVAILABLE",
-    "authentication": "ON_INSTALL"
-  },
-  "category": "Productivity"
-}
-```
-
-安装器只会创建或更新指向当前仓库的 symlink/junction；如果 `~/plugins/codex-canvas` 已经是普通文件或目录，命令会拒绝覆盖并提示先移除该路径。测试或临时安装可以设置 `CODEX_CANVAS_PERSONAL_HOME=/path/to/home npm run install:personal`，这样会写入该目录下的 `plugins/codex-canvas` 和 `.agents/plugins/marketplace.json`，不影响真实用户目录。
+完整安装说明见 [`INSTALL.md`](INSTALL.md)。安装完成后，在当前 Codex 对话里使用 `@Codex-Canvas` 打开画布来启动，不要新开对话。
 
 ### 开发同步
 

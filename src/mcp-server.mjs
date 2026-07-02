@@ -231,7 +231,7 @@ async function handle(method, params) {
         { entrypoint }
       ));
       const url = output.trim().split(/\s+/).pop();
-      return textResult(`Codex-Canvas is available at ${url}`, { url, projectDir, threadId: normalizeThreadId(args.threadId) || environmentThreadId() });
+      return textResult(`Codex-Canvas is available: [Open Codex-Canvas](${url})`, { url, projectDir, threadId: normalizeThreadId(args.threadId) || environmentThreadId() });
     }
 
     if (params.name === "add_image") {
