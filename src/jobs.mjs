@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { promisify } from "node:util";
+import { PNG } from "pngjs";
 import { collectRecentImages } from "./collector.mjs";
 import { jobsDirFor, pluginRoot } from "./paths.mjs";
 import { addJobPlaceholder, deleteObject, readState, transformState, updateObject } from "./store.mjs";
@@ -20,6 +21,7 @@ const outputPollMs = 1000;
 const jobTimeoutMs = 5 * 60_000;
 const backgroundCompletionTimeoutMs = 5 * 60_000;
 const chromaKeyColor = "#ff00ff";
+const transparentLayerChromaActions = new Set(["quick-edit", "edit-text"]);
 const quickEditAnnotationPromptSuffix = [
   "",
   "The attached image may include temporary user annotations drawn or typed on top of the source image.",
@@ -63,6 +65,9 @@ export async function createImageJob(projectDir, input, options = {}) {
   const expandOptions = action === "expand"
     ? normalizeExpandOptions(input.expand || input.options || {}, object)
     : null;
+  const transparentLayerMode = transparentLayerChromaActions.has(action)
+    ? await hasTransparentPixels(imagePath)
+    : false;
 
   const id = `job_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
   const jobDir = path.join(jobsDirFor(projectDir, canvasId), id);
@@ -81,6 +86,7 @@ export async function createImageJob(projectDir, input, options = {}) {
     imagePath,
     expandOptions,
     expandInputPath: null,
+    transparentLayerMode,
     quickEditAnnotations,
     annotatedImagePath: null,
     annotationManifestPath: null,
@@ -145,6 +151,7 @@ export async function createTextRecognitionJob(projectDir, input, options = {}) 
     objectId: object.id,
     sourceObjectId: object.id,
     imagePath,
+    transparentLayerMode: await hasTransparentPixels(imagePath),
     outputDir,
     logPath,
     textInventoryPath: path.join(outputDir, "recognized-text.json"),
@@ -312,8 +319,10 @@ async function runJob(projectDir, job, startedAtMs) {
     imagePath: codexInput.imagePath,
     outputDir: job.outputDir,
     logPath: job.logPath,
-    prompt: codexInput.prompt
+    prompt: codexInput.prompt,
+    transparentLayerMode: job.transparentLayerMode
   });
+  job.imagegenPrompt = codexJob.prompt;
 
   await appendJobLog(job, `Codex child started: ${codexJob.executable}`);
   const outputReady = waitForJobOutputImage(job, startedAtMs, jobTimeoutMs).then((imagePath) => ({ type: "output", imagePath }));
@@ -380,8 +389,10 @@ async function runTextRecognitionJob(projectDir, job, startedAtMs) {
     imagePath: job.imagePath,
     outputDir: job.outputDir,
     logPath: job.logPath,
-    prompt: ""
+    prompt: "",
+    transparentLayerMode: job.transparentLayerMode
   });
+  job.imagegenPrompt = codexJob.prompt;
 
   await appendJobLog(job, `Codex child started: ${codexJob.executable}`);
   const codexDone = codexJob.done.then(
@@ -470,8 +481,10 @@ async function runStandaloneTextEditGeneration(projectDir, job, startedAtMs, edi
     imagePath: job.imagePath,
     outputDir: job.outputDir,
     logPath: job.logPath,
-    prompt: job.prompt
+    prompt: job.prompt,
+    transparentLayerMode: job.transparentLayerMode
   });
+  job.imagegenPrompt = codexJob.prompt;
 
   await appendJobLog(job, `Codex generation child started after local OCR: ${codexJob.executable}`);
   const outputReady = waitForJobOutputImage(job, generationStartedAtMs, jobTimeoutMs).then((imagePath) => ({ type: "output", imagePath }));
@@ -895,6 +908,7 @@ async function collectAndPlaceResult(projectDir, job, startedAtMs, { final, dete
     sinceMs: startedAtMs - 1000,
     limit,
     prompt: jobPrompt(job),
+    imagegenPrompt: job.imagegenPrompt || "",
     sourceObjectId: job.sourceObjectId,
     canvasId: job.canvasId
   });
@@ -906,6 +920,7 @@ async function collectAndPlaceResult(projectDir, job, startedAtMs, { final, dete
       sinceMs: startedAtMs - 1000,
       limit,
       prompt: jobPrompt(job),
+      imagegenPrompt: job.imagegenPrompt || "",
       sourceObjectId: job.sourceObjectId,
       canvasId: job.canvasId
     });
@@ -946,6 +961,9 @@ async function prepareImageForCollection(job, startedAtMs, detectedImagePath) {
   if (job.action === "edit-elements") {
     return splitElementLayers(job, imagePath);
   }
+  if (transparentLayerChromaActions.has(job.action) && job.transparentLayerMode) {
+    return recutTransparentLayerFromChroma(job, imagePath);
+  }
   if (job.action !== "remove-bg") return imagePath;
 
   const alphaDir = path.join(job.outputDir, "alpha");
@@ -961,6 +979,18 @@ async function prepareImageForCollection(job, startedAtMs, detectedImagePath) {
     throw new Error("Remove BG did not produce a four-channel RGBA PNG.");
   }
   await appendJobLog(job, `Remove BG alpha verified: ${alphaPath}`);
+  return alphaPath;
+}
+
+async function recutTransparentLayerFromChroma(job, imagePath) {
+  const alphaDir = path.join(job.outputDir, "alpha");
+  const alphaPath = path.join(alphaDir, `${job.action}-alpha.png`);
+  await fs.mkdir(alphaDir, { recursive: true });
+  await removeChromaKey(imagePath, alphaPath);
+  if (!await isPngRgba(alphaPath)) {
+    throw new Error(`${actionLabel(job.action)} transparent layer recut did not produce a four-channel RGBA PNG.`);
+  }
+  await appendJobLog(job, `${actionLabel(job.action)} transparent layer alpha recut from chroma key: ${alphaPath}`);
   return alphaPath;
 }
 
@@ -1072,7 +1102,8 @@ async function completeElementBackground(job, manifest, layersDir, backgroundObj
     await fs.writeFile(path.join(layersDir, "elements-manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
     await updateObject(job.projectDir, backgroundObject.id, {
       assetVersion: Date.now(),
-      layerGroupBackgroundStatus: "ready"
+      layerGroupBackgroundStatus: "ready",
+      imagegenPrompt: codexJob.prompt
     }, { canvasId: job.canvasId || null });
     await appendJobLog(job, `Completed Edit Elements background integrated: ${backgroundPath}`);
     return manifest;
@@ -1196,8 +1227,23 @@ async function isPngRgba(filePath) {
   }
 }
 
+async function hasTransparentPixels(filePath) {
+  try {
+    const buffer = await fs.readFile(filePath);
+    if (buffer.length < 26 || buffer.toString("ascii", 1, 4) !== "PNG") return false;
+    if (buffer[25] !== 4 && buffer[25] !== 6) return false;
+    const png = PNG.sync.read(buffer);
+    for (let index = 3; index < png.data.length; index += 4) {
+      if (png.data[index] < 255) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 async function removeChromaKey(inputPath, outputPath) {
-  const scriptPath = path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "skills", ".system", "imagegen", "scripts", "remove_chroma_key.py");
+  const scriptPath = path.join(pluginRoot, "scripts", "remove_chroma_key_connected.py");
   await fs.access(scriptPath);
   const args = [
     scriptPath,
@@ -1205,29 +1251,29 @@ async function removeChromaKey(inputPath, outputPath) {
     "--out", outputPath,
     "--key-color", chromaKeyColor,
     "--auto-key", "border",
-    "--soft-matte",
-    "--transparent-threshold", "12",
-    "--opaque-threshold", "220",
-    "--despill",
+    "--tolerance", "36",
     "--force"
   ];
   await runPython(args);
 }
 
-async function runPython(args) {
+async function runPython(args, options = {}) {
   const candidates = process.platform === "win32"
     ? [["py", ["-3", ...args]], ["python", args], ["python3", args]]
     : [["python3", args], ["python", args]];
   const errors = [];
   for (const [command, commandArgs] of candidates) {
     try {
-      await execFileAsync(command, commandArgs, { windowsHide: true, maxBuffer: 1024 * 1024 });
-      return;
+      const output = await execFileAsync(command, commandArgs, { windowsHide: true, maxBuffer: 1024 * 1024 });
+      return { code: 0, stdout: output.stdout || "", stderr: output.stderr || "" };
     } catch (error) {
+      if (options.allowedExitCodes?.includes(error.code)) {
+        return { code: error.code, stdout: error.stdout || "", stderr: error.stderr || "" };
+      }
       errors.push(`${command}: ${error.message}`);
     }
   }
-  throw new Error(`Python is required for Remove BG alpha post-processing. ${errors.join(" | ")}`);
+  throw new Error(`Python is required for image post-processing. ${errors.join(" | ")}`);
 }
 
 function stopChild(child) {
@@ -1549,6 +1595,13 @@ export async function markTextRecognitionCancelledForTest(job, startedAtMs = Dat
     throw new Error("Text recognition test helpers are disabled.");
   }
   return markTextRecognitionCancelled(job, startedAtMs);
+}
+
+export async function prepareImageForCollectionForTest(job, startedAtMs = Date.now(), detectedImagePath = null) {
+  if (process.env.CODEX_CANVAS_TEST_HELPERS !== "1") {
+    throw new Error("Image collection test helpers are disabled.");
+  }
+  return prepareImageForCollection(job, startedAtMs, detectedImagePath);
 }
 
 async function readElementManifest(job) {

@@ -400,14 +400,14 @@ button {
 }
 
 .prompt-history-text {
-  display: -webkit-box;
-  overflow: hidden;
+  display: block;
+  overflow: visible;
   color: #24282f;
   font-size: 12px;
   font-weight: 650;
   line-height: 1.35;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .prompt-history-meta,
@@ -721,12 +721,35 @@ button {
   white-space: nowrap;
 }
 
-.settings-version-row {
-  cursor: default;
+.settings-version-value {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  min-width: 0;
+  max-width: 142px;
+  margin-left: auto;
+  color: #8a8d93;
+  white-space: nowrap;
 }
 
-.settings-version-row:hover {
-  background: transparent;
+.settings-version-value span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#appVersionValue {
+  flex: 1 1 auto;
+}
+
+#appUpdateStatus {
+  flex: 0 0 auto;
+}
+
+#appUpdateStatus:not(:empty)::before {
+  content: "·";
+  margin-right: 5px;
 }
 
 .settings-submenu {
@@ -898,6 +921,38 @@ button {
     0 0 0 7px rgba(22, 131, 255, 0.1),
     0 12px 34px rgba(28, 29, 33, 0.08);
   animation: background-fill-pulse 1.35s ease-in-out infinite;
+}
+
+.canvas-object.layer-background-filling .image-content {
+  position: relative;
+}
+
+.canvas-object.layer-background-filling .image-content::before,
+.canvas-object.layer-background-filling .image-content::after {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  content: "";
+  pointer-events: none;
+}
+
+.canvas-object.layer-background-filling .image-content::before {
+  opacity: 0.76;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(47, 128, 237, 0) 0 16%, rgba(47, 128, 237, 0.2) 25%, rgba(47, 128, 237, 0) 38%),
+    radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0) 0 34%, rgba(255, 255, 255, 0.28) 44%, rgba(255, 255, 255, 0) 58%),
+    rgba(47, 128, 237, 0.08);
+  mix-blend-mode: normal;
+  animation: background-mask-ripple 2.8s ease-out infinite;
+}
+
+.canvas-object.layer-background-filling .image-content::after {
+  opacity: 0.58;
+  background:
+    linear-gradient(115deg, rgba(255, 255, 255, 0) 20%, rgba(255, 255, 255, 0.34) 48%, rgba(47, 128, 237, 0.14) 58%, rgba(255, 255, 255, 0) 78%);
+  mix-blend-mode: screen;
+  transform: translateX(-120%);
+  animation: background-mask-sheen 3.6s ease-in-out infinite;
 }
 
 .layer-group-selection {
@@ -1343,6 +1398,36 @@ button {
       0 0 0 1px rgba(255, 255, 255, 0.96),
       0 0 0 10px rgba(22, 131, 255, 0.16),
       0 12px 34px rgba(28, 29, 33, 0.08);
+  }
+}
+
+@keyframes background-mask-ripple {
+  0% {
+    opacity: 0;
+    transform: scale(0.62);
+  }
+
+  36% {
+    opacity: 0.58;
+  }
+
+  100% {
+    opacity: 0;
+    transform: scale(1.42);
+  }
+}
+
+@keyframes background-mask-sheen {
+  0% {
+    transform: translateX(-120%);
+  }
+
+  52% {
+    transform: translateX(120%);
+  }
+
+  100% {
+    transform: translateX(120%);
   }
 }
 
@@ -2210,6 +2295,7 @@ button {
 }
 
 .canvas-search {
+  display: none;
   position: absolute;
   top: 18px;
   right: 108px;

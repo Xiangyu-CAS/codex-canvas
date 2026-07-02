@@ -5,8 +5,8 @@
   "author": {
     "name": "Codex-Canvas Contributors"
   },
-  "homepage": "https://github.com/codex-canvas/codex-canvas",
-  "repository": "https://github.com/codex-canvas/codex-canvas",
+  "homepage": "https://github.com/Xiangyu-CAS/codex-canvas",
+  "repository": "https://github.com/Xiangyu-CAS/codex-canvas.git",
   "license": "MIT",
   "keywords": [
     "codex",
@@ -27,9 +27,9 @@
       "Read",
       "Write"
     ],
-    "websiteURL": "https://github.com/codex-canvas/codex-canvas",
-    "privacyPolicyURL": "https://github.com/codex-canvas/codex-canvas",
-    "termsOfServiceURL": "https://github.com/codex-canvas/codex-canvas",
+    "websiteURL": "https://github.com/Xiangyu-CAS/codex-canvas",
+    "privacyPolicyURL": "https://github.com/Xiangyu-CAS/codex-canvas",
+    "termsOfServiceURL": "https://github.com/Xiangyu-CAS/codex-canvas",
     "defaultPrompt": [
       "Open the Codex-Canvas board",
       "Generate an image and collect it on canvas",

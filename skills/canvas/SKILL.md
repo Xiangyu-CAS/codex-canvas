@@ -10,11 +10,11 @@ Use this skill to open the local Codex-Canvas board and keep generated images co
 ## Workflow
 
 1. Start or reuse the local canvas server for the active project:
-   - Prefer the `codex-canvas.open_canvas` MCP tool when available.
-   - Pass the active workspace path as `projectDir`.
-   - Pass the current Codex thread id as `threadId` whenever it is available; Codex-Canvas uses this explicit binding for canvas-to-chat image sends and to keep one canvas per Codex thread.
-   - When falling back to the CLI, `codex-canvas open` will also read `CODEX_THREAD_ID` or `CODEX_CANVAS_CODEX_THREAD_ID` from the environment. If neither is available, the canvas is the shared project default, not a per-thread canvas.
-   - If the MCP tool is not available, run `node <plugin-root>/bin/codex-canvas.mjs open --project <workspace>`.
+   - Use the CLI opener as the default path: `node <plugin-root>/bin/codex-canvas.mjs open --project <workspace>`.
+   - Pass the current Codex thread id with `--thread-id <thread-id>` whenever it is available; Codex-Canvas uses this explicit binding for canvas-to-chat image sends and to keep one canvas per Codex thread.
+   - Leave `autoUpdate` enabled unless the user explicitly asks to skip updates; active opens run Codex-Canvas's best-effort fast-forward updater before returning the canvas URL.
+   - `codex-canvas open` will also read `CODEX_THREAD_ID` or `CODEX_CANVAS_CODEX_THREAD_ID` from the environment. If neither an explicit thread id nor an environment thread id is available, the canvas is the shared project default, not a per-thread canvas.
+   - If the `codex-canvas.open_canvas` MCP tool is already exposed in the thread, it is also acceptable to use it with `projectDir` and `threadId`, but do not probe for it or announce anything about MCP availability. Treat CLI opening as the normal supported behavior.
 2. Fast open behavior:
    - Prefer reusing the existing runtime URL in `<workspace>/canvas/.codex-canvas-runtime.json` when it responds.
    - Prefer `codex-canvas open --project <workspace>` over `codex-canvas start`; `open` already reuses the saved runtime or starts a detached server only when needed.

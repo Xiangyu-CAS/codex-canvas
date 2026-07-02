@@ -10,7 +10,6 @@ const settingsButton = document.querySelector("#settingsButton");
 const settingsMenu = document.querySelector("#settingsMenu");
 const appVersionValue = document.querySelector("#appVersionValue");
 const appUpdateButton = document.querySelector("#appUpdateButton");
-const appUpdateLabel = document.querySelector("#appUpdateLabel");
 const appUpdateStatus = document.querySelector("#appUpdateStatus");
 const toolbar = document.querySelector("#selectionToolbar");
 const quickEditComposer = document.querySelector("#quickEditComposer");
@@ -59,6 +58,11 @@ const translations = {
     updateAvailable: "Available",
     updateCurrent: "Current",
     updateUnavailable: "Unavailable",
+    updateBlockedDirty: "Local changes",
+    updateBlockedAhead: "Local commits",
+    updateBlockedDetached: "Detached HEAD",
+    updateBlockedNoUpstream: "No upstream",
+    updateBlockedNotGit: "Manual",
     updateRunning: "Updating...",
     updateDone: "Updated. Refresh canvas to use the new version.",
     updateFailed: "Update failed.",
@@ -186,6 +190,11 @@ const translations = {
     updateAvailable: "可更新",
     updateCurrent: "已最新",
     updateUnavailable: "不可用",
+    updateBlockedDirty: "有本地改动",
+    updateBlockedAhead: "有本地提交",
+    updateBlockedDetached: "游离 HEAD",
+    updateBlockedNoUpstream: "无上游",
+    updateBlockedNotGit: "需手动",
     updateRunning: "更新中...",
     updateDone: "已更新，刷新画布后生效。",
     updateFailed: "更新失败。",
@@ -303,6 +312,7 @@ const translations = {
 };
 
 let state = null;
+let knownObjectIds = null;
 let selectedId = null;
 let selectedIds = new Set();
 let hasUserSelection = false;
@@ -406,7 +416,7 @@ settingsMenu.addEventListener("click", (event) => {
 appUpdateButton?.addEventListener("click", (event) => {
   event.preventDefault();
   if (appUpdateBusy) return;
-  if (appUpdateInfo?.updateAvailable) {
+  if (appUpdateInfo?.canUpdate && appUpdateInfo?.updateAvailable) {
     runAppUpdate();
   } else {
     refreshAppUpdateStatus({ checkRemote: true, showToastOnError: true });
@@ -1052,12 +1062,14 @@ function versionObjectMeta(object) {
 }
 
 function promptHistoryMeta(item) {
+  const summary = String(item.summaryPrompt || "").trim();
+  const prompt = String(item.prompt || "").trim();
   const name = String(item.objectName || "").trim();
   const date = item.createdAt ? new Date(item.createdAt) : null;
   const dateText = date && Number.isFinite(date.getTime())
     ? date.toLocaleDateString(language === "zh" ? "zh-CN" : "en", { month: "short", day: "numeric" })
     : "";
-  return [name, dateText].filter(Boolean).join(" · ");
+  return [summary && summary !== prompt ? summary : "", name, dateText].filter(Boolean).join(" · ");
 }
 
 function applyPromptFromHistory(prompt) {
@@ -1099,18 +1111,41 @@ async function copyPromptToClipboard(prompt) {
 async function loadState() {
   if (drag || resize || marquee || editingTextId || isComposerActive()) return;
   const response = await fetch(apiPath("/api/state"));
-  state = await response.json();
+  const nextState = await response.json();
+  const previousObjectIds = knownObjectIds;
+  const addedObjects = previousObjectIds
+    ? nextState.objects.filter((object) => !previousObjectIds.has(object.id))
+    : [];
+  const autoFocusObject = autoFocusObjectForStateUpdate(nextState, addedObjects);
+
+  state = nextState;
+  knownObjectIds = new Set(state.objects.map((object) => object.id));
   selectedIds = new Set([...selectedIds].filter((id) => state.objects.some((object) => object.id === id)));
   if (selectedId && !state.objects.some((object) => object.id === selectedId)) {
     selectedId = null;
   }
-  if (!hasUserSelection || (!selectedId && selectedIds.size === 0)) {
+  if (autoFocusObject) {
+    setLocalSelection([autoFocusObject.id], { fromUser: true });
+  } else if (!hasUserSelection || (!selectedId && selectedIds.size === 0)) {
     selectedIds.clear();
     selectedId = null;
     hasUserSelection = false;
   }
   state.selection = selectedId;
   render();
+  if (autoFocusObject) frameCanvasObject(autoFocusObject);
+}
+
+function autoFocusObjectForStateUpdate(nextState, addedObjects) {
+  if (!Array.isArray(addedObjects) || addedObjects.length === 0) return null;
+  const selectedNewObject = addedObjects.find((object) => object.id === nextState.selection);
+  if (isAutoFocusableObject(selectedNewObject)) return selectedNewObject;
+  return [...addedObjects].reverse().find(isAutoFocusableObject) || null;
+}
+
+function isAutoFocusableObject(object) {
+  const type = object?.type || "image";
+  return type === "image" || type === "job";
 }
 
 async function loadProjects() {
@@ -1827,7 +1862,6 @@ function renderImageObject(object) {
   const label = imageAnnotationLabel(object);
   image.src = assetUrl(object.src, object);
   image.alt = object.name || "Canvas image";
-  image.title = label;
   image.setAttribute("aria-label", label);
   image.dataset.objectId = object.id;
   if (object.assetPath) image.dataset.fileMention = `@${object.assetPath}`;
@@ -1843,7 +1877,6 @@ function applyImageAnnotationMetadata(element, object) {
   const label = imageAnnotationLabel(object);
   element.setAttribute("role", "img");
   element.setAttribute("aria-label", label);
-  element.title = label;
   element.dataset.objectName = object.name || "Canvas image";
   if (object.assetPath) element.dataset.fileMention = `@${object.assetPath}`;
   if (object.assetPath) element.dataset.assetPath = object.assetPath;
@@ -3689,36 +3722,50 @@ async function runAppUpdate() {
 }
 
 function renderAppUpdateStatus(override = null) {
-  if (!appUpdateButton || !appVersionValue || !appUpdateStatus || !appUpdateLabel) return;
+  if (!appUpdateButton || !appVersionValue || !appUpdateStatus) return;
   const version = appUpdateInfo?.pluginVersion || appUpdateInfo?.version || "...";
   appVersionValue.textContent = version;
   appUpdateButton.disabled = Boolean(override?.disabled);
 
   if (override) {
-    appUpdateLabel.textContent = t("checkUpdates");
     appUpdateStatus.textContent = override.label || "";
+    appUpdateButton.title = "";
+    appUpdateButton.setAttribute("aria-label", `${t("appVersion")}: ${version}`);
     return;
   }
 
   if (!appUpdateInfo) {
-    appUpdateLabel.textContent = t("checkUpdates");
     appUpdateStatus.textContent = "";
+    appUpdateButton.title = "";
+    appUpdateButton.setAttribute("aria-label", `${t("appVersion")}: ${version}`);
     return;
   }
 
   if (!appUpdateInfo.canUpdate) {
-    appUpdateLabel.textContent = t("checkUpdates");
-    appUpdateStatus.textContent = t("updateUnavailable");
+    appUpdateStatus.textContent = appUpdateBlockedLabel(appUpdateInfo.blockedReason);
+    appUpdateButton.title = appUpdateInfo.blockedMessage || "";
+    appUpdateButton.setAttribute("aria-label", `${t("appVersion")}: ${version}, ${appUpdateStatus.textContent}`);
     return;
   }
+  appUpdateButton.title = appUpdateInfo.manualCommand || "";
 
   if (appUpdateInfo.updateAvailable) {
-    appUpdateLabel.textContent = t("updateNow");
     appUpdateStatus.textContent = t("updateAvailable");
   } else {
-    appUpdateLabel.textContent = t("checkUpdates");
     appUpdateStatus.textContent = t("updateCurrent");
   }
+  appUpdateButton.setAttribute("aria-label", `${t("appVersion")}: ${version}, ${appUpdateStatus.textContent}`);
+}
+
+function appUpdateBlockedLabel(reason) {
+  const labels = {
+    "dirty-worktree": "updateBlockedDirty",
+    "local-ahead": "updateBlockedAhead",
+    "detached-head": "updateBlockedDetached",
+    "no-upstream": "updateBlockedNoUpstream",
+    "not-git": "updateBlockedNotGit"
+  };
+  return t(labels[reason] || "updateUnavailable");
 }
 
 function applyLanguage() {

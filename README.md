@@ -140,13 +140,66 @@ npm run visual:regression
 
 ## Codex 插件安装
 
-本地开发时可以把当前仓库暴露给 Codex personal marketplace：
+### 让 Codex 自动安装
+
+可以把下面这段作为安装任务发给 Codex。它描述的是 Codex-Canvas 自己的安装流程：先把仓库放到本机一个长期保留的目录，再运行仓库内的 personal marketplace 安装器，最后用 Codex CLI 安装这个 personal plugin。
+
+```text
+请帮我安装 Codex-Canvas 插件。
+
+仓库地址是 https://github.com/Xiangyu-CAS/codex-canvas.git。
+请把仓库 clone 到一个长期保留的本地目录，例如 ~/src/codex-canvas；如果你已有固定源码目录，也可以使用那个目录。
+然后在仓库目录里执行 npm install 和 npm run install:personal。
+
+install:personal 会把插件链接到 ~/plugins/codex-canvas，并维护 ~/.agents/plugins/marketplace.json。
+请用 codex plugin marketplace list --json 检查 Codex 是否已经有 root 指向用户 home 目录的 personal marketplace。
+如果没有，请执行 codex plugin marketplace add ~。
+
+最后执行 codex plugin add codex-canvas@personal。
+安装完成后，请检查 Codex 是否能看到 Codex-Canvas 的 skills/MCP，并提醒我新开一个 Codex 对话来加载新插件。
+```
+
+### 手动安装
+
+手动安装分三步：准备源码、注册到 personal marketplace、安装插件。下面使用 `~/src/codex-canvas` 作为示例路径；它不是固定要求，可以换成任意你会长期保留的目录。
+
+先准备源码：
 
 ```bash
+mkdir -p ~/src
+git clone https://github.com/Xiangyu-CAS/codex-canvas.git ~/src/codex-canvas
+cd ~/src/codex-canvas
+npm install
 npm run install:personal
 ```
 
-该命令会跨平台创建或更新 `~/plugins/codex-canvas`，并把 `codex-canvas` 写入 `~/.agents/plugins/marketplace.json`。写入的插件条目形如：
+`npm run install:personal` 会创建或更新 `~/plugins/codex-canvas`，并把插件条目写进 `~/.agents/plugins/marketplace.json`。因此 Codex 侧需要把用户 home 目录作为 `personal` marketplace root。先检查当前 Codex CLI 已注册的 marketplace：
+
+```bash
+codex plugin marketplace list --json
+```
+
+如果还没有 root 指向用户 home 目录的 `personal` marketplace，注册一次：
+
+```bash
+codex plugin marketplace add ~
+```
+
+然后从 personal marketplace 安装 Codex-Canvas：
+
+```bash
+codex plugin add codex-canvas@personal
+```
+
+安装后新开一个 Codex 会话，让新的 skills 和 MCP 工具加载进来。可以尝试输入 `/canvas`；如果当前 Codex 版本没有把插件 skill 暴露成 slash command，可以使用 `$canvas` 或直接说“打开 Codex-Canvas 画布”。
+
+可选本地依赖可以按需安装；它们用于本地 OCR、Edit Elements 拆层和背景处理，不是打开画布的硬性前置条件：
+
+```bash
+npm run setup:deps
+```
+
+`npm run install:personal` 写入的插件条目形如：
 
 ```json
 {
@@ -165,13 +218,34 @@ npm run install:personal
 
 安装器只会创建或更新指向当前仓库的 symlink/junction；如果 `~/plugins/codex-canvas` 已经是普通文件或目录，命令会拒绝覆盖并提示先移除该路径。测试或临时安装可以设置 `CODEX_CANVAS_PERSONAL_HOME=/path/to/home npm run install:personal`，这样会写入该目录下的 `plugins/codex-canvas` 和 `.agents/plugins/marketplace.json`，不影响真实用户目录。
 
+### 开发同步
+
 Codex 可能会把 personal plugin 复制到自己的版本化 cache 目录中运行。开发机如果需要让已安装插件实时使用当前源码，可以额外运行：
 
 ```bash
 npm run install:dev-cache
 ```
 
-该命令会把当前版本的 `~/.codex/plugins/cache/personal/codex-canvas/<plugin-version>` 改成指向当前仓库的 symlink/junction；如果原 cache 目录已经存在，会先改名为 `.backup-<timestamp>` 备份。这个命令只用于本地开发同步，不建议普通用户使用。普通用户应通过 `git pull --ff-only` 或重新安装发布版本来更新。
+该命令会把当前版本的 `~/.codex/plugins/cache/personal/codex-canvas/<plugin-version>` 改成指向当前仓库的 symlink/junction；如果原 cache 目录已经存在，会先改名为 `.backup-<timestamp>` 备份。这个命令只用于本地开发同步，不建议普通用户使用。
+
+## 更新策略
+
+Codex-Canvas 的自动更新策略是保守的 git fast-forward：
+
+```bash
+codex-canvas update --check
+codex-canvas update
+```
+
+用户主动打开画布时也会默认执行同一套 best-effort 更新检查，包括 `/canvas` skill、MCP `open_canvas` 和 CLI `codex-canvas open`。如果更新器能安全 fast-forward，就先更新再继续打开；如果更新器因为本地改动、离线、无上游等原因被阻塞，会跳过更新并继续打开画布。CLI 可用 `codex-canvas open --no-update` 跳过本次打开前更新；MCP 可传 `autoUpdate: false`。
+
+只有当前插件运行目录是 git checkout、当前分支能定位到远端分支、工作区干净、并且本地没有未推送提交时，更新器才会执行 `git pull --ff-only`。如果分支没有显式 upstream，但存在同名的 `origin/<branch>`，更新器会使用 `git pull --ff-only origin <branch>`。这适合从 `https://github.com/Xiangyu-CAS/codex-canvas.git` clone 后通过 `npm run install:personal` 暴露给 Codex 的安装方式。
+
+如果插件是 Codex 已复制到 `~/.codex/plugins/cache/...` 的版本化目录，或是没有 `.git` 的包目录，自动更新会报告 `not-git` 并给出手动 clone/reinstall 建议。遇到本地改动、游离 HEAD、没有远端分支、本地提交领先或分叉历史时，更新器只会返回明确的阻塞原因，不会自动 stash、reset、merge 或覆盖用户文件。解决后重新运行：
+
+```bash
+codex-canvas update --check
+```
 
 发布前可以检查插件包内容：
 

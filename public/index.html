@@ -45,7 +45,7 @@
                   <path d="M9 6l6 6l-6 6"></path>
                 </svg>
               </button>
-              <div class="settings-menu-row settings-version-row">
+              <button id="appUpdateButton" class="settings-menu-row settings-version-row" type="button">
                 <svg class="settings-row-icon settings-row-svg" viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M20 7h-9"></path>
                   <path d="M14 17H5"></path>
@@ -53,15 +53,10 @@
                   <circle cx="7" cy="7" r="3"></circle>
                 </svg>
                 <span data-i18n="appVersion">Version</span>
-                <span id="appVersionValue" class="settings-row-value">...</span>
-              </div>
-              <button id="appUpdateButton" class="settings-menu-row" type="button">
-                <svg class="settings-row-icon settings-row-svg" viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M20 11a8.1 8.1 0 0 0 -15.5 -2m-.5 -5v5h5"></path>
-                  <path d="M4 13a8.1 8.1 0 0 0 15.5 2m.5 5v-5h-5"></path>
-                </svg>
-                <span id="appUpdateLabel" data-i18n="checkUpdates">Check updates</span>
-                <span id="appUpdateStatus" class="settings-row-value"></span>
+                <span class="settings-version-value">
+                  <span id="appVersionValue">...</span>
+                  <span id="appUpdateStatus"></span>
+                </span>
               </button>
             </div>
             <div class="settings-submenu" data-settings-submenu="language">

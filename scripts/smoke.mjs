@@ -6,13 +6,14 @@ import { promisify } from "node:util";
 import { normalizePort } from "../src/cli.mjs";
 import { sendImageToBoundChat } from "../src/codex-chat.mjs";
 import { collectRecentImages } from "../src/collector.mjs";
-import { createImageJob, getImageJob, markTextRecognitionCancelledForTest, placeImportedElementLayersForTest } from "../src/jobs.mjs";
+import { createImageJob, getImageJob, markTextRecognitionCancelledForTest, placeImportedElementLayersForTest, prepareImageForCollectionForTest } from "../src/jobs.mjs";
 import { checkImageProcessingDepsAvailable } from "../src/ocr-setup.mjs";
 import { assetsDirFor, jobsDirFor, legacyCanvasDataDirFor, statePathFor } from "../src/paths.mjs";
 import { exportLayerGroupPsd } from "../src/psd-export.mjs";
 import { canvasIdForThread } from "../src/runtime.mjs";
 import { createServer as createAgentCanvasServer } from "../src/server.mjs";
-import { addImage, addObject, deleteObjects, promptHistory, readState, reorderLayerGroupLayer, restoreObjects, searchObjects, transformState, updateObject, updateSelection, updateViewport, versionGroups } from "../src/store.mjs";
+import { addImage, addObject, deleteObjects, markStaleJobPlaceholders, promptHistory, readState, reorderLayerGroupLayer, restoreObjects, searchObjects, transformState, updateObject, updateSelection, updateViewport, versionGroups } from "../src/store.mjs";
+import { appUpdateStatus } from "../src/updater.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -28,6 +29,9 @@ async function main() {
     ["delete undo restore", testDeleteUndoRestore],
     ["object patch sanitization", testObjectPatchSanitization],
     ["object input sanitization", testObjectInputSanitization],
+    ["stale background fill cleanup", testStaleBackgroundFillCleanup],
+    ["path image dedupe", testPathImageDedupe],
+    ["connected chroma key", testConnectedChromaKey],
     ["selection sanitization", testSelectionSanitization],
     ["viewport sanitization", testViewportSanitization],
     ["canvas id path isolation", testCanvasIdPathIsolation],
@@ -55,6 +59,7 @@ async function main() {
     ["plugin package manifest", testPluginPackageManifest],
     ["personal plugin installer", testPersonalPluginInstaller],
     ["dev plugin cache linker", testDevPluginCacheLinker],
+    ["app update strategy", testAppUpdateStrategy],
     ["cli collect help", testCliCollectHelp],
     ["cli argument parsing and errors", testCliArgumentParsingAndErrors],
     ["cli codex thread environment", testCliCodexThreadEnvironment],
@@ -64,6 +69,7 @@ async function main() {
     ["chat turn action contract", testChatTurnActionContract],
     ["edit text cancellation cleanup", testEditTextCancellationCleanup],
     ["quick edit annotations", testQuickEditAnnotations],
+    ["alpha recut edit outputs", testAlphaRecutEditOutputs],
     ["edit elements scripts", testEditElementsScripts]
   ]) {
     await test();
@@ -219,6 +225,130 @@ async function testObjectInputSanitization() {
   assertEqual(remoteImage.sourcePath, null, "readState should not keep source paths for remote-only images");
   assertEqual(remoteImage.src, "https://example.invalid/remote.png", "readState should preserve remote image URLs");
   assertEqual(corruptState.selection, "legacy-text", "readState should preserve selections that still point at sanitized objects");
+}
+
+async function testStaleBackgroundFillCleanup() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-stale-bg-"));
+  const stale = await addImage(projectDir, {
+    dataUrl: `data:image/png;base64,${pngOne}`,
+    name: "stale-background.png"
+  });
+  const fresh = await addImage(projectDir, {
+    dataUrl: `data:image/png;base64,${pngOne}`,
+    name: "fresh-background.png",
+    allowDuplicate: true
+  });
+
+  await transformState(projectDir, {}, (state) => ({
+    ...state,
+    objects: state.objects.map((object) => {
+      if (object.id === stale.id) {
+        return {
+          ...object,
+          layerGroupKind: "background",
+          layerGroupBackgroundStatus: "filling",
+          createdAt: new Date(Date.now() - 10_000).toISOString()
+        };
+      }
+      if (object.id === fresh.id) {
+        return {
+          ...object,
+          layerGroupKind: "background",
+          layerGroupBackgroundStatus: "filling",
+          createdAt: new Date().toISOString()
+        };
+      }
+      return object;
+    })
+  }));
+
+  const state = await markStaleJobPlaceholders(projectDir, { backgroundTimeoutMs: 1000 });
+  const staleObject = state.objects.find((object) => object.id === stale.id);
+  const freshObject = state.objects.find((object) => object.id === fresh.id);
+  assertEqual(staleObject.layerGroupBackgroundStatus, "failed", "stale background filling layers should be marked failed");
+  assertEqual(freshObject.layerGroupBackgroundStatus, "filling", "fresh background filling layers should keep running status");
+}
+
+async function testPathImageDedupe() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-dedupe-"));
+  const sourceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-dedupe-source-"));
+  const firstPath = path.join(sourceDir, "generated.png");
+  const secondPath = path.join(sourceDir, "renamed.png");
+  const buffer = Buffer.from(pngOne, "base64");
+  await fs.writeFile(firstPath, buffer);
+  await fs.writeFile(secondPath, buffer);
+
+  const first = await addImage(projectDir, {
+    path: firstPath,
+    name: "generated.png"
+  });
+  const duplicate = await addImage(projectDir, {
+    path: secondPath,
+    name: "renamed.png"
+  });
+  const state = await readState(projectDir);
+  assertEqual(duplicate.id, first.id, "path imports with identical image bytes should return the existing canvas object");
+  assertEqual(state.objects.length, 1, "path imports with identical image bytes should not append duplicate objects");
+  assertEqual(state.selection, first.id, "path import dedupe should keep the existing object selected");
+
+  const repeated = await addImage(projectDir, {
+    path: secondPath,
+    name: "renamed.png",
+    allowDuplicate: true
+  });
+  const repeatedState = await readState(projectDir);
+  assertEqual(repeatedState.objects.length, 2, "allowDuplicate should preserve explicit duplicate image imports");
+  if (repeated.id === first.id) throw new Error("allowDuplicate path imports should create a distinct object.");
+}
+
+async function testConnectedChromaKey() {
+  try {
+    await runPython(["-c", "from PIL import Image"]);
+  } catch {
+    console.warn("Skipping connected chroma-key smoke test; Pillow is unavailable.");
+    return;
+  }
+
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-connected-key-"));
+  const makeFixture = path.join(tmp, "make-fixture.py");
+  await fs.writeFile(makeFixture, [
+    "from PIL import Image, ImageDraw",
+    "from pathlib import Path",
+    "import sys",
+    "root = Path(sys.argv[1])",
+    "image = Image.new('RGBA', (32, 24), (251, 4, 225, 255))",
+    "draw = ImageDraw.Draw(image)",
+    "draw.rectangle((10, 8, 21, 17), fill=(210, 20, 20, 255))",
+    "image.save(root / 'fixture.png')"
+  ].join("\n"));
+  await runPython([makeFixture, tmp]);
+
+  await runPython([
+    path.join(process.cwd(), "scripts", "remove_chroma_key_connected.py"),
+    "--input", path.join(tmp, "fixture.png"),
+    "--out", path.join(tmp, "cutout.png"),
+    "--auto-key", "border",
+    "--tolerance", "36",
+    "--force"
+  ]);
+
+  const inspect = path.join(tmp, "inspect-cutout.py");
+  await fs.writeFile(inspect, [
+    "from PIL import Image",
+    "from pathlib import Path",
+    "import json, sys",
+    "root = Path(sys.argv[1])",
+    "image = Image.open(root / 'cutout.png').convert('RGBA')",
+    "payload = {",
+    "  'corner': image.getpixel((0, 0)),",
+    "  'red': image.getpixel((12, 10)),",
+    "}",
+    "(root / 'inspect.json').write_text(json.dumps(payload), encoding='utf-8')"
+  ].join("\n"));
+  await runPython([inspect, tmp]);
+  const result = JSON.parse(await fs.readFile(path.join(tmp, "inspect.json"), "utf8"));
+  assertEqual(result.corner.join(","), "0,0,0,0", "connected chroma-key should make border background transparent");
+  assertEqual(result.red.join(","), "210,20,20,255", "connected chroma-key should preserve isolated red foreground RGB and alpha");
 }
 
 async function testSelectionSanitization() {
@@ -481,15 +611,22 @@ async function testCanvasPromptHistory() {
     dataUrl: `data:image/png;base64,${pngOne}`,
     name: "latest.png",
     prompt: "Bright product render",
+    imagegenPrompt: "Use the imagegen tool to create a bright product render with precise studio lighting.",
     sourceObjectId: first.id,
     layoutMode: "canvas-row"
   });
 
   const direct = await promptHistory(projectDir);
   assertEqual(direct.total, 2, "prompt history should de-duplicate repeated prompts");
-  assertEqual(direct.prompts[0].prompt, "Bright product render", "prompt history should list newest unique prompts first");
+  assertEqual(direct.prompts[0].prompt, "Use the imagegen tool to create a bright product render with precise studio lighting.", "prompt history should list newest full imagegen prompts first");
+  assertEqual(direct.prompts[0].summaryPrompt, "Bright product render", "prompt history should retain the short prompt summary");
+  assertEqual(direct.prompts[0].imagegenPrompt, "Use the imagegen tool to create a bright product render with precise studio lighting.", "prompt history should expose the full imagegen prompt");
   assertEqual(direct.prompts[0].objectId, latest.id, "prompt history should retain the object that used the prompt");
   assertEqual(direct.prompts[0].sourceObjectId, first.id, "prompt history should retain source object context");
+
+  const fullPromptFiltered = await promptHistory(projectDir, { query: "studio lighting" });
+  assertEqual(fullPromptFiltered.total, 1, "prompt history should support query filtering on full imagegen prompts");
+  assertEqual(fullPromptFiltered.prompts[0].objectId, latest.id, "prompt history full prompt filtering should return the matching object");
 
   const filtered = await promptHistory(projectDir, { query: "neon" });
   assertEqual(filtered.total, 1, "prompt history should support query filtering");
@@ -503,7 +640,7 @@ async function testCanvasPromptHistory() {
     const body = await response.json();
     assertEqual(response.status, 200, "HTTP prompt history should succeed");
     assertEqual(body.total, 1, "HTTP prompt history should filter prompt text");
-    assertEqual(body.prompts[0].prompt, "Bright product render", "HTTP prompt history should return prompt summaries");
+    assertEqual(body.prompts[0].prompt, "Use the imagegen tool to create a bright product render with precise studio lighting.", "HTTP prompt history should return full imagegen prompts");
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
@@ -808,6 +945,15 @@ async function testFrontendActionContract() {
   if (/selectionMoreMenu|selection-more-menu|isMoreMenuOpen|data-action=["']more["']/.test(`${html}\n${app}\n${styles}`)) {
     throw new Error("frontend should not keep orphan selection more-menu code without a More action.");
   }
+  if (html.includes("appUpdateLabel") || html.includes('data-i18n="checkUpdates"')) {
+    throw new Error("settings menu should merge version and update into one Version row.");
+  }
+  if (!html.includes('id="appUpdateButton" class="settings-menu-row settings-version-row"') || !html.includes("settings-version-value")) {
+    throw new Error("merged Version row should remain a clickable update control with a combined value.");
+  }
+  if (app.includes("image.title = label") || app.includes("element.title = label")) {
+    throw new Error("canvas image objects should not expose long native hover tooltips.");
+  }
 
   const frontendImageJobActions = [...domActions].filter((action) => stableFrontendImageActions.includes(action));
   for (const action of frontendImageJobActions) {
@@ -875,6 +1021,12 @@ async function testImageJobErrorContract() {
   }
   if (!app.includes("job-error-message") || !styles.includes(".job-error-message")) {
     throw new Error("Failed image job placeholders should render the job error text visibly.");
+  }
+  if (!styles.includes(".canvas-object.layer-background-filling .image-content::before") || !styles.includes("background-mask-ripple")) {
+    throw new Error("Edit Elements filling background layers should render a distinct lightweight mask ripple.");
+  }
+  if (!app.includes("appUpdateInfo?.canUpdate && appUpdateInfo?.updateAvailable")) {
+    throw new Error("frontend update button should not POST an update while the updater is blocked.");
   }
 }
 
@@ -1324,6 +1476,10 @@ function assertMcpToolSchema(tools = []) {
     }
   }
   const addImageSchema = byName.get("add_image")?.inputSchema || {};
+  const openCanvasProperties = byName.get("open_canvas")?.inputSchema?.properties || {};
+  if (!openCanvasProperties.autoUpdate) {
+    throw new Error("MCP open_canvas should expose autoUpdate so explicit opens can opt out of the default update check.");
+  }
   if (!addImageSchema.required?.includes("projectDir")) {
     throw new Error("MCP add_image should require projectDir.");
   }
@@ -1443,6 +1599,50 @@ async function testPluginPackageManifest() {
 
 function npmExecutable() {
   return process.platform === "win32" ? "npm.cmd" : "npm";
+}
+
+async function writeMinimalPluginPackage(rootDir) {
+  await fs.mkdir(path.join(rootDir, ".codex-plugin"), { recursive: true });
+  await fs.writeFile(path.join(rootDir, "package.json"), `${JSON.stringify({
+    name: "codex-canvas",
+    version: "0.1.1",
+    repository: {
+      type: "git",
+      url: "https://github.com/Xiangyu-CAS/codex-canvas.git"
+    }
+  }, null, 2)}\n`);
+  await fs.writeFile(path.join(rootDir, ".codex-plugin", "plugin.json"), `${JSON.stringify({
+    name: "codex-canvas",
+    version: "0.1.1+test",
+    repository: "https://github.com/Xiangyu-CAS/codex-canvas.git"
+  }, null, 2)}\n`);
+}
+
+async function createUpdateGitFixture() {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-update-git-"));
+  const source = path.join(tmp, "source");
+  const remote = path.join(tmp, "remote.git");
+  const local = path.join(tmp, "local");
+  await fs.mkdir(source, { recursive: true });
+  await git(["init", "-b", "main"], { cwd: source });
+  await git(["config", "user.email", "codex-canvas@example.invalid"], { cwd: source });
+  await git(["config", "user.name", "Codex Canvas Smoke"], { cwd: source });
+  await writeMinimalPluginPackage(source);
+  await git(["add", "."], { cwd: source });
+  await git(["commit", "-m", "initial"], { cwd: source });
+  await git(["clone", "--bare", source, remote], { cwd: tmp });
+  await git(["clone", remote, local], { cwd: tmp });
+  await git(["config", "user.email", "codex-canvas@example.invalid"], { cwd: local });
+  await git(["config", "user.name", "Codex Canvas Smoke"], { cwd: local });
+  return { tmp, source, remote, local };
+}
+
+async function git(args, { cwd }) {
+  return execFileAsync("git", args, {
+    cwd,
+    maxBuffer: 1024 * 1024,
+    windowsHide: true
+  });
 }
 
 async function testPersonalPluginInstaller() {
@@ -1596,12 +1796,58 @@ async function testDevPluginCacheLinker() {
   assertEqual(repeatedResult.alreadyLinked, true, "dev cache linker should be idempotent once cache points at the repository");
 }
 
+async function testAppUpdateStrategy() {
+  const plainRoot = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-update-plain-"));
+  await writeMinimalPluginPackage(plainRoot);
+  const plain = await appUpdateStatus({ rootDir: plainRoot });
+  assertEqual(plain.canUpdate, false, "plain package installs should not claim automatic git updates");
+  assertEqual(plain.blockedReason, "not-git", "plain package installs should report the non-git update blocker");
+  assertEqual(plain.installKind, "package", "plain package installs should report package install kind");
+  if (!plain.manualCommand?.includes("github.com/Xiangyu-CAS/codex-canvas.git")) {
+    throw new Error("plain package update status should suggest the configured GitHub repository.");
+  }
+
+  const fixture = await createUpdateGitFixture();
+  const clean = await appUpdateStatus({ rootDir: fixture.local, checkRemote: false });
+  assertEqual(clean.canUpdate, true, "clean git checkouts with an upstream should support automatic updates");
+  assertEqual(clean.strategy, "git-fast-forward", "git checkouts should use the fast-forward update strategy");
+  assertEqual(clean.git.remote, "origin", "git updater should identify the update remote");
+  assertEqual(clean.git.remoteBranch, "main", "git updater should identify the update branch");
+  assertEqual(clean.installKind, "git-checkout", "git checkouts should report git install kind");
+
+  await git(["config", "--unset", "branch.main.remote"], { cwd: fixture.local });
+  await git(["config", "--unset", "branch.main.merge"], { cwd: fixture.local });
+  const inferred = await appUpdateStatus({ rootDir: fixture.local, checkRemote: false });
+  assertEqual(inferred.canUpdate, true, "git updater should infer origin/current-branch when no upstream is configured");
+  assertEqual(inferred.git.upstreamConfigured, false, "inferred remote branches should remain distinguishable from configured upstreams");
+  assertEqual(inferred.manualCommand.includes("pull --ff-only origin main"), true, "inferred update command should name the remote and branch explicitly");
+
+  await fs.writeFile(path.join(fixture.local, "dirty.txt"), "local change");
+  const dirty = await appUpdateStatus({ rootDir: fixture.local, checkRemote: false });
+  assertEqual(dirty.canUpdate, false, "dirty git checkouts should block automatic updates");
+  assertEqual(dirty.blockedReason, "dirty-worktree", "dirty git checkouts should report the dirty worktree blocker");
+  await fs.rm(path.join(fixture.local, "dirty.txt"));
+
+  await fs.writeFile(path.join(fixture.local, "local-commit.txt"), "local commit");
+  await git(["add", "local-commit.txt"], { cwd: fixture.local });
+  await git(["commit", "-m", "local commit"], { cwd: fixture.local });
+  const ahead = await appUpdateStatus({ rootDir: fixture.local, checkRemote: false });
+  assertEqual(ahead.canUpdate, false, "locally ahead git checkouts should block automatic updates");
+  assertEqual(ahead.blockedReason, "local-ahead", "locally ahead git checkouts should report the local commits blocker");
+}
+
 async function testCliCollectHelp() {
   const { stdout } = await execFileAsync(process.execPath, [path.join(process.cwd(), "bin", "codex-canvas.mjs"), "help"], {
     cwd: process.cwd(),
     maxBuffer: 1024 * 1024,
     windowsHide: true
   });
+  if (!stdout.includes("codex-canvas open [--project <dir>] [--host 127.0.0.1] [--port 43217] [--thread-id <codex-thread-id>] [--no-update]")) {
+    throw new Error("CLI help should document that active opens can opt out of the default update check.");
+  }
+  if (!stdout.includes("Best-effort fast-forward update, then start or reuse the local server and print the canvas URL.")) {
+    throw new Error("CLI help should describe the open-time auto-update behavior.");
+  }
   if (!stdout.includes("codex-canvas import <image-path> [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--prompt <text>] [--name <name>]")) {
     throw new Error("CLI help should document import canvas scope flags.");
   }
@@ -2067,6 +2313,104 @@ async function testQuickEditAnnotations() {
   }
 }
 
+async function testAlphaRecutEditOutputs() {
+  const deps = await checkImageProcessingDepsAvailable();
+  if (!deps.available) {
+    console.warn(`Skipping alpha recut edit smoke test; missing optional image dependencies: ${deps.missing?.join(", ") || "unknown"}.`);
+    return;
+  }
+
+  const previous = process.env.CODEX_CANVAS_TEST_HELPERS;
+  process.env.CODEX_CANVAS_TEST_HELPERS = "1";
+  try {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-alpha-recut-"));
+    const makeImages = path.join(tmp, "make-images.py");
+    await fs.writeFile(makeImages, [
+      "from pathlib import Path",
+      "from PIL import Image, ImageDraw",
+      "import sys",
+      "root = Path(sys.argv[1])",
+      "transparent = Image.new('RGBA', (12, 10), (0, 0, 0, 0))",
+      "draw = ImageDraw.Draw(transparent)",
+      "draw.rectangle((4, 3, 6, 5), fill=(220, 40, 20, 255))",
+      "transparent.putpixel((3, 3), (220, 40, 20, 128))",
+      "transparent.save(root / 'transparent-source.png')",
+      "opaque = Image.new('RGBA', (12, 10), (240, 240, 240, 255))",
+      "opaque.save(root / 'opaque-source.png')",
+      "generated = Image.new('RGBA', (12, 10), (255, 0, 255, 255))",
+      "draw = ImageDraw.Draw(generated)",
+      "draw.rectangle((2, 2, 9, 7), fill=(20, 180, 80, 255))",
+      "generated.save(root / 'generated-chroma.png')"
+    ].join("\n"));
+    await runPython([makeImages, tmp]);
+
+    const generatedPath = path.join(tmp, "generated-chroma.png");
+    const quickOutput = await prepareImageForCollectionForTest({
+      action: "quick-edit",
+      imagePath: path.join(tmp, "transparent-source.png"),
+      sourceImagePath: path.join(tmp, "transparent-source.png"),
+      outputDir: path.join(tmp, "quick-edit-output"),
+      logPath: path.join(tmp, "quick-edit.log"),
+      transparentLayerMode: true
+    }, Date.now() - 1000, generatedPath);
+    if (path.resolve(quickOutput) === path.resolve(generatedPath)) {
+      throw new Error("Quick Edit should recut generated output when the source has transparency.");
+    }
+
+    const editTextOutput = await prepareImageForCollectionForTest({
+      action: "edit-text",
+      imagePath: path.join(tmp, "transparent-source.png"),
+      sourceImagePath: path.join(tmp, "transparent-source.png"),
+      outputDir: path.join(tmp, "edit-text-output"),
+      logPath: path.join(tmp, "edit-text.log"),
+      transparentLayerMode: true
+    }, Date.now() - 1000, generatedPath);
+    if (path.resolve(editTextOutput) === path.resolve(generatedPath)) {
+      throw new Error("Edit Text should recut generated output when the source has transparency.");
+    }
+
+    const normalOutput = await prepareImageForCollectionForTest({
+      action: "quick-edit",
+      imagePath: path.join(tmp, "opaque-source.png"),
+      sourceImagePath: path.join(tmp, "opaque-source.png"),
+      outputDir: path.join(tmp, "normal-output"),
+      logPath: path.join(tmp, "normal.log"),
+      transparentLayerMode: false
+    }, Date.now() - 1000, generatedPath);
+    assertEqual(path.resolve(normalOutput), path.resolve(generatedPath), "Quick Edit should not recut normal opaque image outputs");
+
+    const inspect = path.join(tmp, "inspect-alpha.py");
+    await fs.writeFile(inspect, [
+      "from pathlib import Path",
+      "from PIL import Image",
+      "import json, sys",
+      "root = Path(sys.argv[1])",
+      "quick = Image.open(sys.argv[2]).convert('RGBA')",
+      "text = Image.open(sys.argv[3]).convert('RGBA')",
+      "payload = {",
+      "  'quickBackground': quick.getpixel((0, 0)),",
+      "  'quickSourceTransparentNowFilled': quick.getpixel((8, 7)),",
+      "  'quickInterior': quick.getpixel((5, 4)),",
+      "  'textBackground': text.getpixel((0, 0)),",
+      "  'textSourceTransparentNowFilled': text.getpixel((8, 7)),",
+      "  'textInterior': text.getpixel((5, 4)),",
+      "}",
+      "(root / 'inspect.json').write_text(json.dumps(payload), encoding='utf-8')"
+    ].join("\n"));
+    await runPython([inspect, tmp, quickOutput, editTextOutput]);
+    const result = JSON.parse(await fs.readFile(path.join(tmp, "inspect.json"), "utf8"));
+    assertEqual(result.quickBackground[3], 0, "Quick Edit should remove generated chroma background");
+    assertEqual(result.quickSourceTransparentNowFilled[3], 255, "Quick Edit should allow the edited silhouette to grow beyond source alpha");
+    assertEqual(result.quickInterior.slice(0, 3).join(","), "20,180,80", "Quick Edit should keep generated RGB inside the recut alpha");
+    assertEqual(result.textBackground[3], 0, "Edit Text should remove generated chroma background");
+    assertEqual(result.textSourceTransparentNowFilled[3], 255, "Edit Text should allow the edited silhouette to grow beyond source alpha");
+    assertEqual(result.textInterior.slice(0, 3).join(","), "20,180,80", "Edit Text should keep generated RGB inside the recut alpha");
+  } finally {
+    if (previous === undefined) delete process.env.CODEX_CANVAS_TEST_HELPERS;
+    else process.env.CODEX_CANVAS_TEST_HELPERS = previous;
+  }
+}
+
 async function waitForImageJobDone(jobId) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < 4000) {
@@ -2261,6 +2605,7 @@ async function testEditElementsLayerPlacement(tmp) {
     const placeholder = await addImage(projectDir, {
       path: path.join(tmp, "source.png"),
       name: "placeholder.png",
+      allowDuplicate: true,
       x: 300,
       y: 200,
       width: 192,

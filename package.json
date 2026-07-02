@@ -3,6 +3,11 @@
   "version": "0.1.1",
   "description": "Local infinite canvas plugin for Codex image workflows.",
   "type": "module",
+  "homepage": "https://github.com/Xiangyu-CAS/codex-canvas",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Xiangyu-CAS/codex-canvas.git"
+  },
   "bin": {
     "codex-canvas": "./bin/codex-canvas.mjs"
   },

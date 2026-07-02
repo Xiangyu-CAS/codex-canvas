@@ -59,7 +59,8 @@ async function handle(method, params) {
             properties: {
               projectDir: { type: "string", description: "Absolute path to the active Codex project." },
               port: { type: "number", description: "Local port. Defaults to 43217." },
-              threadId: { type: "string", description: "Codex thread id to bind this canvas to for canvas-to-chat and thread-scoped canvas state. Defaults to the current Codex thread when available." }
+              threadId: { type: "string", description: "Codex thread id to bind this canvas to for canvas-to-chat and thread-scoped canvas state. Defaults to the current Codex thread when available." },
+              autoUpdate: { type: "boolean", description: "Run the best-effort Codex-Canvas fast-forward updater before opening. Defaults to true." }
             }
           }
         },
@@ -81,6 +82,7 @@ async function handle(method, params) {
               dataUrl: { type: "string", description: "Base64 image data URL." },
               name: { type: "string" },
               prompt: { type: "string" },
+              imagegenPrompt: { type: "string", description: "Full prompt sent to the image generation runner, when available." },
               threadId: { type: "string", description: "Codex thread id whose canvas should receive the image. Pass this explicitly for thread-scoped canvases; omitted means the default project canvas." },
               canvasId: { type: "string", description: "Explicit Codex-Canvas canvas id. Overrides the canvas id derived from threadId." }
             }
@@ -223,6 +225,7 @@ async function handle(method, params) {
       const entrypoint = path.join(pluginRoot, "bin", "codex-canvas.mjs");
       const cliArgs = ["open", "--project", projectDir, "--port", String(normalizePort(args.port))];
       if (args.threadId) cliArgs.push("--thread-id", args.threadId);
+      if (args.autoUpdate === false) cliArgs.push("--no-update");
       const output = await captureConsole(() => cliMain(
         cliArgs,
         { entrypoint }

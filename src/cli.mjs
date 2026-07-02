@@ -44,7 +44,9 @@ export async function main(args, context = {}) {
     const host = optionValue(options, ["host"], "--host") || process.env.CODEX_CANVAS_HOST || "127.0.0.1";
     const defaultUrl = `http://${host}:${port}/`;
     const autoCollect = options["no-auto-collect"] !== true;
+    const autoUpdate = options["no-update"] !== true && process.env.CODEX_CANVAS_OPEN_AUTO_UPDATE !== "0";
     const chatThreadId = normalizeThreadId(optionValue(options, ["thread-id", "threadId"], "--thread-id") || environmentThreadId());
+    if (autoUpdate) await autoUpdateBeforeOpen();
     await ensureProjectStore(projectDir, { canvasId: canvasIdForThread(chatThreadId) });
     const runtime = await readRuntime(projectDir);
     const existingUrl = await openExistingCanvas(runtime?.url, projectDir, { autoCollect, chatThreadId, allowLegacy: true });
@@ -206,12 +208,15 @@ export async function main(args, context = {}) {
       console.log(JSON.stringify(result, null, 2));
     } else if (checkOnly) {
       console.log(`Codex-Canvas ${result.version}`);
-      console.log(result.canUpdate
-        ? `Git branch ${result.git.branch} tracks ${result.git.upstream}.`
-        : "Automatic git update is unavailable for this install.");
+      if (result.canUpdate) {
+        console.log(`Update strategy: ${result.strategy} from ${result.git.remote}/${result.git.remoteBranch}.`);
+      } else {
+        console.log(`Automatic update unavailable: ${result.blockedMessage || "manual update required"}`);
+      }
       console.log(result.updateAvailable
         ? `Update available: ${result.git.behind} commit(s) behind.`
         : "No update available.");
+      if (result.manualCommand) console.log(`Manual command: ${result.manualCommand}`);
     } else {
       console.log(result.output || "Codex-Canvas update completed.");
       console.log(`Current version: ${result.version}`);
@@ -275,6 +280,20 @@ export async function main(args, context = {}) {
   }
 
   throw usageError(`Unknown command: ${command}. Run "codex-canvas help" for usage.`);
+}
+
+async function autoUpdateBeforeOpen() {
+  try {
+    const result = await updateApp();
+    if (result.updated) {
+      console.error(`Codex-Canvas updated from ${result.previousHead || "unknown"} to ${result.git.head || "unknown"} before opening.`);
+    }
+    return result;
+  } catch (error) {
+    const message = error?.details?.blockedMessage || error?.message || String(error);
+    console.error(`Codex-Canvas auto-update skipped: ${message}`);
+    return { updated: false, error: message };
+  }
 }
 
 function parseOptions(args) {
@@ -498,7 +517,7 @@ function printHelp() {
 Codex-Canvas
 
 Usage:
-  codex-canvas open [--project <dir>] [--host 127.0.0.1] [--port 43217] [--thread-id <codex-thread-id>]
+  codex-canvas open [--project <dir>] [--host 127.0.0.1] [--port 43217] [--thread-id <codex-thread-id>] [--no-update]
   codex-canvas start [--project <dir>] [--host 127.0.0.1] [--port 43217] [--thread-id <codex-thread-id>] [--no-auto-collect]
   codex-canvas import <image-path> [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--prompt <text>] [--name <name>]
   codex-canvas collect [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--from <dir,dir>] [--since-minutes 120] [--limit 20]
@@ -515,7 +534,7 @@ Usage:
   codex-canvas doctor-deps [--json]
 
 Commands:
-  open      Start the local server in the background and print the canvas URL.
+  open      Best-effort fast-forward update, then start or reuse the local server and print the canvas URL.
   start     Run the local canvas server in the foreground with auto-collection enabled.
   import    Copy an image into the project canvas and place it on the board.
   collect   Import recent image files from ~/.codex/generated_images and the project.

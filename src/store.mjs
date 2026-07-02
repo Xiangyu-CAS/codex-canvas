@@ -55,6 +55,7 @@ function searchFieldsForObject(object) {
     type: object.type || "image",
     name: object.name,
     prompt: object.prompt,
+    imagegenPrompt: object.imagegenPrompt,
     text: object.text,
     batchId: object.batchId,
     sourceObjectId: object.sourceObjectId,
@@ -76,6 +77,7 @@ function summarizeSearchObject(object, matchFields) {
     type: object.type || "image",
     name: object.name || "",
     prompt: object.prompt || "",
+    imagegenPrompt: object.imagegenPrompt || "",
     text: object.text || "",
     src: object.src || "",
     assetPath: object.assetPath || null,
@@ -100,6 +102,7 @@ function summarizeVersionObject(object) {
     type: object.type || "image",
     name: object.name || "",
     prompt: object.prompt || "",
+    imagegenPrompt: object.imagegenPrompt || "",
     text: object.text || "",
     src: object.src || "",
     assetPath: object.assetPath || null,
@@ -280,14 +283,19 @@ export async function promptHistory(projectDir, { query = "", limit = 20, canvas
   const prompts = [];
 
   for (const object of [...state.objects].reverse()) {
-    const prompt = typeof object.prompt === "string" ? object.prompt.trim() : "";
+    const summaryPrompt = typeof object.prompt === "string" ? object.prompt.trim() : "";
+    const imagegenPrompt = typeof object.imagegenPrompt === "string" ? object.imagegenPrompt.trim() : "";
+    const prompt = imagegenPrompt || summaryPrompt;
     if (!prompt) continue;
+    const searchable = [prompt, summaryPrompt, object.name || ""].join("\n").toLowerCase();
     const key = prompt.toLowerCase();
     if (seen.has(key)) continue;
-    if (normalizedQuery && !key.includes(normalizedQuery)) continue;
+    if (normalizedQuery && !searchable.includes(normalizedQuery)) continue;
     seen.add(key);
     prompts.push({
       prompt,
+      summaryPrompt,
+      imagegenPrompt,
       objectId: object.id,
       objectName: object.name || "",
       objectType: object.type || "image",
@@ -444,8 +452,25 @@ async function withStateLock(projectDir, options = {}, operation) {
 }
 
 export async function addImage(projectDir, input, options = {}) {
+  if (shouldDedupeImage(input)) {
+    const existing = await findExistingImageForInput(projectDir, input, options);
+    if (existing) return selectExistingImage(projectDir, existing.id, options);
+  }
+
   const asset = await persistImage(projectDir, input, options);
-  return mutateState(projectDir, options, (state) => {
+  return mutateState(projectDir, options, async (state) => {
+    const duplicate = shouldDedupeImage(input) ? await findDuplicateImageObject(state, asset) : null;
+    if (duplicate) {
+      await removeDuplicateAsset(asset, duplicate);
+      return {
+        state: {
+          ...state,
+          selection: duplicate.id
+        },
+        value: duplicate
+      };
+    }
+
     const count = state.objects.length;
     const displaySize = imageDisplaySize(asset, input);
     const object = {
@@ -456,6 +481,7 @@ export async function addImage(projectDir, input, options = {}) {
       assetPath: asset.assetPath,
       sourcePath: asset.sourcePath || null,
       prompt: sanitizeString(input.prompt, "", 4000),
+      imagegenPrompt: sanitizeString(input.imagegenPrompt, "", 20000),
       sourceObjectId: typeof input.sourceObjectId === "string" ? input.sourceObjectId.slice(0, 300) : null,
       batchId: typeof input.batchId === "string" ? input.batchId.slice(0, 300) : null,
       layoutMode: sanitizeString(input.layoutMode, "manual", 80),
@@ -478,6 +504,89 @@ export async function addImage(projectDir, input, options = {}) {
       value: object
     };
   });
+}
+
+function shouldDedupeImage(input = {}) {
+  if (input.allowDuplicate === true || input.dedupe === false) return false;
+  return input.dedupe === true || Boolean(input.path);
+}
+
+async function selectExistingImage(projectDir, id, options = {}) {
+  return mutateState(projectDir, options, (state) => {
+    const object = state.objects.find((item) => item.id === id);
+    if (!object) return { state, value: null };
+    return {
+      state: {
+        ...state,
+        selection: object.id
+      },
+      value: object
+    };
+  });
+}
+
+async function findExistingImageForInput(projectDir, input, options = {}) {
+  const fingerprint = await imageInputFingerprint(input);
+  if (!fingerprint) return null;
+  const state = await readState(projectDir, options);
+  return findDuplicateImageObject(state, fingerprint);
+}
+
+async function imageInputFingerprint(input = {}) {
+  if (input.path) {
+    const sourcePath = path.resolve(input.path);
+    let buffer;
+    try {
+      buffer = await fs.readFile(sourcePath);
+    } catch {
+      return { sourcePath };
+    }
+    return {
+      sourcePath,
+      contentHash: imageContentHash(buffer)
+    };
+  }
+
+  if (input.dataUrl) {
+    const match = /^data:image\/([a-zA-Z0-9.+-]+);base64,(.+)$/.exec(input.dataUrl);
+    if (!match) return null;
+    const buffer = decodeBase64ImagePayload(match[2]);
+    return {
+      contentHash: imageContentHash(buffer)
+    };
+  }
+
+  return null;
+}
+
+async function findDuplicateImageObject(state, fingerprint) {
+  const sourcePath = typeof fingerprint.sourcePath === "string" ? path.resolve(fingerprint.sourcePath) : null;
+  for (const object of state.objects) {
+    if ((object.type || "image") !== "image") continue;
+    if (sourcePath && path.resolve(object.sourcePath || "") === sourcePath) return object;
+    if (sourcePath && path.resolve(object.assetPath || "") === sourcePath) return object;
+  }
+
+  if (!fingerprint.contentHash) return null;
+  for (const object of state.objects) {
+    if ((object.type || "image") !== "image" || !object.assetPath) continue;
+    try {
+      const buffer = await fs.readFile(object.assetPath);
+      if (imageContentHash(buffer) === fingerprint.contentHash) return object;
+    } catch {
+      // Missing local assets should not prevent importing a new image.
+    }
+  }
+  return null;
+}
+
+async function removeDuplicateAsset(asset, duplicate) {
+  if (!asset.assetPath || asset.assetPath === duplicate.assetPath) return;
+  try {
+    await fs.rm(asset.assetPath, { force: true });
+  } catch {
+    // A failed cleanup should not turn a successful dedupe into an import failure.
+  }
 }
 
 export async function addObject(projectDir, input, options = {}) {
@@ -618,6 +727,8 @@ function normalizePersistedObject(object, context = {}) {
     id,
     type,
     name: sanitizeString(object.name, type === "text" ? "Text" : type === "drawing" ? "Drawing" : "Image"),
+    prompt: sanitizeString(object.prompt, "", 4000),
+    imagegenPrompt: sanitizeString(object.imagegenPrompt, "", 20000),
     x: sanitizeCoordinate(object.x),
     y: sanitizeCoordinate(object.y),
     width: sanitizeDimension(object.width, type === "text" ? 220 : 1),
@@ -844,8 +955,11 @@ function sanitizeObjectPatch(patch = {}) {
   ]) {
     if (Number.isFinite(patch[key])) next[key] = sanitizeDimension(patch[key]);
   }
-  for (const key of ["name", "text", "color", "stroke", "status", "error", "layoutMode", "sourceObjectId", "layerGroupId", "layerGroupName", "layerGroupSourceObjectId", "layerGroupKind", "layerGroupBackgroundStatus"]) {
-    if (typeof patch[key] === "string") next[key] = patch[key].slice(0, key === "text" ? 2000 : 300);
+  for (const key of ["name", "text", "color", "stroke", "status", "error", "layoutMode", "sourceObjectId", "layerGroupId", "layerGroupName", "layerGroupSourceObjectId", "layerGroupKind", "layerGroupBackgroundStatus", "prompt", "imagegenPrompt"]) {
+    if (typeof patch[key] === "string") {
+      const limit = key === "text" ? 2000 : key === "prompt" ? 4000 : key === "imagegenPrompt" ? 20000 : 300;
+      next[key] = patch[key].slice(0, limit);
+    }
   }
   if (typeof patch.layerGroupLocked === "boolean") next.layerGroupLocked = patch.layerGroupLocked;
   if (patch.crop && typeof patch.crop === "object") {
@@ -885,7 +999,7 @@ function sanitizeCrop(crop) {
   };
 }
 
-export async function markStaleJobPlaceholders(projectDir, { activePlaceholderIds = [], timeoutMs = 2 * 60_000, canvasId = null } = {}) {
+export async function markStaleJobPlaceholders(projectDir, { activePlaceholderIds = [], timeoutMs = 2 * 60_000, backgroundTimeoutMs = 6 * 60_000, canvasId = null } = {}) {
   const options = { canvasId };
   return mutateState(projectDir, options, (state) => {
     const active = new Set(activePlaceholderIds);
@@ -908,9 +1022,19 @@ export async function markStaleJobPlaceholders(projectDir, { activePlaceholderId
         error: object.error || "The image job timed out or was interrupted."
       };
     });
+    const objectsWithBackgroundStatus = objects.map((object) => {
+      if (object.layerGroupKind !== "background" || object.layerGroupBackgroundStatus !== "filling") return object;
+      const createdAt = Date.parse(object.createdAt || "");
+      if (!Number.isFinite(createdAt) || now - createdAt < backgroundTimeoutMs) return object;
+      changed = true;
+      return {
+        ...object,
+        layerGroupBackgroundStatus: "failed"
+      };
+    });
 
     if (!changed) return { write: false, value: state };
-    return { ...state, objects };
+    return { ...state, objects: objectsWithBackgroundStatus };
   });
 }
 
@@ -1181,6 +1305,10 @@ function decodeBase64ImagePayload(payload) {
     throw error;
   }
   return buffer;
+}
+
+function imageContentHash(buffer) {
+  return crypto.createHash("sha256").update(buffer).digest("hex");
 }
 
 function imageDisplaySize(asset, input) {

@@ -52,6 +52,7 @@ export async function collectRecentImages(projectDir, options = {}) {
       path: candidate.path,
       name: path.basename(candidate.path),
       prompt: options.prompt || "Collected recent image",
+      imagegenPrompt: options.imagegenPrompt || "",
       x: candidate.x,
       y: candidate.y,
       batchId: candidate.batchId,

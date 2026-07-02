@@ -22,12 +22,12 @@ export async function resolveCodexExecutable() {
   throw error;
 }
 
-export async function startCodexImageJob({ projectDir, action, imagePath, outputDir, logPath, prompt: userPrompt }) {
+export async function startCodexImageJob({ projectDir, action, imagePath, outputDir, logPath, prompt: userPrompt, transparentLayerMode = false }) {
   const executable = await resolveCodexExecutable();
   await fs.mkdir(outputDir, { recursive: true });
   await fs.mkdir(path.dirname(logPath), { recursive: true });
 
-  const prompt = promptForAction({ action, outputDir, userPrompt });
+  const prompt = promptForAction({ action, outputDir, userPrompt, transparentLayerMode });
   const model = process.env.CODEX_CANVAS_CODEX_MODEL;
   const requestedReasoningEffort = process.env.CODEX_CANVAS_CODEX_REASONING_EFFORT || "low";
   const reasoningEffort = requestedReasoningEffort === "minimal" ? "low" : requestedReasoningEffort;
@@ -88,7 +88,7 @@ export async function startCodexImageJob({ projectDir, action, imagePath, output
     });
   });
 
-  return { child, done, executable };
+  return { child, done, executable, prompt };
 }
 
 export function spawnCodexProcess(executable, args, options = {}) {
@@ -161,7 +161,20 @@ function shouldUseShellForCommandScript(filePath) {
   return process.platform === "win32" && /\.(?:cmd|bat)$/i.test(filePath);
 }
 
-function promptForAction({ action, outputDir, userPrompt }) {
+function transparentLayerChromaInstructions() {
+  return [
+    "The source image is a transparent layer. The edited content may have a different silhouette than the source.",
+    "Render the edited layer on a perfectly flat solid #ff00ff chroma-key background, not on white, checkerboard, gray, transparent-preview, or scene background.",
+    "Do not use #ff00ff anywhere in the edited layer content.",
+    "Codex-Canvas will remove the chroma-key background locally and create the final alpha channel after generation."
+  ].join("\n");
+}
+
+function maybeTransparentLayerChromaInstruction(transparentLayerMode) {
+  return transparentLayerMode ? transparentLayerChromaInstructions() : "";
+}
+
+function promptForAction({ action, outputDir, userPrompt, transparentLayerMode = false }) {
   if (action === "recognize-text") {
     const textInventoryPath = path.join(outputDir, "recognized-text.json");
     return [
@@ -204,6 +217,7 @@ function promptForAction({ action, outputDir, userPrompt }) {
       "Step 3: after the edit plan file exists, read it and call imagegen exactly once to create the revised image.",
       "Preserve non-text content, composition, aspect ratio, colors, perspective, typography style, and design intent.",
       "Only change text requested by the edit plan. Keep unchanged recognized text as-is.",
+      maybeTransparentLayerChromaInstruction(transparentLayerMode),
       "Treat this as an image edit, not a new unrelated generation.",
       "",
       `Save or copy the final image into this exact directory: ${outputDir}`,
@@ -225,6 +239,7 @@ function promptForAction({ action, outputDir, userPrompt }) {
       userPrompt || "Improve the image according to the user's selected Quick Edit request.",
       "",
       "Preserve the source image's important subject identity, composition, aspect ratio, visible text, and design intent unless the edit explicitly says to change them.",
+      maybeTransparentLayerChromaInstruction(transparentLayerMode),
       "Treat this as an image edit, not a new unrelated generation.",
       "",
       `Save or copy the final image into this exact directory: ${outputDir}`,
@@ -274,6 +289,7 @@ function promptForAction({ action, outputDir, userPrompt }) {
       "Call imagegen exactly once to create a revised image with the requested text changes.",
       "Preserve non-text content, composition, aspect ratio, colors, perspective, typography style, and design intent.",
       "Only change text requested by the edit instruction. Keep unchanged visible text as-is.",
+      maybeTransparentLayerChromaInstruction(transparentLayerMode),
       "Treat this as an image edit, not a new unrelated generation.",
       "",
       `Save or copy the final image into this exact directory: ${outputDir}`,

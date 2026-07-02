@@ -15,7 +15,8 @@ Use this skill when the user invokes Edit Text from Codex-Canvas or asks to modi
 4. Use imagegen once to create the edited image.
 5. Preserve non-text content, aspect ratio, composition, colors, perspective, typography style, and design intent.
 6. Only change text requested by the edit instruction. Keep unchanged visible text as-is.
-7. Save the final selected output as a PNG under the job output directory provided by Codex-Canvas.
-8. Codex-Canvas will collect the output and place it in a row to the right of the source image.
+7. If the source image is a transparent layer, render the edited layer on a flat solid #ff00ff chroma-key background so Codex-Canvas can recut the alpha channel after generation.
+8. Save the final selected output as a PNG under the job output directory provided by Codex-Canvas.
+9. Codex-Canvas will collect the output, remove the chroma-key background when needed, and place it in a row to the right of the source image.
 
 Do not ask follow-up questions from a background Edit Text job. Make the most reasonable text edit from the provided instruction.
