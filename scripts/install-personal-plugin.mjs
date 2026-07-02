@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { installRapidOcr } from "../src/ocr-setup.mjs";
 
 const pluginName = "codex-canvas";
 const pluginCategory = "Productivity";
@@ -20,6 +21,17 @@ async function main() {
     await writeMarketplace(marketplacePath, sourcePath);
   }
 
+  const ocr = options.installOcr && !options.dryRun
+    ? await installRapidOcr({ optional: true })
+    : {
+        installed: false,
+        skipped: true,
+        available: false,
+        message: options.dryRun
+          ? "Skipped during dry run."
+          : "Skipped by installer option."
+      };
+
   const payload = {
     ok: true,
     dryRun: options.dryRun,
@@ -27,7 +39,10 @@ async function main() {
     pluginRoot: rootDir,
     linkPath,
     marketplacePath,
-    sourcePath
+    sourcePath,
+    optionalDependencies: {
+      ocr
+    }
   };
 
   if (options.json) {
@@ -35,13 +50,18 @@ async function main() {
   } else {
     console.log(`Codex-Canvas personal plugin entry is available at ${marketplacePath}`);
     console.log(`Plugin link: ${linkPath} -> ${rootDir}`);
+    console.log(`RapidOCR: ${ocr.message}`);
+    if (!ocr.available) {
+      console.log("Edit Text will fall back to Codex vision OCR until RapidOCR is available.");
+    }
   }
 }
 
 function parseArgs(args) {
   return {
     dryRun: args.includes("--dry-run"),
-    json: args.includes("--json")
+    json: args.includes("--json"),
+    installOcr: !args.includes("--skip-ocr") && process.env.CODEX_CANVAS_SKIP_OCR_INSTALL !== "1"
   };
 }
 

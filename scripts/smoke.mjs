@@ -1526,6 +1526,13 @@ async function testPackageOptionalDependencyScripts() {
     "node ./scripts/install-personal-plugin.mjs",
     "package.json should expose a deterministic personal marketplace installer"
   );
+  const installerScript = await fs.readFile(path.join(process.cwd(), "scripts", "install-personal-plugin.mjs"), "utf8");
+  if (!installerScript.includes("installRapidOcr({ optional: true })")) {
+    throw new Error("personal plugin installer should best-effort install RapidOCR without blocking plugin installation.");
+  }
+  if (!installerScript.includes("--skip-ocr") || !installerScript.includes("CODEX_CANVAS_SKIP_OCR_INSTALL")) {
+    throw new Error("personal plugin installer should let users skip best-effort RapidOCR installation.");
+  }
   assertEqual(
     packageJson.scripts?.["doctor:deps"],
     "node ./bin/codex-canvas.mjs doctor-deps --json",
@@ -1676,7 +1683,8 @@ async function testPersonalPluginInstaller() {
 
   const env = {
     ...process.env,
-    CODEX_CANVAS_PERSONAL_HOME: tmp
+    CODEX_CANVAS_PERSONAL_HOME: tmp,
+    CODEX_CANVAS_SKIP_OCR_INSTALL: "1"
   };
   for (let run = 0; run < 2; run += 1) {
     const { stdout } = await execFileAsync(process.execPath, [
@@ -1691,6 +1699,7 @@ async function testPersonalPluginInstaller() {
     const result = JSON.parse(stdout);
     assertEqual(result.ok, true, "personal plugin installer should report success");
     assertEqual(result.sourcePath, "./plugins/codex-canvas", "personal plugin installer should use the marketplace-relative plugin path");
+    assertEqual(result.optionalDependencies?.ocr?.skipped, true, "personal plugin installer should report skipped OCR install when disabled");
   }
 
   const marketplace = JSON.parse(await fs.readFile(marketplacePath, "utf8"));
