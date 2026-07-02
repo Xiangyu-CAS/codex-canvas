@@ -156,7 +156,7 @@ install:personal 会把插件链接到 ~/plugins/codex-canvas，并维护 ~/.age
 如果没有，请执行 codex plugin marketplace add ~。
 
 最后执行 codex plugin add codex-canvas@personal。
-安装完成后，请检查 Codex 是否能看到 Codex-Canvas 的 skills/MCP，并提醒我新开一个 Codex 对话来加载新插件。
+安装完成后，请检查 Codex 是否能看到 Codex-Canvas 的 skills/MCP，并提醒我在当前 Codex 对话里使用 @Codex-Canvas 打开画布来启动，不要新开对话。
 ```
 
 ### 手动安装
@@ -191,7 +191,7 @@ codex plugin marketplace add ~
 codex plugin add codex-canvas@personal
 ```
 
-安装后新开一个 Codex 会话，让新的 skills 和 MCP 工具加载进来。可以尝试输入 `/canvas`；如果当前 Codex 版本没有把插件 skill 暴露成 slash command，可以使用 `$canvas` 或直接说“打开 Codex-Canvas 画布”。
+安装后在当前 Codex 对话里使用 `@Codex-Canvas` 打开画布来启动，不要新开对话。也可以尝试输入 `/canvas`；如果当前 Codex 版本没有把插件 skill 暴露成 slash command，可以使用 `$canvas` 或直接说“打开 Codex-Canvas 画布”。
 
 可选本地依赖可以按需安装；它们用于本地 OCR、Edit Elements 拆层和背景处理，不是打开画布的硬性前置条件：
 
@@ -255,7 +255,7 @@ npm pack --dry-run --json
 
 包内应包含 `.codex-plugin/plugin.json`、`.mcp.json`、`skills/`、`src/`、`public/` 和 `bin/`，不应包含本地运行态的 `canvas/`、`.git/` 或 `node_modules/`。
 
-安装后新建 Codex 会话，尝试输入 `/canvas`。当前本机已验证 `/canvas` 可以触发 `codex-canvas:canvas` skill，并在 Codex `in-app browser` 中打开 `http://127.0.0.1:43217/?project=<id>`。如果某些 Codex 版本没有把插件 skill 暴露为 slash command，可以使用 `$canvas` 或直接说“打开 Codex-Canvas 画布”。
+安装后在当前 Codex 对话里使用 `@Codex-Canvas` 打开画布来启动，不要新开对话。当前本机已验证 `/canvas` 可以触发 `codex-canvas:canvas` skill，并在 Codex `in-app browser` 中打开 `http://127.0.0.1:43217/?project=<id>`。如果某些 Codex 版本没有把插件 skill 暴露为 slash command，可以使用 `$canvas` 或直接说“打开 Codex-Canvas 画布”。
 
 ## 数据目录
 

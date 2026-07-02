@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { normalizePort } from "../src/cli.mjs";
 import { sendImageToBoundChat } from "../src/codex-chat.mjs";
 import { collectRecentImages } from "../src/collector.mjs";
-import { createImageJob, getImageJob, markTextRecognitionCancelledForTest, placeImportedElementLayersForTest, prepareImageForCollectionForTest } from "../src/jobs.mjs";
+import { createImageJob, getIgnoredGeneratedImagePaths, getImageJob, markTextRecognitionCancelledForTest, placeImportedElementLayersForTest, prepareImageForCollectionForTest } from "../src/jobs.mjs";
 import { checkImageProcessingDepsAvailable } from "../src/ocr-setup.mjs";
 import { assetsDirFor, jobsDirFor, legacyCanvasDataDirFor, statePathFor } from "../src/paths.mjs";
 import { exportLayerGroupPsd } from "../src/psd-export.mjs";
@@ -1584,6 +1584,18 @@ async function testPluginPackageManifest() {
       throw new Error(`npm pack should include ${requiredPath}.`);
     }
   }
+
+  const canvasSkill = await fs.readFile(path.join(process.cwd(), "skills", "canvas", "SKILL.md"), "utf8");
+  if (!canvasSkill.includes("Open the returned URL directly in the Codex in-app browser")) {
+    throw new Error("canvas skill should require direct Codex in-app browser opening.");
+  }
+  if (!canvasSkill.includes("Do not open the URL with the operating system default browser")) {
+    throw new Error("canvas skill should forbid falling back to the system default browser.");
+  }
+  if (!canvasSkill.includes("Do not rely on the user clicking a printed URL")) {
+    throw new Error("canvas skill should avoid printed URL click fallback because it opens the default browser.");
+  }
+
   for (const file of packedFiles) {
     if (file === ".git" || file.startsWith(".git/")) {
       throw new Error("npm pack should not include git metadata.");
@@ -2702,6 +2714,19 @@ async function testEditElementsLayerPlacement(tmp) {
       "Edit Elements background completion should replace the imported background layer in place"
     );
     assertEqual(readyBackground.layerGroupKind, "background", "completed background should remain the background group layer");
+    const completedBackgroundPath = path.join(outputDir, "background-completion", "edit-elements-background-completed.png");
+    const ignoredPaths = getIgnoredGeneratedImagePaths({ projectDir, canvasId: null }).map((item) => path.resolve(item));
+    if (!ignoredPaths.includes(path.resolve(completedBackgroundPath))) {
+      throw new Error("Edit Elements background completion output should be ignored by auto-collection after in-place replacement.");
+    }
+    const duplicateCollection = await collectRecentImages(projectDir, {
+      roots: [path.dirname(completedBackgroundPath)],
+      sinceMs: 0,
+      limit: 10,
+      prompt: "should not import completed background",
+      excludePaths: ignoredPaths
+    });
+    assertEqual(duplicateCollection.imported.length, 0, "Edit Elements completed background output should not be collected as a separate canvas image");
     const completedManifest = JSON.parse(await fs.readFile(path.join(elementsDir, "elements-manifest.json"), "utf8"));
     assertEqual(completedManifest.backgroundCompleted, true, "background completion should update the elements manifest");
     await runPython([

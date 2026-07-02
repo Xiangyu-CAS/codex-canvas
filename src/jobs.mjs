@@ -1080,8 +1080,10 @@ async function completeElementBackground(job, manifest, layersDir, backgroundObj
     }
     if (!completedPath) throw new Error("Edit Elements background completion did not produce an image.");
 
+    rememberGeneratedImagePaths([completedPath], job);
     await rememberGeneratedImages(startedAtMs, job);
     await prepareCompletedBackground(job.imagePath, completedPath, backgroundPath);
+    rememberGeneratedImagePaths([backgroundPath], job);
     if (!await isPngRgba(backgroundPath)) throw new Error("Completed Edit Elements background is not a four-channel RGBA PNG.");
     await fs.copyFile(backgroundPath, backgroundObject.assetPath);
 
@@ -1284,14 +1286,23 @@ function stopChild(child) {
 async function rememberGeneratedImages(sinceMs, options = {}) {
   const root = path.join(os.homedir(), ".codex", "generated_images");
   const paths = await recentImages(root, sinceMs - 1000);
+  rememberGeneratedImagePaths(paths, options);
+}
+
+function rememberGeneratedImagePaths(paths, options = {}) {
+  const normalizedPaths = paths
+    .filter(Boolean)
+    .map((imagePath) => path.resolve(imagePath));
+  if (normalizedPaths.length === 0) return;
+
   const globalIgnored = ignoredGeneratedImagePaths.get(globalIgnoredGeneratedImageScope) || new Set();
-  for (const imagePath of paths) globalIgnored.add(imagePath);
+  for (const imagePath of normalizedPaths) globalIgnored.add(imagePath);
   ignoredGeneratedImagePaths.set(globalIgnoredGeneratedImageScope, globalIgnored);
 
   const key = ignoredImageScopeKey(options);
   if (!key) return;
   const ignored = ignoredGeneratedImagePaths.get(key) || new Set();
-  for (const imagePath of paths) ignored.add(imagePath);
+  for (const imagePath of normalizedPaths) ignored.add(imagePath);
   ignoredGeneratedImagePaths.set(key, ignored);
 }
 
