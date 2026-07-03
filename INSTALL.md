@@ -8,7 +8,7 @@
 
 ```text
 请根据 https://github.com/Xiangyu-CAS/codex-canvas.git 里的 INSTALL.md 安装 Codex-Canvas。
-安装完成后，在当前 Codex 对话里使用 @Codex-Canvas 打开画布来启动，不要新开对话。
+安装完成后，在当前 Codex 对话里使用 @Codex-Canvas 打开画布来启动
 ```
 
 安装流程是：把仓库 clone 到本机一个长期保留的目录，运行 personal marketplace 安装器，然后用 Codex CLI 安装这个 personal plugin。

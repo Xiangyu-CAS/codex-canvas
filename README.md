@@ -1,8 +1,8 @@
 # Codex-Canvas
 
-Codex-Canvas 是一个面向 Codex 图像工作流的本地无限画布插件。它可以在 Codex 里打开画布，把生成的图片收录到当前项目中，并让你继续整理、标注、编辑、比较这些视觉资产。
+Codex-Canvas 是一个面向 Codex 的无限画布Plugin，无需配置API，调用Codex内置GPT-image-2实现画布编辑功能。它可以在 Codex 里打开画布，把生成的图片收录到当前项目中，并让你继续整理、标注、编辑、比较这些视觉资产
 
-这个插件把 Codex 变成更接近 Lovart 的工作形态：一边对话，一边画布，并提供
+这个插件把 Codex 变成更接近 Lovart 的工作形态：一边对话，一边画布，并参照Lovart画布提供许多强大的编辑功能
 
 ## 安装
 
@@ -10,7 +10,7 @@ Codex-Canvas 是一个面向 Codex 图像工作流的本地无限画布插件。
 
 ```text
 请根据 https://github.com/Xiangyu-CAS/codex-canvas.git 里的 INSTALL.md 安装 Codex-Canvas。
-安装完成后，在当前 Codex 对话里输入： `@Codex-Canvas 打开画布`来启动
+安装完成后，提示用户，在当前 Codex 对话里输入： `@Codex-Canvas 打开画布`来启动
 ```
 
 完整安装说明见 [`INSTALL.md`](INSTALL.md)。
@@ -18,10 +18,8 @@ Codex-Canvas 是一个面向 Codex 图像工作流的本地无限画布插件。
 安装完成后，在当前 Codex 对话里打开画布：
 
 ```text
-@Codex-Canvas
+@Codex-Canvas 打开画布
 ```
-
-不要为了打开画布新建对话。Codex-Canvas 会尽量绑定当前 Codex thread，方便后续继续在同一个上下文里使用。
 
 ## 功能
 
@@ -59,3 +57,6 @@ node ./bin/codex-canvas.mjs open --project .
 
 - [`INSTALL.md`](INSTALL.md)：安装说明和可选本地依赖。
 - [`docs/CANVAS_TO_CHAT.md`](docs/CANVAS_TO_CHAT.md)：当前 canvas-to-chat 的验证结果和限制。
+
+## 致谢
+感谢 [Cowart](https://github.com/zhongerxin/Cowart) 提供的画布思路
