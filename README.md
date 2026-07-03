@@ -1,51 +1,108 @@
 # Codex-Canvas
 
-Codex-Canvas 是一个面向 Codex 的无限画布Plugin，无需配置API，调用Codex内置GPT-image-2实现画布编辑功能。它可以在 Codex 里打开画布，把生成的图片收录到当前项目中，并让你继续整理、标注、编辑、比较这些视觉资产
+[English](README.md) | [中文](README.zh-CN.md)
 
-这个插件把 Codex 变成更接近 Lovart 的工作形态：一边对话，一边画布，并参照Lovart画布提供许多强大的编辑功能
+Codex-Canvas is an infinite canvas plugin for Codex. It requires no API setup and uses Codex's built-in GPT-image-2 workflow to edit images on a local canvas. It opens directly inside Codex, collects generated images into the current project, and lets you organize, annotate, edit, compare, and reuse visual assets.
 
-## 安装
+It brings a Lovart-like workflow to Codex: chat on one side, canvas on the other, with powerful image editing tools designed around the same creative loop.
 
-把下面这段复制给 Codex：
+![Open Codex Canvas](assets/readme/open-canvas.webp)
+
+## Roadmap
+
+- [x] GPT-image-2 powered image editing
+- [ ] Editable PPT generation and export
+- [ ] draw.io flowchart generation and editing
+
+## Highlights
+
+### 1. Open a canvas and collect generated images automatically
+
+Type `@Codex-Canvas open the codex canvas` in your current Codex conversation, and Codex-Canvas opens a local project canvas in the in-app browser. Keep chatting on the left while managing visual assets on the right. When Codex/ImageGen creates an image, Codex-Canvas saves it into the current project and places it on the active canvas, so generated results become editable canvas assets immediately.
+
+![Auto collect generated images](assets/readme/auto-collect.webp)
+
+### 2. Quick Edit: mark what you want changed
+
+Quick Edit lets you annotate the selected image directly. Brush marks, colors, and text instructions are passed to the model as editing references, making it useful for local replacements, adding objects, and preserving the main layout while refining details.
+
+![Quick Edit mask](assets/readme/quick-edit-mask.webp)
+
+![Quick Edit result](assets/readme/quick-edit-result.webp)
+
+### 3. Edit Elements: separate layers and rearrange them
+
+Edit Elements separates an image into movable layers such as background, text, products, people, and price tags. You can rearrange those layers on the canvas, while Codex-Canvas can continue completing the background that was hidden behind foreground objects. Downloading any layer from an Edit Elements group exports the whole group as a PSD, with each canvas layer mapped to a Photoshop layer for further editing in tools like Photoshop or Photopea.
+
+![Edit Elements layers](assets/readme/edit-elements-layers.webp)
+
+![Edit Elements result](assets/readme/edit-elements-result.webp)
+
+### 4. Edit Text: recognize and rewrite text in images
+
+Edit Text recognizes text in the image and lists it as editable fields. You can revise individual lines while asking the model to preserve the original typography, layout relationships, and visual tone.
+
+![Edit Text](assets/readme/edit-text.webp)
+
+![Edit Text result](assets/readme/edit-text-result.webp)
+
+### 5. Remove BG: remove backgrounds in one step
+
+For posters, portraits, product shots, and other assets, Codex-Canvas can create a transparent-background result directly on the canvas. The result stays in the same project canvas, ready for composition, layout, or reuse in Codex.
+
+![Remove BG result](assets/readme/remove-bg-result.webp)
+
+### 6. Expand: outpaint to a new aspect ratio
+
+Expand provides a visual expansion frame and common aspect-ratio presets such as 1:1, 3:4, 16:9, and 9:16. Choose the target canvas first, then let the model complete the surrounding image content.
+
+![Expand settings](assets/readme/expand.webp)
+
+![Expand result](assets/readme/expand-result.webp)
+
+## Installation
+
+Copy this prompt into Codex:
 
 ```text
-请根据 https://github.com/Xiangyu-CAS/codex-canvas.git 里的 INSTALL.md 安装 Codex-Canvas。
-安装完成后，提示用户，在当前 Codex 对话里输入： `@Codex-Canvas 打开画布`来启动
+Please install Codex-Canvas according to https://github.com/Xiangyu-CAS/codex-canvas.git and its INSTALL.md.
+After installation, tell the user to type `@Codex-Canvas open the codex canvas` in the current Codex conversation to start.
 ```
 
-完整安装说明见 [`INSTALL.md`](INSTALL.md)。
+See the full installation guide in [`INSTALL.md`](INSTALL.md).
 
-安装完成后，在当前 Codex 对话里打开画布：
+After installation, open the canvas in your current Codex conversation:
 
 ```text
-@Codex-Canvas 打开画布
+@Codex-Canvas open the codex canvas
 ```
 
-## 功能
+## Features
 
-- 在 Codex 的 in-app browser 中打开本地无限画布。
-- 自动收集 Codex/ImageGen 生成的图片到当前项目画布。
-- 支持上传、导入、排列、选择、拖动、删除和下载画布图片。
-- 支持在选中图片上画笔标注和临时文字标注。
-- 支持 Quick Edit，并把标注颜色、文字标签等信息传给模型作为编辑参考。
-- 支持图片去背景。
-- 支持 Expand/outpaint，并提供可调整的扩图预览框。
-- 支持 Edit Text；本地 OCR 可用时优先使用本地识别，不可用时回退到 Codex 视觉识别。
-- 支持 Edit Elements，把图片拆成前景物体/文字图层和背景图层。
-- 支持后台补全 Edit Elements 背景，并原位替换背景层。
-- 支持查看 prompt 历史和生成版本分组。
-- 不同 Codex 对话可以使用不同画布，避免上下文混在一起。
-- 支持复制选中图片的 `@file` 引用，粘贴到 Codex 聊天框中继续使用。
+- Opens a local infinite canvas in Codex's in-app browser.
+- Automatically collects Codex/ImageGen outputs into the current project canvas.
+- Supports uploading, importing, arranging, selecting, dragging, deleting, and downloading canvas images.
+- Supports brush annotations and temporary text labels on selected images.
+- Supports Quick Edit, passing annotation colors and text labels to the model as editing references.
+- Supports background removal.
+- Supports Expand/outpaint with an adjustable expansion preview frame.
+- Supports Edit Text; local OCR is used first when available, with Codex vision fallback when needed.
+- Supports Edit Elements, separating images into foreground object/text layers and a background layer.
+- Supports background completion for Edit Elements and replaces the background layer in place.
+- Supports downloading Edit Elements layer groups as PSD files, with each canvas layer mapped to a Photoshop layer.
+- Supports prompt history and generated-version groups.
+- Keeps separate canvases for different Codex conversations to avoid mixing contexts.
+- Supports copying a selected image as an `@file` reference and pasting it back into Codex chat.
 
-## 使用说明
+## Usage Notes
 
-Codex-Canvas 会把画布数据保存在当前项目的 `canvas/` 目录下。生成资产、任务日志和中间文件都会留在本地项目中。
+Codex-Canvas stores canvas data in the current project's `canvas/` directory. Generated assets, job logs, and intermediate files stay local to the project.
 
-`Send to chat` 目前还是通过 Codex app-server 提交的原型路径。它可以在协议层完成，但不保证一定出现在当前可见的 Codex 桌面端聊天 UI 中。更可靠的方式是使用 `Copy @file`，然后把引用粘贴到当前 Codex 聊天框。
+`Send to chat` is currently a prototype path through the Codex app-server. It can submit at the protocol layer, but it may not always appear in the currently visible Codex desktop chat UI. The more reliable workflow is to use `Copy @file`, then paste that reference into the current Codex chat box.
 
-## 开发
+## Development
 
-常用本地命令：
+Common local commands:
 
 ```bash
 npm install
@@ -53,10 +110,11 @@ npm test
 node ./bin/codex-canvas.mjs open --project .
 ```
 
-相关文档：
+Related docs:
 
-- [`INSTALL.md`](INSTALL.md)：安装说明和可选本地依赖。
-- [`docs/CANVAS_TO_CHAT.md`](docs/CANVAS_TO_CHAT.md)：当前 canvas-to-chat 的验证结果和限制。
+- [`INSTALL.md`](INSTALL.md): installation guide and optional local dependencies.
+- [`docs/CANVAS_TO_CHAT.md`](docs/CANVAS_TO_CHAT.md): current canvas-to-chat validation results and limitations.
 
-## 致谢
-感谢 [Cowart](https://github.com/zhongerxin/Cowart) 提供的画布思路
+## Credits
+
+Thanks to [Cowart](https://github.com/zhongerxin/Cowart) for the canvas concept.
