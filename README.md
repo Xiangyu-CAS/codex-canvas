@@ -6,7 +6,9 @@ Codex-Canvas is an infinite canvas plugin for Codex. It requires no API setup an
 
 It brings a Lovart-like workflow to Codex: chat on one side, canvas on the other, with powerful image editing tools designed around the same creative loop.
 
-![Open Codex Canvas](assets/readme/open-canvas.webp)
+<p align="center">
+  <img src="assets/readme/overview.webp" alt="Open Codex Canvas" width="760">
+</p>
 
 ## Roadmap
 
@@ -20,45 +22,65 @@ It brings a Lovart-like workflow to Codex: chat on one side, canvas on the other
 
 Type `@Codex-Canvas open the codex canvas` in your current Codex conversation, and Codex-Canvas opens a local project canvas in the in-app browser. Keep chatting on the left while managing visual assets on the right. When Codex/ImageGen creates an image, Codex-Canvas saves it into the current project and places it on the active canvas, so generated results become editable canvas assets immediately.
 
-![Auto collect generated images](assets/readme/auto-collect.webp)
+<p align="center">
+  <img src="assets/readme/auto-collect.webp" alt="Auto collect generated images" width="640">
+</p>
 
 ### 2. Quick Edit: mark what you want changed
 
 Quick Edit lets you annotate the selected image directly. Brush marks, colors, and text instructions are passed to the model as editing references, making it useful for local replacements, adding objects, and preserving the main layout while refining details.
 
-![Quick Edit mask](assets/readme/quick-edit-mask.webp)
+<p align="center">
+  <img src="assets/readme/quick-edit-mask.webp" alt="Quick Edit mask" width="560">
+</p>
 
-![Quick Edit result](assets/readme/quick-edit-result.webp)
+<p align="center">
+  <img src="assets/readme/quick-edit-result.webp" alt="Quick Edit result" width="640">
+</p>
 
 ### 3. Edit Elements: separate layers and rearrange them
 
 Edit Elements separates an image into movable layers such as background, text, products, people, and price tags. You can rearrange those layers on the canvas, while Codex-Canvas can continue completing the background that was hidden behind foreground objects. Downloading any layer from an Edit Elements group exports the whole group as a PSD, with each canvas layer mapped to a Photoshop layer for further editing in tools like Photoshop or Photopea.
 
-![Edit Elements layers](assets/readme/edit-elements-layers.webp)
+<p align="center">
+  <img src="assets/readme/edit-elements-layers.webp" alt="Edit Elements layers" width="640">
+</p>
 
-![Edit Elements result](assets/readme/edit-elements-result.webp)
+<p align="center">
+  <img src="assets/readme/edit-elements-result.webp" alt="Edit Elements result" width="640">
+</p>
 
 ### 4. Edit Text: recognize and rewrite text in images
 
 Edit Text recognizes text in the image and lists it as editable fields. You can revise individual lines while asking the model to preserve the original typography, layout relationships, and visual tone.
 
-![Edit Text](assets/readme/edit-text.webp)
+<p align="center">
+  <img src="assets/readme/edit-text.webp" alt="Edit Text" width="560">
+</p>
 
-![Edit Text result](assets/readme/edit-text-result.webp)
+<p align="center">
+  <img src="assets/readme/edit-text-result.webp" alt="Edit Text result" width="640">
+</p>
 
 ### 5. Remove BG: remove backgrounds in one step
 
 For posters, portraits, product shots, and other assets, Codex-Canvas can create a transparent-background result directly on the canvas. The result stays in the same project canvas, ready for composition, layout, or reuse in Codex.
 
-![Remove BG result](assets/readme/remove-bg-result.webp)
+<p align="center">
+  <img src="assets/readme/remove-bg-result.webp" alt="Remove BG result" width="560">
+</p>
 
 ### 6. Expand: outpaint to a new aspect ratio
 
 Expand provides a visual expansion frame and common aspect-ratio presets such as 1:1, 3:4, 16:9, and 9:16. Choose the target canvas first, then let the model complete the surrounding image content.
 
-![Expand settings](assets/readme/expand.webp)
+<p align="center">
+  <img src="assets/readme/expand.webp" alt="Expand settings" width="560">
+</p>
 
-![Expand result](assets/readme/expand-result.webp)
+<p align="center">
+  <img src="assets/readme/expand-result.webp" alt="Expand result" width="640">
+</p>
 
 ## Installation
 
