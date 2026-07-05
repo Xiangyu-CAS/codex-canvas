@@ -48,11 +48,7 @@ Type `@Codex-Canvas open the codex canvas` in your current Codex conversation, a
 Quick Edit lets you annotate the selected image directly. Brush marks, colors, and text instructions are passed to the model as editing references, making it useful for local replacements, adding objects, and preserving the main layout while refining details.
 
 <p align="center">
-  <img src="assets/readme/quick-edit-mask.webp" alt="Quick Edit mask" width="560">
-</p>
-
-<p align="center">
-  <img src="assets/readme/quick-edit-result.webp" alt="Quick Edit result" width="640">
+  <img src="assets/readme/quick-edit-comparison.webp" alt="Quick Edit comparison" width="700">
 </p>
 
 ### 3. Edit Elements: separate layers and rearrange them
@@ -60,11 +56,7 @@ Quick Edit lets you annotate the selected image directly. Brush marks, colors, a
 Edit Elements separates an image into movable layers such as background, text, products, people, and price tags. You can rearrange those layers on the canvas, while Codex-Canvas can continue completing the background that was hidden behind foreground objects. Downloading any layer from an Edit Elements group exports the whole group as a PSD, with each canvas layer mapped to a Photoshop layer for further editing in tools like Photoshop or Photopea.
 
 <p align="center">
-  <img src="assets/readme/edit-elements-layers.webp" alt="Edit Elements layers" width="640">
-</p>
-
-<p align="center">
-  <img src="assets/readme/edit-elements-result.webp" alt="Edit Elements result" width="640">
+  <img src="assets/readme/edit-elements-comparison.webp" alt="Edit Elements comparison" width="700">
 </p>
 
 ### 4. Edit Text: recognize and rewrite text in images
@@ -72,11 +64,7 @@ Edit Elements separates an image into movable layers such as background, text, p
 Edit Text recognizes text in the image and lists it as editable fields. You can revise individual lines while asking the model to preserve the original typography, layout relationships, and visual tone.
 
 <p align="center">
-  <img src="assets/readme/edit-text.webp" alt="Edit Text" width="560">
-</p>
-
-<p align="center">
-  <img src="assets/readme/edit-text-result.webp" alt="Edit Text result" width="640">
+  <img src="assets/readme/edit-text-comparison.webp" alt="Edit Text comparison" width="700">
 </p>
 
 ### 5. Remove BG: remove backgrounds in one step
@@ -92,11 +80,7 @@ For posters, portraits, product shots, and other assets, Codex-Canvas can create
 Expand provides a visual expansion frame and common aspect-ratio presets such as 1:1, 3:4, 16:9, and 9:16. Choose the target canvas first, then let the model complete the surrounding image content.
 
 <p align="center">
-  <img src="assets/readme/expand.webp" alt="Expand settings" width="560">
-</p>
-
-<p align="center">
-  <img src="assets/readme/expand-result.webp" alt="Expand result" width="640">
+  <img src="assets/readme/expand-comparison.webp" alt="Expand comparison" width="700">
 </p>
 
 ## Features
