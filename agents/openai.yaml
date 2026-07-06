@@ -1,0 +1,9 @@
+interface:
+  display_name: "Codex Canvas"
+  short_description: "Open a local canvas for Codex image workflows."
+  icon_small: "./assets/icon.png"
+  icon_large: "./assets/icon.png"
+  brand_color: "#14161B"
+  default_prompt: "Use $codex-canvas to open the project canvas and collect generated images."
+policy:
+  allow_implicit_invocation: true
