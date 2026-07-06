@@ -841,8 +841,7 @@ export async function updateProjectMeta(projectDir, patch, options = {}) {
 }
 
 export async function reorderLayerGroupLayer(projectDir, groupId, objectId, direction, options = {}) {
-  const step = direction === "up" ? 1 : direction === "down" ? -1 : 0;
-  if (!groupId || !objectId || step === 0) {
+  if (!groupId || !objectId || !["up", "down"].includes(direction)) {
     const error = new Error("Layer reorder requires a layer group id, object id, and direction.");
     error.statusCode = 400;
     throw error;
@@ -860,8 +859,8 @@ export async function reorderLayerGroupLayer(projectDir, groupId, objectId, dire
       throw error;
     }
 
-    const nextIndex = currentIndex + step;
-    if (nextIndex < 0 || nextIndex >= groupObjects.length) {
+    const targetIndex = layerGroupReorderTargetIndex(groupObjects, currentIndex, direction);
+    if (targetIndex < 0) {
       return {
         state,
         value: {
@@ -872,7 +871,8 @@ export async function reorderLayerGroupLayer(projectDir, groupId, objectId, dire
     }
 
     const reordered = [...groupObjects];
-    [reordered[currentIndex], reordered[nextIndex]] = [reordered[nextIndex], reordered[currentIndex]];
+    const [selected] = reordered.splice(currentIndex, 1);
+    reordered.splice(targetIndex, 0, selected);
     const reindexed = reordered.map((object, index) => ({
       ...object,
       layerGroupIndex: index
@@ -899,6 +899,45 @@ export async function reorderLayerGroupLayer(projectDir, groupId, objectId, dire
       }
     };
   });
+}
+
+function layerGroupReorderTargetIndex(groupObjects, currentIndex, direction) {
+  const selected = groupObjects[currentIndex];
+  if (!selected) return -1;
+  if (direction === "up") {
+    for (let index = currentIndex + 1; index < groupObjects.length; index += 1) {
+      if (objectsOverlap(selected, groupObjects[index])) return index;
+    }
+    return -1;
+  }
+
+  for (let index = currentIndex - 1; index >= 0; index -= 1) {
+    if (objectsOverlap(selected, groupObjects[index])) return index;
+  }
+  return -1;
+}
+
+function objectsOverlap(left, right) {
+  const leftBounds = objectBounds(left);
+  const rightBounds = objectBounds(right);
+  if (!leftBounds || !rightBounds) return false;
+  return leftBounds.left < rightBounds.right
+    && leftBounds.right > rightBounds.left
+    && leftBounds.top < rightBounds.bottom
+    && leftBounds.bottom > rightBounds.top;
+}
+
+function objectBounds(object) {
+  if (!object || !Number.isFinite(object.x) || !Number.isFinite(object.y)) return null;
+  const width = Number.isFinite(object.width) ? object.width : 0;
+  const height = Number.isFinite(object.height) ? object.height : 0;
+  if (width <= 0 || height <= 0) return null;
+  return {
+    left: object.x,
+    top: object.y,
+    right: object.x + width,
+    bottom: object.y + height
+  };
 }
 
 export async function updateObject(projectDir, id, patch, options = {}) {

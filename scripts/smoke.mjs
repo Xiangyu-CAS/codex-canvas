@@ -29,6 +29,7 @@ async function main() {
     ["delete undo restore", testDeleteUndoRestore],
     ["object patch sanitization", testObjectPatchSanitization],
     ["object input sanitization", testObjectInputSanitization],
+    ["layer group overlap reorder", testLayerGroupOverlapReorder],
     ["stale background fill cleanup", testStaleBackgroundFillCleanup],
     ["path image dedupe", testPathImageDedupe],
     ["connected chroma key", testConnectedChromaKey],
@@ -225,6 +226,51 @@ async function testObjectInputSanitization() {
   assertEqual(remoteImage.sourcePath, null, "readState should not keep source paths for remote-only images");
   assertEqual(remoteImage.src, "https://example.invalid/remote.png", "readState should preserve remote image URLs");
   assertEqual(corruptState.selection, "legacy-text", "readState should preserve selections that still point at sanitized objects");
+}
+
+async function testLayerGroupOverlapReorder() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-layer-overlap-"));
+  const groupId = "layer_group_overlap";
+  const bottom = await addObject(projectDir, { type: "text", text: "bottom", x: 0, y: 0, width: 100, height: 100 });
+  const unrelated = await addObject(projectDir, { type: "text", text: "unrelated", x: 240, y: 0, width: 80, height: 80 });
+  const selected = await addObject(projectDir, { type: "text", text: "selected", x: 20, y: 20, width: 100, height: 100 });
+  const top = await addObject(projectDir, { type: "text", text: "top", x: 30, y: 30, width: 100, height: 100 });
+  for (const [index, object] of [bottom, unrelated, selected, top].entries()) {
+    await updateObject(projectDir, object.id, {
+      layerGroupId: groupId,
+      layerGroupName: "Overlap Group",
+      layerGroupIndex: index,
+      layerGroupLocked: false
+    });
+  }
+
+  await reorderLayerGroupLayer(projectDir, groupId, selected.id, "down");
+  const movedDown = (await readState(projectDir)).objects.filter((object) => object.layerGroupId === groupId);
+  assertEqual(
+    movedDown.map((object) => object.id).join(","),
+    [selected.id, bottom.id, unrelated.id, top.id].join(","),
+    "Layer down should move below the nearest overlapping lower layer and skip unrelated non-overlapping layers"
+  );
+
+  for (const [index, object] of [bottom, unrelated, selected, top].entries()) {
+    await updateObject(projectDir, object.id, { layerGroupIndex: index });
+  }
+  await reorderLayerGroupLayer(projectDir, groupId, selected.id, "up");
+  const movedUp = (await readState(projectDir)).objects.filter((object) => object.layerGroupId === groupId);
+  assertEqual(
+    movedUp.map((object) => object.id).join(","),
+    [bottom.id, unrelated.id, top.id, selected.id].join(","),
+    "Layer up should move above the nearest overlapping upper layer and leave unrelated layer order intact"
+  );
+
+  const result = await reorderLayerGroupLayer(projectDir, groupId, unrelated.id, "up");
+  assertEqual(result.changed, false, "Layer reorder should no-op when no overlapping layer exists in the requested direction");
+  const unchanged = (await readState(projectDir)).objects.filter((object) => object.layerGroupId === groupId);
+  assertEqual(
+    unchanged.map((object) => object.id).join(","),
+    [bottom.id, unrelated.id, top.id, selected.id].join(","),
+    "Layer reorder no-op should preserve layer order"
+  );
 }
 
 async function testStaleBackgroundFillCleanup() {
@@ -2092,7 +2138,8 @@ async function testChatTurnActionContract() {
       objectId: image.body.id
     });
     assertEqual(sent.status, 200, "chat turn with stable action should succeed");
-    assertEqual(sent.body.status, "completed", "chat turn should complete through fake app-server");
+    assertEqual(sent.body.status, "submitted", "visual chat turn should return after submission instead of blocking on completion");
+    assertEqual(sent.body.completionPending, true, "visual chat turn should keep completion monitoring in the background");
   } finally {
     process.env.CODEX_CANVAS_CODEX_CLI = previousCli;
     await new Promise((resolve) => server.close(resolve));
@@ -2185,7 +2232,8 @@ async function testChatWebSocketFallback() {
       projectDir: tmp,
       threadId: "thread-test",
       imagePath,
-      prompt: "hello"
+      prompt: "hello",
+      waitForCompletion: true
     });
     assertEqual(result.status, "completed", "fallback WebSocket chat turn should complete");
   } finally {
@@ -2386,6 +2434,7 @@ async function testAlphaRecutEditOutputs() {
       "generated = Image.new('RGBA', (12, 10), (255, 0, 255, 255))",
       "draw = ImageDraw.Draw(generated)",
       "draw.rectangle((2, 2, 9, 7), fill=(20, 180, 80, 255))",
+      "generated.putpixel((1, 2), (220, 45, 220, 255))",
       "generated.save(root / 'generated-chroma.png')"
     ].join("\n"));
     await runPython([makeImages, tmp]);
@@ -2425,6 +2474,17 @@ async function testAlphaRecutEditOutputs() {
     }, Date.now() - 1000, generatedPath);
     assertEqual(path.resolve(normalOutput), path.resolve(generatedPath), "Quick Edit should not recut normal opaque image outputs");
 
+    const removeBgOutput = await prepareImageForCollectionForTest({
+      action: "remove-bg",
+      imagePath: path.join(tmp, "opaque-source.png"),
+      sourceImagePath: path.join(tmp, "opaque-source.png"),
+      outputDir: path.join(tmp, "remove-bg-output"),
+      logPath: path.join(tmp, "remove-bg.log")
+    }, Date.now() - 1000, generatedPath);
+    if (path.resolve(removeBgOutput) === path.resolve(generatedPath)) {
+      throw new Error("Remove BG should recut generated chroma PNG outputs even when they are already RGBA.");
+    }
+
     const inspect = path.join(tmp, "inspect-alpha.py");
     await fs.writeFile(inspect, [
       "from pathlib import Path",
@@ -2433,6 +2493,7 @@ async function testAlphaRecutEditOutputs() {
       "root = Path(sys.argv[1])",
       "quick = Image.open(sys.argv[2]).convert('RGBA')",
       "text = Image.open(sys.argv[3]).convert('RGBA')",
+      "remove_bg = Image.open(sys.argv[4]).convert('RGBA')",
       "payload = {",
       "  'quickBackground': quick.getpixel((0, 0)),",
       "  'quickSourceTransparentNowFilled': quick.getpixel((8, 7)),",
@@ -2440,10 +2501,12 @@ async function testAlphaRecutEditOutputs() {
       "  'textBackground': text.getpixel((0, 0)),",
       "  'textSourceTransparentNowFilled': text.getpixel((8, 7)),",
       "  'textInterior': text.getpixel((5, 4)),",
+      "  'removeBgBackground': remove_bg.getpixel((0, 0)),",
+      "  'removeBgHalo': remove_bg.getpixel((1, 2)),",
       "}",
       "(root / 'inspect.json').write_text(json.dumps(payload), encoding='utf-8')"
     ].join("\n"));
-    await runPython([inspect, tmp, quickOutput, editTextOutput]);
+    await runPython([inspect, tmp, quickOutput, editTextOutput, removeBgOutput]);
     const result = JSON.parse(await fs.readFile(path.join(tmp, "inspect.json"), "utf8"));
     assertEqual(result.quickBackground[3], 0, "Quick Edit should remove generated chroma background");
     assertEqual(result.quickSourceTransparentNowFilled[3], 255, "Quick Edit should allow the edited silhouette to grow beyond source alpha");
@@ -2451,6 +2514,10 @@ async function testAlphaRecutEditOutputs() {
     assertEqual(result.textBackground[3], 0, "Edit Text should remove generated chroma background");
     assertEqual(result.textSourceTransparentNowFilled[3], 255, "Edit Text should allow the edited silhouette to grow beyond source alpha");
     assertEqual(result.textInterior.slice(0, 3).join(","), "20,180,80", "Edit Text should keep generated RGB inside the recut alpha");
+    assertEqual(result.removeBgBackground[3], 0, "Remove BG should remove generated chroma background");
+    if (result.removeBgHalo[0] > 120 || result.removeBgHalo[2] > 120) {
+      throw new Error("Remove BG should despill obvious magenta halo pixels.");
+    }
   } finally {
     if (previous === undefined) delete process.env.CODEX_CANVAS_TEST_HELPERS;
     else process.env.CODEX_CANVAS_TEST_HELPERS = previous;

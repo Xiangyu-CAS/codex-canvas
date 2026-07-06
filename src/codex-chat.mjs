@@ -5,8 +5,10 @@ import { resolveCodexExecutable, spawnCodexProcess } from "./codex-runner.mjs";
 
 const appServerStartupTimeoutMs = 5000;
 const chatTurnTimeoutMs = 120000;
+const chatBackgroundCompletionTimeoutMs = 30 * 60_000;
+const maxBufferedNotifications = 50;
 
-export async function sendImageToBoundChat({ projectDir, threadId, imagePath, prompt }) {
+export async function sendImageToBoundChat({ projectDir, threadId, imagePath, prompt, waitForCompletion = false }) {
   if (!threadId) {
     const error = new Error("Codex-Canvas is not bound to a Codex thread.");
     error.statusCode = 409;
@@ -20,6 +22,8 @@ export async function sendImageToBoundChat({ projectDir, threadId, imagePath, pr
   return sendInputsToBoundChat({
     projectDir,
     threadId,
+    waitForCompletion,
+    completionTimeoutMs: waitForCompletion ? chatTurnTimeoutMs : chatBackgroundCompletionTimeoutMs,
     input: [
       {
         type: "text",
@@ -70,9 +74,10 @@ export async function sendMentionToBoundChat({ projectDir, threadId, filePath, p
   });
 }
 
-async function sendInputsToBoundChat({ projectDir, threadId, input }) {
+async function sendInputsToBoundChat({ projectDir, threadId, input, waitForCompletion = true, completionTimeoutMs = chatTurnTimeoutMs }) {
   const server = await startAppServer();
   const client = new JsonRpcWebSocketClient(`ws://127.0.0.1:${server.port}`);
+  let cleanupInFinally = true;
   try {
     await client.open();
     await client.request("initialize", {
@@ -89,11 +94,25 @@ async function sendInputsToBoundChat({ projectDir, threadId, input }) {
       input
     });
     const turnId = turnResponse?.turn?.id || null;
-    const completion = await client.waitForNotification((message) => {
+    const isTargetCompletion = (message) => {
       if (message.method !== "turn/completed" || message.params?.threadId !== threadId) return false;
       if (!turnId) return true;
       return message.params?.turn?.id === turnId;
-    }, chatTurnTimeoutMs);
+    };
+
+    if (!waitForCompletion) {
+      cleanupInFinally = false;
+      monitorChatTurnCompletion({ client, server, predicate: isTargetCompletion, timeoutMs: completionTimeoutMs });
+      return {
+        threadId,
+        turnId,
+        status: "submitted",
+        durationMs: null,
+        completionPending: true
+      };
+    }
+
+    const completion = await client.waitForNotification(isTargetCompletion, completionTimeoutMs);
 
     return {
       threadId,
@@ -102,9 +121,20 @@ async function sendInputsToBoundChat({ projectDir, threadId, input }) {
       durationMs: completion.params?.turn?.durationMs || null
     };
   } finally {
-    client.close();
-    await server.stop();
+    if (cleanupInFinally) {
+      client.close();
+      await server.stop();
+    }
   }
+}
+
+function monitorChatTurnCompletion({ client, server, predicate, timeoutMs }) {
+  client.waitForNotification(predicate, timeoutMs)
+    .catch(() => {})
+    .finally(() => {
+      client.close();
+      server.stop().catch(() => {});
+    });
 }
 
 async function startAppServer() {
@@ -115,8 +145,9 @@ async function startAppServer() {
     windowsHide: true
   });
   const output = [];
+  let collectStartupOutput = true;
   const collect = (chunk) => {
-    output.push(chunk.toString());
+    if (collectStartupOutput) output.push(chunk.toString());
   };
   child.stdout.on("data", collect);
   child.stderr.on("data", collect);
@@ -129,6 +160,8 @@ async function startAppServer() {
     error.message = detail ? `${error.message}: ${detail}` : error.message;
     throw error;
   }
+  collectStartupOutput = false;
+  output.length = 0;
 
   return {
     port,
@@ -272,12 +305,19 @@ class JsonRpcWebSocketClient {
     }
 
     if (!message.method) return;
-    this.notifications.push(message);
+    let matchedWaiter = false;
     for (const waiter of [...this.notificationWaiters]) {
       if (!waiter.predicate(message)) continue;
       clearTimeout(waiter.timeout);
       this.notificationWaiters = this.notificationWaiters.filter((item) => item !== waiter);
       waiter.resolve(message);
+      matchedWaiter = true;
+    }
+    if (!matchedWaiter) {
+      this.notifications.push(message);
+      if (this.notifications.length > maxBufferedNotifications) {
+        this.notifications.splice(0, this.notifications.length - maxBufferedNotifications);
+      }
     }
   }
 

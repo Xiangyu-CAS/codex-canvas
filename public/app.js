@@ -4278,8 +4278,32 @@ function updateLayerOrderButtons() {
   const index = members.findIndex((member) => member.id === selectedId);
   const downButton = toolbar.querySelector('[data-action="layer-down"]');
   const upButton = toolbar.querySelector('[data-action="layer-up"]');
-  if (downButton) downButton.disabled = index <= 0;
-  if (upButton) upButton.disabled = index < 0 || index >= members.length - 1;
+  if (downButton) downButton.disabled = layerGroupReorderTargetIndex(members, index, "down") < 0;
+  if (upButton) upButton.disabled = layerGroupReorderTargetIndex(members, index, "up") < 0;
+}
+
+function layerGroupReorderTargetIndex(members, currentIndex, direction) {
+  const selected = members[currentIndex];
+  if (!selected) return -1;
+  if (direction === "up") {
+    for (let index = currentIndex + 1; index < members.length; index += 1) {
+      if (objectsOverlap(selected, members[index])) return index;
+    }
+    return -1;
+  }
+  for (let index = currentIndex - 1; index >= 0; index -= 1) {
+    if (objectsOverlap(selected, members[index])) return index;
+  }
+  return -1;
+}
+
+function objectsOverlap(left, right) {
+  const leftBounds = boundsForObjects([left]);
+  const rightBounds = boundsForObjects([right]);
+  return leftBounds.left < rightBounds.right
+    && leftBounds.right > rightBounds.left
+    && leftBounds.top < rightBounds.bottom
+    && leftBounds.bottom > rightBounds.top;
 }
 
 function worldToScreen(x, y) {
@@ -4457,8 +4481,7 @@ async function moveSelectedLayerInGroup(direction) {
   if (!groupId || !selectedId) return;
   const members = layerGroupMembers(groupId);
   const currentIndex = members.findIndex((member) => member.id === selectedId);
-  const nextIndex = currentIndex + (direction === "up" ? 1 : -1);
-  if (currentIndex < 0 || nextIndex < 0 || nextIndex >= members.length) return;
+  if (layerGroupReorderTargetIndex(members, currentIndex, direction) < 0) return;
 
   try {
     const response = await fetch(apiPath(`/api/layer-groups/${encodeURIComponent(groupId)}/reorder`), {
