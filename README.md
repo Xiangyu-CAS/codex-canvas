@@ -1,6 +1,6 @@
 # Codex-Canvas
 
-[中文](README.md) | [English](README.en.md)
+[中文](README.md) | [English](README.en.md) | [日本語](README.ja.md)
 
 Codex-Canvas 是一个面向 Codex 的无限画布 Plugin，无需配置 API，调用 Codex 内置 GPT-image-2 实现画布编辑功能。它可以在 Codex 里打开画布，把生成的图片收录到当前项目中，并让你继续整理、标注、编辑、比较这些视觉资产。
 

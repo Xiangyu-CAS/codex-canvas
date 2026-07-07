@@ -1,6 +1,6 @@
 # Codex-Canvas
 
-[中文](README.md) | [English](README.en.md)
+[中文](README.md) | [English](README.en.md) | [日本語](README.ja.md)
 
 Codex-Canvas is an infinite canvas plugin for Codex. It requires no API setup and uses Codex's built-in GPT-image-2 workflow to edit images on a local canvas. It opens directly inside Codex, collects generated images into the current project, and lets you organize, annotate, edit, compare, and reuse visual assets.
 
