@@ -2560,7 +2560,7 @@ async function testEditElementsScripts() {
     "draw.rectangle((26, 6, 42, 24), fill=(0, 92, 255, 255))",
     "source.putpixel((0, 0), (255, 255, 255, 0))",
     "source.save(root / 'source.png')",
-    "seg = Image.new('RGB', (48, 32), (0, 0, 0))",
+    "seg = Image.new('RGB', (48, 32), (255, 0, 255))",
     "draw = ImageDraw.Draw(seg)",
     "draw.rectangle((6, 6, 12, 20), fill=(255, 0, 102))",
     "draw.rectangle((13, 6, 18, 20), fill=(250, 0, 110))",
@@ -2579,9 +2579,13 @@ async function testEditElementsScripts() {
     "--max-layers", "8",
     "--palette-size", "8",
     "--min-area-px", "20",
+    "--mask-clean", "1",
     "--pad", "0",
     "--edge-feather", "0",
-    "--mask-grow-color-distance", "8",
+    "--mask-grow-color-distance", "36",
+    "--merge-contained",
+    "--merge-object-parts",
+    "--fill-object-holes",
     "--write-reconstruction",
     "--force"
   ]);
@@ -2599,6 +2603,8 @@ async function testEditElementsScripts() {
   assertEqual(manifest.layers.length, 3, "split_elements should export two foreground layers plus residual background");
   assertEqual(manifest.exportedLayers, 3, "split_elements exported layer count should match manifest layers");
   assertEqual(manifest.maskGrowPixels, 2, "split_elements should record the foreground mask safety band");
+  assertEqual(manifest.maskCleanPixels, 1, "split_elements should record the segmentation crack cleanup radius");
+  assertEqual(manifest.mergeObjectParts, true, "split_elements should record object-part semantic merging");
   assertEqual(manifest.backgroundLayer, true, "split_elements should record that a residual background layer was exported");
   const backgroundLayer = manifest.layers.find((layer) => layer.kind === "background");
   if (!backgroundLayer) throw new Error("split_elements should include a residual background layer.");
@@ -2617,12 +2623,150 @@ async function testEditElementsScripts() {
   if (!manifest.reconstruction?.reconstructionPath || manifest.reconstruction.coverageRatio < 0.99) {
     throw new Error("split_elements reconstruction output should cover the source image.");
   }
+  assertEqual(manifest.backgroundMode, "chroma-key-magenta", "split_elements should treat magenta as the Edit Elements background key");
   await runPython([
     path.join(process.cwd(), "scripts", "verify_elements_layers.py"),
     "--manifest", path.join(tmp, "layers", "elements-manifest.json"),
     "--max-diff", "0",
     "--min-coverage", "1"
   ]);
+
+  const makeChromaImages = path.join(tmp, "make-chroma-images.py");
+  await fs.writeFile(makeChromaImages, [
+    "from pathlib import Path",
+    "from PIL import Image, ImageDraw",
+    "import sys",
+    "root = Path(sys.argv[1])",
+    "source = Image.new('RGBA', (96, 64), (255, 255, 255, 255))",
+    "draw = ImageDraw.Draw(source)",
+    "draw.rectangle((4, 4, 20, 24), fill=(24, 24, 24, 255))",
+    "draw.rectangle((4, 40, 18, 56), fill=(20, 210, 90, 255))",
+    "draw.rectangle((72, 40, 90, 56), fill=(20, 210, 90, 255))",
+    "source.save(root / 'chroma-source.png')",
+    "seg = Image.new('RGB', (96, 64), (255, 0, 255))",
+    "draw = ImageDraw.Draw(seg)",
+    "draw.rectangle((6, 6, 18, 22), fill=(24, 24, 24))",
+    "draw.rectangle((6, 42, 16, 54), fill=(102, 255, 0))",
+    "draw.rectangle((74, 42, 88, 54), fill=(102, 255, 0))",
+    "seg.save(root / 'chroma-seg.png')"
+  ].join("\n"));
+  await runPython([makeChromaImages, tmp]);
+  await runPython([
+    path.join(process.cwd(), "scripts", "split_elements.py"),
+    "--source", path.join(tmp, "chroma-source.png"),
+    "--segmentation", path.join(tmp, "chroma-seg.png"),
+    "--out-dir", path.join(tmp, "chroma-layers"),
+    "--max-layers", "8",
+    "--palette-size", "8",
+    "--min-area-px", "20",
+    "--mask-clean", "1",
+    "--pad", "0",
+    "--edge-feather", "0",
+    "--mask-grow-color-distance", "36",
+    "--merge-contained",
+    "--merge-object-parts",
+    "--fill-object-holes",
+    "--write-reconstruction",
+    "--force"
+  ]);
+  const chromaManifest = JSON.parse(await fs.readFile(path.join(tmp, "chroma-layers", "elements-manifest.json"), "utf8"));
+  assertEqual(chromaManifest.backgroundMode, "chroma-key-magenta", "split_elements should detect the chroma-key background on generated masks");
+  const chromaObjects = chromaManifest.layers.filter((layer) => layer.kind !== "background");
+  assertEqual(chromaObjects.length, 3, "split_elements should preserve a dark foreground region and split far same-color objects");
+  if (!chromaObjects.some((layer) => layer.segmentationColor === "#181818")) {
+    throw new Error("split_elements should not drop dark foreground colors when the mask uses magenta background.");
+  }
+
+  const makeObjectPartImages = path.join(tmp, "make-object-part-images.py");
+  await fs.writeFile(makeObjectPartImages, [
+    "from pathlib import Path",
+    "from PIL import Image, ImageDraw",
+    "import sys",
+    "root = Path(sys.argv[1])",
+    "source = Image.new('RGBA', (120, 80), (250, 250, 250, 255))",
+    "draw = ImageDraw.Draw(source)",
+    "draw.rounded_rectangle((16, 22, 86, 52), radius=8, fill=(20, 110, 220, 255))",
+    "draw.rectangle((14, 50, 92, 62), fill=(245, 245, 245, 255))",
+    "draw.rectangle((34, 30, 70, 36), fill=(25, 25, 25, 255))",
+    "draw.ellipse((94, 20, 114, 42), fill=(255, 110, 0, 255))",
+    "source.save(root / 'object-parts-source.png')",
+    "seg = Image.new('RGB', (120, 80), (255, 0, 255))",
+    "draw = ImageDraw.Draw(seg)",
+    "draw.rounded_rectangle((16, 22, 86, 52), radius=8, fill=(0, 102, 255))",
+    "draw.rectangle((14, 50, 92, 62), fill=(255, 255, 255))",
+    "draw.rectangle((34, 30, 70, 36), fill=(24, 24, 24))",
+    "draw.ellipse((94, 20, 114, 42), fill=(255, 102, 0))",
+    "seg.save(root / 'object-parts-seg.png')"
+  ].join("\n"));
+  await runPython([makeObjectPartImages, tmp]);
+  await runPython([
+    path.join(process.cwd(), "scripts", "split_elements.py"),
+    "--source", path.join(tmp, "object-parts-source.png"),
+    "--segmentation", path.join(tmp, "object-parts-seg.png"),
+    "--out-dir", path.join(tmp, "object-parts-layers"),
+    "--max-layers", "8",
+    "--palette-size", "8",
+    "--min-area-px", "20",
+    "--mask-clean", "1",
+    "--pad", "0",
+    "--edge-feather", "0",
+    "--mask-grow-color-distance", "36",
+    "--merge-contained",
+    "--merge-object-parts",
+    "--fill-object-holes",
+    "--write-reconstruction",
+    "--force"
+  ]);
+  const objectPartManifest = JSON.parse(await fs.readFile(path.join(tmp, "object-parts-layers", "elements-manifest.json"), "utf8"));
+  const objectPartObjects = objectPartManifest.layers.filter((layer) => layer.kind !== "background");
+  assertEqual(objectPartObjects.length, 2, "split_elements should merge attached multi-color product parts into one object while preserving separate nearby objects");
+
+  const makeDecorImages = path.join(tmp, "make-decor-images.py");
+  await fs.writeFile(makeDecorImages, [
+    "from pathlib import Path",
+    "from PIL import Image, ImageDraw",
+    "import sys",
+    "root = Path(sys.argv[1])",
+    "source = Image.new('RGBA', (160, 100), (245, 245, 245, 255))",
+    "draw = ImageDraw.Draw(source)",
+    "draw.rounded_rectangle((58, 18, 102, 76), radius=10, fill=(0, 160, 150, 255))",
+    "draw.ellipse((18, 48, 42, 72), fill=(255, 140, 0, 255))",
+    "for x, y, r in [(15,12,4),(31,18,5),(50,12,3),(121,17,4),(139,24,5),(132,48,4),(118,70,3),(35,84,4),(70,88,3),(105,87,4)]:",
+    "    draw.ellipse((x-r, y-r, x+r, y+r), fill=(95, 220, 230, 255))",
+    "source.save(root / 'decor-source.png')",
+    "seg = Image.new('RGB', (160, 100), (255, 0, 255))",
+    "draw = ImageDraw.Draw(seg)",
+    "draw.rounded_rectangle((58, 18, 102, 76), radius=10, fill=(0, 170, 160))",
+    "draw.ellipse((18, 48, 42, 72), fill=(255, 140, 0))",
+    "for x, y, r in [(15,12,4),(31,18,5),(50,12,3),(121,17,4),(139,24,5),(132,48,4),(118,70,3),(35,84,4),(70,88,3),(105,87,4)]:",
+    "    draw.ellipse((x-r, y-r, x+r, y+r), fill=(95, 220, 230))",
+    "seg.save(root / 'decor-seg.png')"
+  ].join("\n"));
+  await runPython([makeDecorImages, tmp]);
+  await runPython([
+    path.join(process.cwd(), "scripts", "split_elements.py"),
+    "--source", path.join(tmp, "decor-source.png"),
+    "--segmentation", path.join(tmp, "decor-seg.png"),
+    "--out-dir", path.join(tmp, "decor-layers"),
+    "--max-layers", "12",
+    "--palette-size", "8",
+    "--min-area-px", "20",
+    "--mask-clean", "1",
+    "--pad", "0",
+    "--edge-feather", "0",
+    "--mask-grow-color-distance", "36",
+    "--merge-contained",
+    "--merge-object-parts",
+    "--fill-object-holes",
+    "--write-reconstruction",
+    "--force"
+  ]);
+  const decorManifest = JSON.parse(await fs.readFile(path.join(tmp, "decor-layers", "elements-manifest.json"), "utf8"));
+  const decorObjects = decorManifest.layers.filter((layer) => layer.kind !== "background");
+  assertEqual(decorObjects.length, 3, "split_elements should merge many small same-color decoration fragments into one decor layer");
+  if (!decorObjects.some((layer) => layer.decorativeMergedColors?.length)) {
+    throw new Error("split_elements should report decorative fragment merging.");
+  }
 
   const preparedBackground = await inspectPreparedBackground(tmp);
   assertEqual(preparedBackground.size, "48x32", "prepare_completed_background should resize completed backgrounds to source size");

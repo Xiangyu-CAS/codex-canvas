@@ -9,6 +9,9 @@ from pathlib import Path
 import sys
 from typing import Any
 
+CHROMA_KEY_COLOR = (255, 0, 255)
+CHROMA_KEY_DISTANCE = 64.0
+
 
 def die(message: str, code: int = 1) -> None:
     print(f"Error: {message}", file=sys.stderr)
@@ -48,6 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--boundary-trim-margin", type=float, default=16, help="Minimum RGB-distance advantage for outside color before trimming boundary pixels.")
     parser.add_argument("--boundary-flood", type=int, default=0, help="Flood-fill likely outside-color contamination this many pixels inward from object boundaries.")
     parser.add_argument("--boundary-flood-color-distance", type=float, default=30, help="Maximum local RGB distance to nearby outside pixels for boundary flood trimming.")
+    parser.add_argument("--mask-clean", type=int, default=1, help="Close small cracks in solid segmentation regions before extraction.")
     parser.add_argument("--mask-grow", type=int, default=2, help="Grow foreground masks by this many pixels before extracting layers.")
     parser.add_argument("--mask-grow-color-distance", type=float, default=86, help="Maximum local RGB distance for accepting grown edge pixels; 0 disables color gating.")
     parser.add_argument("--color-merge-distance", type=float, default=48, help="Global RGB distance for merging generated near-colors into one mask color.")
@@ -55,6 +59,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--component-merge-gap-px", type=int, default=0, help="Override pixel gap threshold for merging nearby disconnected same-color components; 0 means auto.")
     parser.add_argument("--split-color-components", action="store_true", help="Split every disconnected component of the same mask color into separate layers.")
     parser.add_argument("--merge-contained", action="store_true", help="Opt in to semantic cleanup that merges nested regions into parent object layers.")
+    parser.add_argument("--merge-object-parts", action="store_true", help="Opt in to merging attached multi-color parts back into larger object-level layers.")
     parser.add_argument("--fill-object-holes", action="store_true", help="Opt in to filling enclosed holes in dense object masks.")
     parser.add_argument("--no-merge-contained", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--no-residual-layer", action="store_true", help="Do not export uncovered source pixels as a residual/background layer.")
@@ -90,6 +95,8 @@ def validate_args(args: argparse.Namespace) -> None:
         die("--boundary-flood must be between 0 and 32.")
     if args.boundary_flood_color_distance < 0 or args.boundary_flood_color_distance > 255:
         die("--boundary-flood-color-distance must be between 0 and 255.")
+    if args.mask_clean < 0 or args.mask_clean > 8:
+        die("--mask-clean must be between 0 and 8.")
     if args.mask_grow < 0 or args.mask_grow > 64:
         die("--mask-grow must be between 0 and 64.")
     if args.mask_grow_color_distance < 0 or args.mask_grow_color_distance > 255:
@@ -121,17 +128,33 @@ def color_distance(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
     return sum((a[index] - b[index]) ** 2 for index in range(3)) ** 0.5
 
 
-def should_ignore_color(color: tuple[int, int, int], area: int, total_area: int) -> bool:
+def is_chroma_key_color(color: tuple[int, int, int]) -> bool:
+    red, green, blue = color
+    return red >= 190 and blue >= 190 and green <= 96 and color_distance(color, CHROMA_KEY_COLOR) <= CHROMA_KEY_DISTANCE
+
+
+def has_chroma_key_background(colors, counts, total_area: int) -> bool:
+    chroma_area = 0
+    for color_array, area in zip(colors, counts):
+        color = tuple(int(value) for value in color_array)
+        if is_chroma_key_color(color):
+            chroma_area += int(area)
+    return chroma_area >= max(64, int(total_area * 0.01))
+
+
+def should_ignore_color(color: tuple[int, int, int], area: int, total_area: int, chroma_background: bool) -> bool:
     red, green, blue = color
     spread = max(color) - min(color)
     luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
     if area < max(8, int(total_area * 0.00005)):
         return True
+    if is_chroma_key_color(color):
+        return True
     if spread <= 6 and (max(color) <= 10 or min(color) >= 251):
         return True
-    if luminance < 28:
+    if not chroma_background and luminance < 28:
         return True
-    return red == 255 and green == 0 and blue == 255
+    return False
 
 
 def region_bounds(mask):
@@ -178,6 +201,47 @@ def bbox_gap(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> int:
     return max(horizontal, vertical)
 
 
+def bbox_intersection_area(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> int:
+    left = max(a[0], b[0])
+    top = max(a[1], b[1])
+    right = min(a[2], b[2])
+    bottom = min(a[3], b[3])
+    return max(0, right - left) * max(0, bottom - top)
+
+
+def bbox_expand(bbox: tuple[int, int, int, int], margin: int) -> tuple[int, int, int, int]:
+    return (bbox[0] - margin, bbox[1] - margin, bbox[2] + margin, bbox[3] + margin)
+
+
+def bbox_union(boxes: list[tuple[int, int, int, int]]) -> tuple[int, int, int, int]:
+    return (
+        min(box[0] for box in boxes),
+        min(box[1] for box in boxes),
+        max(box[2] for box in boxes),
+        max(box[3] for box in boxes),
+    )
+
+
+def axis_overlap(a_start: int, a_end: int, b_start: int, b_end: int) -> int:
+    return max(0, min(a_end, b_end) - max(a_start, b_start))
+
+
+def same_visual_row(a: tuple[int, int, int, int], b: tuple[int, int, int, int], max_gap: int) -> bool:
+    a_width = max(1, a[2] - a[0])
+    b_width = max(1, b[2] - b[0])
+    a_height = max(1, a[3] - a[1])
+    b_height = max(1, b[3] - b[1])
+    horizontal_gap = max(0, max(a[0], b[0]) - min(a[2], b[2]))
+    vertical_gap = max(0, max(a[1], b[1]) - min(a[3], b[3]))
+    vertical_overlap = axis_overlap(a[1], a[3], b[1], b[3]) / max(1, min(a_height, b_height))
+    center_y_gap = abs((a[1] + a[3]) / 2.0 - (b[1] + b[3]) / 2.0)
+    row_aligned = vertical_overlap >= 0.28 or center_y_gap <= max(8, min(a_height, b_height) * 0.8)
+    generous_row_gap = max(max_gap, min(192, max_gap * 3))
+    similar_scale = max(a_height, b_height) <= max(96, min(a_height, b_height) * 3.5)
+    not_stack = vertical_gap <= max(10, min(a_height, b_height))
+    return row_aligned and not_stack and similar_scale and horizontal_gap <= generous_row_gap and max(a_width, b_width) <= max(320, min(a_width, b_width) * 8)
+
+
 def is_thin_artifact(area: int, bbox: tuple[int, int, int, int], total_area: int) -> bool:
     width = max(1, bbox[2] - bbox[0])
     height = max(1, bbox[3] - bbox[1])
@@ -209,7 +273,7 @@ def merge_region_pair(target: dict[str, Any], source: dict[str, Any]) -> None:
     target.setdefault("components", []).extend(source.get("components", []))
 
 
-def group_similar_colors(colors, counts, total_area: int, min_area: int, merge_distance: float) -> list[dict[str, Any]]:
+def group_similar_colors(colors, counts, total_area: int, min_area: int, merge_distance: float) -> tuple[list[dict[str, Any]], str]:
     """Cluster generated near-colors before extracting masks.
 
     Imagegen often returns slight gradients or antialias-like variants even when the
@@ -217,11 +281,12 @@ def group_similar_colors(colors, counts, total_area: int, min_area: int, merge_d
     these variants should be grouped globally before connected-component analysis.
     """
 
+    chroma_background = has_chroma_key_background(colors, counts, total_area)
     color_items = []
     for color_array, area in zip(colors, counts):
         color = tuple(int(value) for value in color_array)
         area = int(area)
-        if should_ignore_color(color, area, total_area):
+        if should_ignore_color(color, area, total_area, chroma_background):
             continue
         color_items.append({
             "color": color,
@@ -257,7 +322,7 @@ def group_similar_colors(colors, counts, total_area: int, min_area: int, merge_d
             "mergedColors": [],
         })
 
-    return groups
+    return groups, "chroma-key-magenta" if chroma_background else "legacy-black"
 
 
 def merge_similar_adjacent_regions(regions: list[dict[str, Any]], total_area: int) -> list[dict[str, Any]]:
@@ -363,13 +428,16 @@ def merge_contained_regions(regions: list[dict[str, Any]], total_area: int) -> l
             parent_bbox_area = bbox_area(parent_bbox)
             if parent_bbox_area <= 0:
                 continue
+            child_contained = bbox_contains(parent_bbox, child_bbox, margin=3)
+            if not child_contained and child_bbox_area > parent_bbox_area * 0.18:
+                continue
             if parent_bbox_area > total_area * 0.52:
                 continue
             if child["area"] > parent["area"] * 0.48:
                 continue
             if child_bbox_area > parent_bbox_area * 0.72:
                 continue
-            if not (bbox_contains(parent_bbox, child_bbox, margin=3) or point_in_bbox(child_center, parent_bbox)):
+            if not (child_contained or point_in_bbox(child_center, parent_bbox)):
                 continue
             if not parent_surrounds_child(parent["mask"], child_bbox, band=12):
                 continue
@@ -394,6 +462,189 @@ def mask_overlap_ratio_inside(child_mask, parent_bbox: tuple[int, int, int, int]
         return 0.0
     inside = int(child_mask[top:bottom, left:right].sum())
     return inside / child_area
+
+
+def masks_touch_within_margin(parent_mask, child_mask, parent_bbox: tuple[int, int, int, int], child_bbox: tuple[int, int, int, int], margin: int) -> bool:
+    height, width = parent_mask.shape
+    union_bbox = bbox_union([parent_bbox, child_bbox])
+    left = max(0, union_bbox[0] - margin)
+    top = max(0, union_bbox[1] - margin)
+    right = min(width, union_bbox[2] + margin)
+    bottom = min(height, union_bbox[3] + margin)
+    if right <= left or bottom <= top:
+        return False
+    parent_crop = parent_mask[top:bottom, left:right]
+    child_crop = child_mask[top:bottom, left:right]
+    if not parent_crop.any() or not child_crop.any():
+        return False
+    return bool((grow_mask(parent_crop, margin) & child_crop).any())
+
+
+def is_connector_like_region(region: dict[str, Any]) -> bool:
+    bbox = region["bbox"]
+    width = max(1, bbox[2] - bbox[0])
+    height = max(1, bbox[3] - bbox[1])
+    shortest = min(width, height)
+    longest = max(width, height)
+    fill_ratio = int(region["area"]) / max(1, width * height)
+    return shortest <= 18 or (longest / shortest >= 4.0 and fill_ratio <= 0.34)
+
+
+def component_row_merge_candidate(component: dict[str, Any], total_area: int) -> bool:
+    bbox = tuple(component["bbox"])
+    width = max(1, bbox[2] - bbox[0])
+    height = max(1, bbox[3] - bbox[1])
+    area = int(component["area"])
+    fill_ratio = area / max(1, width * height)
+    longest = max(width, height)
+    shortest = min(width, height)
+    return (
+        area <= max(4096, int(total_area * 0.018))
+        or shortest <= 28
+        or (longest / shortest >= 4.0 and fill_ratio <= 0.40)
+    )
+
+
+def attached_part_candidate(parent: dict[str, Any], child: dict[str, Any], total_area: int) -> tuple[float, int] | None:
+    parent_bbox = tuple(parent["bbox"])
+    child_bbox = tuple(child["bbox"])
+    parent_bbox_area = max(1, bbox_area(parent_bbox))
+    child_bbox_area = max(1, bbox_area(child_bbox))
+    union_bbox = bbox_union([parent_bbox, child_bbox])
+    union_area = max(1, bbox_area(union_bbox))
+    if parent_bbox_area > total_area * 0.50 or union_area > total_area * 0.56:
+        return None
+    if child["area"] > parent["area"] * 0.55:
+        return None
+    if child_bbox_area > parent_bbox_area * 0.92:
+        return None
+
+    max_dim = max(union_bbox[2] - union_bbox[0], union_bbox[3] - union_bbox[1])
+    margin = max(10, min(48, int(round(max_dim * 0.045))))
+    touch_margin = max(3, min(16, margin // 2))
+    expanded_parent = bbox_expand(parent_bbox, margin)
+    center_inside = point_in_bbox(bbox_center(child_bbox), expanded_parent)
+    bbox_inside = bbox_contains(expanded_parent, child_bbox)
+    child_bbox_inside_ratio = bbox_intersection_area(parent_bbox, child_bbox) / child_bbox_area
+    if not bbox_inside and child_bbox_area > parent_bbox_area * 0.18 and child_bbox_inside_ratio < 0.68:
+        return None
+    child_inside_ratio = mask_overlap_ratio_inside(child["mask"], expanded_parent)
+    union_growth = union_area / parent_bbox_area
+    if bbox_inside and child_bbox_area <= parent_bbox_area * 0.08 and union_growth <= 1.22:
+        return (union_growth, bbox_gap(parent_bbox, child_bbox))
+    contained_like = (bbox_inside or child_inside_ratio >= 0.72 or (center_inside and child_bbox_inside_ratio >= 0.68)) and union_growth <= 1.75
+
+    gap = bbox_gap(parent_bbox, child_bbox)
+    attach_gap = max(6, min(28, int(round(max_dim * 0.025))))
+    if gap > attach_gap and not contained_like:
+        return None
+
+    horizontal_overlap = axis_overlap(parent_bbox[0], parent_bbox[2], child_bbox[0], child_bbox[2]) / max(1, min(parent_bbox[2] - parent_bbox[0], child_bbox[2] - child_bbox[0]))
+    vertical_overlap = axis_overlap(parent_bbox[1], parent_bbox[3], child_bbox[1], child_bbox[3]) / max(1, min(parent_bbox[3] - parent_bbox[1], child_bbox[3] - child_bbox[1]))
+    axis_aligned = horizontal_overlap >= 0.32 or vertical_overlap >= 0.32
+    connector_bridge = is_connector_like_region(parent) or is_connector_like_region(child)
+    connector_like = gap <= attach_gap and axis_aligned and connector_bridge and union_growth <= 2.35
+    if not contained_like and not connector_like:
+        return None
+
+    touches_parent = masks_touch_within_margin(parent["mask"], child["mask"], parent_bbox, child_bbox, touch_margin)
+    surrounded_by_parent = False if touches_parent else parent_surrounds_child(parent["mask"], child_bbox, band=margin)
+
+    if (touches_parent or surrounded_by_parent) and contained_like:
+        return (union_growth, gap)
+    if touches_parent and connector_like:
+        return (union_growth + 0.35, gap)
+
+    return None
+
+
+def merge_attached_object_part_regions(regions: list[dict[str, Any]], total_area: int) -> list[dict[str, Any]]:
+    """Merge multi-color pieces that form one editable object-level layer.
+
+    Segmentation generation can assign different colors to a product's attached
+    parts, such as surface panels, soles, handles, stems, bases, highlights, or
+    labels. This pass uses only spatial containment/attachment and conservative
+    compactness checks, so unrelated nearby objects can still remain separate.
+    """
+
+    if len(regions) < 2:
+        return regions
+
+    changed = True
+    while changed:
+        changed = False
+        removed: set[int] = set()
+        for child_index, child in sorted(enumerate(regions), key=lambda item: item[1]["area"]):
+            if child_index in removed:
+                continue
+            candidates = []
+            for parent_index, parent in enumerate(regions):
+                if parent_index == child_index or parent_index in removed:
+                    continue
+                if parent["area"] <= child["area"] * 1.15:
+                    continue
+                candidate = attached_part_candidate(parent, child, total_area)
+                if candidate is None:
+                    continue
+                candidates.append((*candidate, -parent["area"], parent_index))
+            if not candidates:
+                continue
+            _, _, _, parent_index = min(candidates)
+            merge_region_pair(regions[parent_index], child)
+            regions[parent_index].setdefault("objectPartMergedColors", []).append(color_key(child["color"]))
+            regions[parent_index].setdefault("objectPartMergedAreas", []).append(child["area"])
+            removed.add(child_index)
+            changed = True
+            break
+        if removed:
+            regions = [region for index, region in enumerate(regions) if index not in removed and region["bbox"]]
+
+    return regions
+
+
+def merge_sparse_same_color_decorations(regions: list[dict[str, Any]], total_area: int) -> list[dict[str, Any]]:
+    """Merge many small same-color decorative fragments into one editable decor layer."""
+
+    if len(regions) < 4:
+        return regions
+
+    grouped: dict[tuple[int, int, int], list[int]] = {}
+    for index, region in enumerate(regions):
+        grouped.setdefault(region["color"], []).append(index)
+
+    removed: set[int] = set()
+    for indexes in grouped.values():
+        active = [index for index in indexes if index not in removed]
+        if len(active) < 4:
+            continue
+        group_regions = [regions[index] for index in active]
+        group_area = sum(int(region["area"]) for region in group_regions)
+        if group_area > total_area * 0.11:
+            continue
+        if any(int(region["area"]) > total_area * 0.042 for region in group_regions):
+            continue
+
+        fill_ratios = []
+        for region in group_regions:
+            bbox = region["bbox"]
+            fill_ratios.append(int(region["area"]) / max(1, bbox_area(bbox)))
+        if sorted(fill_ratios)[len(fill_ratios) // 2] > 0.46:
+            continue
+
+        target_index = max(active, key=lambda index: regions[index]["area"])
+        target = regions[target_index]
+        target.setdefault("decorativeMergedColors", [])
+        target.setdefault("decorativeMergedAreas", [])
+        for source_index in active:
+            if source_index == target_index:
+                continue
+            source = regions[source_index]
+            merge_region_pair(target, source)
+            target["decorativeMergedColors"].append(color_key(source["color"]))
+            target["decorativeMergedAreas"].append(source["area"])
+            removed.add(source_index)
+
+    return [region for index, region in enumerate(regions) if index not in removed and region["bbox"]]
 
 
 def mask_has_pixels(mask, left: int, top: int, right: int, bottom: int) -> bool:
@@ -447,6 +698,9 @@ def merge_internal_detail_regions(regions: list[dict[str, Any]], total_area: int
             parent_bbox = parent["bbox"]
             parent_bbox_area = bbox_area(parent_bbox)
             if parent_bbox_area <= 0 or parent_bbox_area > total_area * 0.62:
+                continue
+            child_contained = bbox_contains(parent_bbox, child_bbox, margin=3)
+            if not child_contained and child_bbox_area > parent_bbox_area * 0.18:
                 continue
             if child_bbox_area > parent_bbox_area * 0.55:
                 continue
@@ -507,7 +761,152 @@ def connected_mask_components(mask, min_component_area):
     return components
 
 
-def cluster_components_by_gap(components: list[dict[str, Any]], max_gap: int) -> list[dict[str, Any]]:
+def split_weakly_connected_component(component: dict[str, Any], total_area: int) -> list[dict[str, Any]]:
+    """Split a large component when a thin bridge connects multiple object cores."""
+
+    np, _, _ = load_dependencies()
+    bbox = tuple(component["bbox"])
+    area = int(component["area"])
+    width = max(1, bbox[2] - bbox[0])
+    height = max(1, bbox[3] - bbox[1])
+    box_area = max(1, width * height)
+    fill_ratio = area / box_area
+    if area < max(8192, int(total_area * 0.006)):
+        return [component]
+    if width < 80 or height < 80:
+        return [component]
+    if fill_ratio < 0.22 or fill_ratio > 0.72:
+        return [component]
+
+    radius = max(4, min(18, int(round(min(width, height) * 0.028))))
+    left, top, right, bottom = bbox
+    crop = component["mask"][top:bottom, left:right]
+    eroded = shrink_mask(crop, radius)
+    min_core_area = max(256, int(area * 0.010))
+    cores = connected_mask_components(eroded, min_core_area)
+    if len(cores) < 2 or len(cores) > 4:
+        return [component]
+    core_area = sum(int(core["area"]) for core in cores)
+    if core_area < area * 0.10:
+        return [component]
+    if max(int(core["area"]) for core in cores) > core_area * 0.985:
+        return [component]
+
+    core_masks = [core["mask"] for core in cores]
+    assigned_crops = assign_crop_pixels_to_cores(crop, core_masks)
+    pieces = []
+    min_piece_area = max(512, int(area * 0.04))
+    for piece_crop in assigned_crops:
+        piece_area = int(piece_crop.sum())
+        if piece_area < min_piece_area:
+            continue
+        piece_mask = np.zeros(component["mask"].shape, dtype=bool)
+        piece_mask[top:bottom, left:right] = piece_crop
+        piece_bbox = region_bounds(piece_mask)
+        if not piece_bbox:
+            continue
+        pieces.append({
+            "area": piece_area,
+            "bbox": list(piece_bbox),
+            "mask": piece_mask,
+            "weakSplit": True,
+        })
+
+    if len(pieces) < 2:
+        return [component]
+    if sum(int(piece["area"]) for piece in pieces) < area * 0.96:
+        return [component]
+    return pieces
+
+
+def assign_crop_pixels_to_cores(mask, core_masks: list[Any]) -> list[Any]:
+    np, _, _ = load_dependencies()
+    try:
+        import cv2  # type: ignore
+
+        distances = []
+        for core in core_masks:
+            seed = np.ones(mask.shape, dtype="uint8")
+            seed[core] = 0
+            distances.append(cv2.distanceTransform(seed, cv2.DIST_L2, 5))
+        nearest = np.argmin(np.stack(distances, axis=0), axis=0)
+        return [mask & (nearest == index) for index in range(len(core_masks))]
+    except Exception:
+        assigned = [core.copy() for core in core_masks]
+        remaining = mask & ~np.logical_or.reduce(assigned)
+        max_steps = max(mask.shape) + 1
+        for _ in range(max_steps):
+            if not remaining.any():
+                break
+            proposals = [grow_mask(part, 1) & remaining for part in assigned]
+            proposal_count = np.zeros(mask.shape, dtype="uint8")
+            for proposal in proposals:
+                proposal_count += proposal.astype("uint8")
+            if not proposal_count.any():
+                break
+            for index, proposal in enumerate(proposals):
+                assigned[index] |= proposal & (proposal_count == 1)
+            conflicts = remaining & (proposal_count > 1)
+            if conflicts.any():
+                largest_index = max(range(len(assigned)), key=lambda index: int(assigned[index].sum()))
+                assigned[largest_index] |= conflicts
+            remaining &= proposal_count == 0
+        if remaining.any():
+            largest_index = max(range(len(assigned)), key=lambda index: int(assigned[index].sum()))
+            assigned[largest_index] |= remaining
+        return assigned
+
+
+def split_sparse_expansive_group(group_components: list[dict[str, Any]], max_gap: int, width: int, height: int, total_area: int) -> list[list[dict[str, Any]]]:
+    if len(group_components) < 4:
+        return [group_components]
+
+    boxes = [tuple(component["bbox"]) for component in group_components]
+    union_bbox = bbox_union(boxes)
+    span_width = union_bbox[2] - union_bbox[0]
+    span_height = union_bbox[3] - union_bbox[1]
+    area = sum(int(component["area"]) for component in group_components)
+    fill_ratio = area / max(1, bbox_area(union_bbox))
+    expansive = (
+        (span_width > width * 0.62 and span_height > height * 0.32)
+        or bbox_area(union_bbox) > total_area * 0.38
+    )
+    if not expansive or fill_ratio >= 0.08:
+        return [group_components]
+
+    rows: list[list[dict[str, Any]]] = []
+    for component in sorted(group_components, key=lambda item: ((item["bbox"][1] + item["bbox"][3]) / 2.0, item["bbox"][0])):
+        bbox = tuple(component["bbox"])
+        placed = False
+        for row in rows:
+            row_bbox = bbox_union([tuple(item["bbox"]) for item in row])
+            if same_visual_row(row_bbox, bbox, max_gap):
+                row.append(component)
+                placed = True
+                break
+        if not placed:
+            rows.append([component])
+
+    refined: list[list[dict[str, Any]]] = []
+    for row in rows:
+        current: list[dict[str, Any]] = []
+        previous_bbox: tuple[int, int, int, int] | None = None
+        for component in sorted(row, key=lambda item: item["bbox"][0]):
+            bbox = tuple(component["bbox"])
+            if previous_bbox and bbox_gap(previous_bbox, bbox) > max(24, max_gap * 2):
+                if current:
+                    refined.append(current)
+                current = [component]
+            else:
+                current.append(component)
+            previous_bbox = bbox if previous_bbox is None else bbox_union([previous_bbox, bbox])
+        if current:
+            refined.append(current)
+
+    return refined or [group_components]
+
+
+def cluster_components_by_gap(components: list[dict[str, Any]], max_gap: int, width: int, height: int, total_area: int) -> list[dict[str, Any]]:
     """Group nearby disconnected same-color components without merging far objects.
 
     Imagegen can accidentally reuse one flat color for multiple independent
@@ -519,6 +918,11 @@ def cluster_components_by_gap(components: list[dict[str, Any]], max_gap: int) ->
     np, _, _ = load_dependencies()
     if not components:
         return []
+    components = [
+        piece
+        for component in components
+        for piece in split_weakly_connected_component(component, total_area)
+    ]
     if len(components) == 1:
         component = components[0]
         return [{
@@ -549,7 +953,17 @@ def cluster_components_by_gap(components: list[dict[str, Any]], max_gap: int) ->
         first_bbox = tuple(first["bbox"])
         for second_index in range(first_index + 1, len(components)):
             second = components[second_index]
-            if bbox_gap(first_bbox, tuple(second["bbox"])) <= max_gap:
+            second_bbox = tuple(second["bbox"])
+            if first.get("weakSplit") or second.get("weakSplit"):
+                continue
+            if bbox_gap(first_bbox, second_bbox) <= max_gap:
+                union(first_index, second_index)
+                continue
+            if (
+                component_row_merge_candidate(first, total_area)
+                and component_row_merge_candidate(second, total_area)
+                and same_visual_row(first_bbox, second_bbox, max_gap)
+            ):
                 union(first_index, second_index)
 
     groups: dict[int, list[dict[str, Any]]] = {}
@@ -557,7 +971,11 @@ def cluster_components_by_gap(components: list[dict[str, Any]], max_gap: int) ->
         groups.setdefault(find(index), []).append(component)
 
     clustered = []
+    component_groups: list[list[dict[str, Any]]] = []
     for group_components in groups.values():
+        component_groups.extend(split_sparse_expansive_group(group_components, max_gap, width, height, total_area))
+
+    for group_components in component_groups:
         if len(group_components) == 1:
             component = group_components[0]
             clustered.append({
@@ -626,15 +1044,20 @@ def fill_object_holes(mask):
 
 
 def maybe_fill_dense_object_holes(region: dict[str, Any], total_area: int) -> None:
+    np, _, _ = load_dependencies()
     bbox = region["bbox"]
     area = int(region["area"])
     box_area = max(1, bbox_area(bbox))
     fill_ratio = area / box_area
     if fill_ratio < 0.34:
         return
-    if box_area > total_area * 0.45:
+    if box_area > total_area * 0.24:
         return
-    filled = fill_object_holes(region["mask"])
+    left, top, right, bottom = bbox
+    crop = region["mask"][top:bottom, left:right]
+    filled_crop = fill_object_holes(crop)
+    filled = region["mask"].copy()
+    filled[top:bottom, left:right] = filled_crop
     filled_area = int(filled.sum())
     added = filled_area - area
     if added <= 0:
@@ -657,6 +1080,54 @@ def grow_mask(mask, radius: int):
     alpha = Image.fromarray(mask.astype("uint8") * 255)
     grown = alpha.filter(ImageFilter.MaxFilter(radius * 2 + 1))
     return np.array(grown) > 0
+
+
+def shrink_mask(mask, radius: int):
+    np, Image, ImageFilter = load_dependencies()
+    if radius <= 0:
+        return mask
+    alpha = Image.fromarray(mask.astype("uint8") * 255)
+    shrunk = alpha.filter(ImageFilter.MinFilter(radius * 2 + 1))
+    return np.array(shrunk) > 0
+
+
+def clean_segmentation_region_mask(region: dict[str, Any], radius: int, total_area: int) -> None:
+    """Close tiny mask cracks without turning sparse text/decorative clusters into blobs."""
+
+    if radius <= 0:
+        return
+    mask = region["mask"]
+    bbox = region["bbox"]
+    area = int(region["area"])
+    width = max(1, bbox[2] - bbox[0])
+    height = max(1, bbox[3] - bbox[1])
+    shortest = min(width, height)
+    fill_ratio = area / max(1, width * height)
+    if shortest <= radius * 4 + 2:
+        return
+    if fill_ratio < 0.16:
+        return
+    if is_thin_component_cluster(region.get("components", []), total_area):
+        return
+
+    closed = shrink_mask(grow_mask(mask, radius), radius)
+    added = int((closed & ~mask).sum())
+    removed = int((mask & ~closed).sum())
+    if added <= 0 and removed <= 0:
+        return
+    if added > max(int(area * 0.10), int(total_area * 0.012)):
+        return
+    clean_area = int(closed.sum())
+    if clean_area < max(16, int(area * 0.95)):
+        return
+    new_bbox = region_bounds(closed)
+    if not new_bbox:
+        return
+    region["mask"] = closed
+    region["area"] = clean_area
+    region["bbox"] = new_bbox
+    region["maskCleanAddedPixels"] = added
+    region["maskCleanRemovedPixels"] = removed
 
 
 def nearest_color_distance(source_rgb, reference_mask, candidates, radius: int):
@@ -784,6 +1255,10 @@ def should_flood_trim_region(region: dict[str, Any], total_area: int) -> bool:
 
     if box_area < max(2048, int(total_area * 0.004)):
         return False
+    if box_area > total_area * 0.30:
+        return False
+    if int(region["area"]) > total_area * 0.18:
+        return False
     if fill_ratio < 0.24:
         return False
     if fill_ratio < 0.78 and aspect >= 2.35:
@@ -892,11 +1367,22 @@ def grow_foreground_region_masks(regions: list[dict[str, Any]], radius: int, sou
     proposals = []
     rejected = []
     for mask in original_masks:
-        candidates = grow_mask(mask, radius) & ~original_union
-        boundary = mask & grow_mask(~mask, 1)
-        accepted = color_continuity_mask(source_rgb, boundary, candidates, color_distance_threshold, radius)
+        bbox = region_bounds(mask)
+        if not bbox:
+            proposals.append(np.zeros(mask.shape, dtype=bool))
+            rejected.append(0)
+            continue
+        left, top, right, bottom = expand_bbox(tuple(bbox), source_rgba.size[0], source_rgba.size[1], radius + 2)
+        mask_crop = mask[top:bottom, left:right]
+        union_crop = original_union[top:bottom, left:right]
+        source_crop = source_rgb[top:bottom, left:right]
+        candidates_crop = grow_mask(mask_crop, radius) & ~union_crop
+        boundary_crop = mask_crop & grow_mask(~mask_crop, 1)
+        accepted_crop = color_continuity_mask(source_crop, boundary_crop, candidates_crop, color_distance_threshold, radius)
+        accepted = np.zeros(mask.shape, dtype=bool)
+        accepted[top:bottom, left:right] = accepted_crop
         proposals.append(accepted)
-        rejected.append(int(candidates.sum()) - int(accepted.sum()))
+        rejected.append(int(candidates_crop.sum()) - int(accepted_crop.sum()))
 
     proposal_count = np.zeros(original_masks[0].shape, dtype="uint16")
     for proposal in proposals:
@@ -1049,7 +1535,7 @@ def split_elements(args: argparse.Namespace) -> dict[str, Any]:
 
     flat = normalized_array.reshape(-1, 3)
     colors, counts = np.unique(flat, axis=0, return_counts=True)
-    color_groups = group_similar_colors(colors, counts, total_area, min_area, args.color_merge_distance)
+    color_groups, background_mode = group_similar_colors(colors, counts, total_area, min_area, args.color_merge_distance)
     regions = []
     for group in color_groups:
         color = group["color"]
@@ -1058,7 +1544,7 @@ def split_elements(args: argparse.Namespace) -> dict[str, Any]:
             color_mask |= np.all(normalized_array == color_array, axis=2)
         components = connected_mask_components(color_mask, min_component_area)
         if not args.split_color_components:
-            for cluster in cluster_components_by_gap(components, component_merge_gap_px):
+            for cluster in cluster_components_by_gap(components, component_merge_gap_px, width, height, total_area):
                 clean_area = int(cluster["area"])
                 if clean_area < min_area:
                     continue
@@ -1066,14 +1552,16 @@ def split_elements(args: argparse.Namespace) -> dict[str, Any]:
                     continue
                 if is_thin_component_cluster(cluster.get("components", []), total_area):
                     continue
-                regions.append({
+                region = {
                     "color": color,
                     "area": clean_area,
                     "bbox": cluster["bbox"],
                     "mask": cluster["mask"],
-                    "mergedColors": group["mergedColors"],
+                    "mergedColors": list(group["mergedColors"]),
                     "components": cluster["components"],
-                })
+                }
+                clean_segmentation_region_mask(region, args.mask_clean, total_area)
+                regions.append(region)
             continue
 
         for component in components:
@@ -1083,22 +1571,28 @@ def split_elements(args: argparse.Namespace) -> dict[str, Any]:
             bbox = tuple(component["bbox"])
             if is_thin_artifact(clean_area, bbox, total_area):
                 continue
-            regions.append({
+            region = {
                 "color": color,
                 "area": clean_area,
                 "bbox": bbox,
                 "mask": component["mask"],
-                "mergedColors": group["mergedColors"],
+                "mergedColors": list(group["mergedColors"]),
                 "components": [{
                     "area": clean_area,
                     "bbox": list(bbox),
                 }],
-            })
+            }
+            clean_segmentation_region_mask(region, args.mask_clean, total_area)
+            regions.append(region)
 
     if args.merge_contained and not args.no_merge_contained:
         regions = merge_contained_regions(regions, total_area)
         regions = merge_internal_detail_regions(regions, total_area)
         regions = merge_contained_regions(regions, total_area)
+    if args.merge_object_parts:
+        regions = merge_attached_object_part_regions(regions, total_area)
+        regions = merge_contained_regions(regions, total_area)
+        regions = merge_sparse_same_color_decorations(regions, total_area)
 
     if args.fill_object_holes:
         for region in regions:
@@ -1119,10 +1613,16 @@ def split_elements(args: argparse.Namespace) -> dict[str, Any]:
             "segmentationColor": color_key(region["color"]),
             "mergedColors": region.get("mergedColors", []),
             "mergedAreas": region.get("mergedAreas", []),
+            "objectPartMergedColors": region.get("objectPartMergedColors", []),
+            "objectPartMergedAreas": region.get("objectPartMergedAreas", []),
+            "decorativeMergedColors": region.get("decorativeMergedColors", []),
+            "decorativeMergedAreas": region.get("decorativeMergedAreas", []),
             "filledHolePixels": region.get("filledHolePixels", 0),
             "boundaryTrimPixels": region.get("boundaryTrimPixels", 0),
             "boundaryFloodTrimPixels": region.get("boundaryFloodTrimPixels", 0),
             "boundaryFloodSkipped": region.get("boundaryFloodSkipped", False),
+            "maskCleanAddedPixels": region.get("maskCleanAddedPixels", 0),
+            "maskCleanRemovedPixels": region.get("maskCleanRemovedPixels", 0),
             "maskGrowPixels": region.get("maskGrowPixels", 0),
             "maskGrowSharedPixels": region.get("maskGrowSharedPixels", 0),
             "maskGrowConflictPixels": region.get("maskGrowConflictPixels", 0),
@@ -1163,17 +1663,20 @@ def split_elements(args: argparse.Namespace) -> dict[str, Any]:
         "segmentation": str(segmentation_path),
         "sourceSize": {"width": width, "height": height},
         "paletteSize": args.palette_size,
+        "backgroundMode": background_mode,
         "colorMergeDistance": args.color_merge_distance,
         "componentMergeGapPixels": component_merge_gap_px,
         "boundaryTrimPixels": args.boundary_trim,
         "boundaryTrimMargin": args.boundary_trim_margin,
         "boundaryFloodPixels": args.boundary_flood,
         "boundaryFloodColorDistance": args.boundary_flood_color_distance,
+        "maskCleanPixels": args.mask_clean,
         "maskGrowPixels": args.mask_grow,
         "maskGrowColorDistance": args.mask_grow_color_distance,
         "minAreaPixels": min_area,
         "mode": "edge-safe-trim-overlap-mask",
         "mergeContained": bool(args.merge_contained and not args.no_merge_contained),
+        "mergeObjectParts": bool(args.merge_object_parts),
         "fillObjectHoles": bool(args.fill_object_holes),
         "backgroundLayer": not args.no_residual_layer,
         "backgroundAreaPixels": background_area,

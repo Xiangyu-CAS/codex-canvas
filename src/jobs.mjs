@@ -1095,10 +1095,14 @@ async function splitElementLayers(job, segmentationPath) {
     "--palette-size", "32",
     "--boundary-trim", "2",
     "--boundary-trim-margin", "16",
-    "--boundary-flood", "8",
-    "--boundary-flood-color-distance", "30",
-    "--mask-grow", "6",
-    "--mask-grow-color-distance", "8",
+    "--boundary-flood", "24",
+    "--boundary-flood-color-distance", "34",
+    "--mask-clean", "1",
+    "--mask-grow", "3",
+    "--mask-grow-color-distance", "36",
+    "--merge-contained",
+    "--merge-object-parts",
+    "--fill-object-holes",
     "--force"
   ]);
 
