@@ -30,6 +30,7 @@
     "public/styles.css",
     "scripts/compose_annotations.py",
     "scripts/checkout-stable-release.mjs",
+    "scripts/install-codex-plugin.mjs",
     "scripts/install-personal-plugin.mjs",
     "scripts/prepare_completed_background.py",
     "scripts/prepare_expand_canvas.py",

@@ -67,6 +67,7 @@ async function main() {
     ["mcp numeric boundaries", testMcpNumericBoundaries],
     ["thread scoped auto collector", testAutoCollectorWatermark],
     ["package optional dependency scripts", testPackageOptionalDependencyScripts],
+    ["skill plugin bootstrap contract", testSkillPluginBootstrapContract],
     ["plugin package manifest", testPluginPackageManifest],
     ["personal plugin installer", testPersonalPluginInstaller],
     ["dev plugin cache linker", testDevPluginCacheLinker],
@@ -2063,6 +2064,52 @@ async function testPackageOptionalDependencyScripts() {
     "node ./scripts/visual-regression.mjs",
     "package.json should expose reference screenshot regression checks"
   );
+}
+
+async function testSkillPluginBootstrapContract() {
+  const packageJson = JSON.parse(await fs.readFile(path.join(process.cwd(), "package.json"), "utf8"));
+  const rootSkill = await fs.readFile(path.join(process.cwd(), "SKILL.md"), "utf8");
+  const installerPath = path.join(process.cwd(), "scripts", "install-codex-plugin.mjs");
+  const installer = await fs.readFile(installerPath, "utf8");
+
+  if (!rootSkill.includes("Skill 安装不是终态")) {
+    throw new Error("root skill should state that installing the Skill is not the final plugin state.");
+  }
+  if (!rootSkill.includes("codex plugin add codex-canvas@personal")) {
+    throw new Error("root skill should require installing the personal Codex plugin.");
+  }
+  if (!rootSkill.includes("新建一个 Codex 任务")) {
+    throw new Error("root skill should require a new task after plugin installation.");
+  }
+  if (!packageJson.files?.includes("scripts/install-codex-plugin.mjs")) {
+    throw new Error("npm package should include the Skill-to-plugin bootstrap installer.");
+  }
+  if (!installer.includes("execFileAsync") || installer.includes("shell: true")) {
+    throw new Error("bootstrap installer should use cross-platform direct process execution without a shell.");
+  }
+
+  const dryRunSource = path.join(os.tmpdir(), `codex-canvas-bootstrap-${process.pid}-${Date.now()}`);
+  const { stdout } = await runPortableCommand(process.execPath, [
+    installerPath,
+    "--dry-run",
+    "--json",
+    "--source-dir",
+    dryRunSource
+  ], {
+    cwd: process.cwd(),
+    maxBuffer: 1024 * 1024,
+    windowsHide: true
+  });
+  const dryRun = JSON.parse(stdout);
+  assertEqual(dryRun.ok, true, "bootstrap dry-run should succeed");
+  assertEqual(dryRun.dryRun, true, "bootstrap dry-run should identify itself");
+  assertEqual(dryRun.pluginId, "codex-canvas@personal", "bootstrap should install the personal plugin id");
+  if (!dryRun.plan?.some((step) => step.args?.includes("checkout:stable"))) {
+    throw new Error("bootstrap plan should select the verified stable release.");
+  }
+  if (!dryRun.plan?.some((step) => step.args?.includes("codex-canvas@personal"))) {
+    throw new Error("bootstrap plan should install the Codex personal plugin.");
+  }
 }
 
 async function testPluginPackageManifest() {

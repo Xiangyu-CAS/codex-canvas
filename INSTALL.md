@@ -13,6 +13,18 @@
 
 安装流程是：把仓库 clone 到本机一个长期保留的目录，切换到最新稳定 Release 对应的本地分支，运行 personal marketplace 安装器，然后用 Codex CLI 安装这个 personal plugin。不要直接从 `main` 安装。
 
+## 通过 Red SkillHub 安装
+
+Red SkillHub 中的 `codex-canvas` Skill 是发现和 bootstrap 入口，完整 Codex 插件才是最终运行形态。`redskill install codex-canvas` 只下载 Skill 文件，本身不会执行插件安装 hook；因此同一个安装任务必须继续读取新 Skill 的 `SKILL.md` 并完成其中的插件安装流程。
+
+可以把下面整段作为安装任务发给 Codex：
+
+```text
+现在为你安装 Skill。先检查是否已安装 Red Skill 商店；请根据 https://redskill.xiaohongshu.net/install.md 安装 RedSkill 商店。若已安装则跳过商店安装。然后执行 redskill install codex-canvas。Skill 安装完成后不要停止：读取该命令输出目录中的 codex-canvas/SKILL.md，并按其中“安装为 Codex 插件”流程继续，直到 codex plugin list --json 显示 codex-canvas@personal 已安装且启用。最后提醒我关闭旧画布并新建一个 Codex 任务，再使用 @Codex-Canvas 打开画布。
+```
+
+该 Skill 的 bootstrap 安装器会使用 `~/.codex/plugin-sources/codex-canvas` 作为默认长期源码目录，安装最新已发布且校验通过的稳定 Release，写入 personal marketplace，再调用 Codex CLI 创建插件缓存。它不会从未发布的 `main`、临时 workspace Skill 目录或手工拼装的缓存安装。
+
 ## 手动安装
 
 下面使用 `~/src/codex-canvas` 作为示例路径；它不是固定要求，可以换成任意你会长期保留的目录。
