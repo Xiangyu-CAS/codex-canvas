@@ -608,8 +608,10 @@ async function acquireCrossProcessLock(lockPath) {
         await handle.close().catch(() => {});
         await fs.unlink(lockPath).catch(() => {});
       }
-      if (error?.code !== "EEXIST") throw error;
-      await removeAbandonedCrossProcessLock(lockPath);
+      if (!isCrossProcessLockContention(error)) throw error;
+      if (error?.code === "EEXIST") {
+        await removeAbandonedCrossProcessLock(lockPath);
+      }
       if (Date.now() - startedAt >= crossProcessLockTimeoutMs) {
         const timeoutError = new Error(`Timed out waiting for canvas state lock: ${lockPath}`);
         timeoutError.statusCode = 503;
@@ -631,6 +633,7 @@ async function removeAbandonedCrossProcessLock(lockPath) {
     ]);
   } catch (error) {
     if (error?.code === "ENOENT") return;
+    if (isWindowsLockSharingViolation(error)) return;
     throw error;
   }
   const stale = Date.now() - stat.mtimeMs >= staleCrossProcessLockMs;
@@ -639,6 +642,14 @@ async function removeAbandonedCrossProcessLock(lockPath) {
   await fs.unlink(lockPath).catch((error) => {
     if (error?.code !== "ENOENT") throw error;
   });
+}
+
+function isCrossProcessLockContention(error) {
+  return error?.code === "EEXIST" || isWindowsLockSharingViolation(error);
+}
+
+function isWindowsLockSharingViolation(error) {
+  return process.platform === "win32" && (error?.code === "EPERM" || error?.code === "EACCES");
 }
 
 function processIsAlive(pid) {
