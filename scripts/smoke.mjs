@@ -1300,6 +1300,13 @@ async function testFrontendActionContract() {
   if (!html.includes('id="appUpdateButton" class="settings-menu-row settings-version-row"') || !html.includes("settings-version-value")) {
     throw new Error("merged Version row should remain a clickable update control with a combined value.");
   }
+  if (
+    !app.includes('settingsButton.classList.toggle("update-available", updateAvailable)')
+    || !app.includes('const updateAvailable = Boolean(appUpdateInfo?.updateAvailable)')
+    || !styles.includes(".settings-button.update-available::after")
+  ) {
+    throw new Error("settings should show a red-dot indicator whenever the remote check reports an available update.");
+  }
   if (app.includes("image.title = label") || app.includes("element.title = label")) {
     throw new Error("canvas image objects should not expose long native hover tooltips.");
   }

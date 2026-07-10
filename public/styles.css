@@ -195,6 +195,19 @@ button {
   color: #2f3338;
 }
 
+.settings-button.update-available::after {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #d93025;
+  box-shadow: 0 0 0 2px #f7f7f5;
+  content: "";
+  pointer-events: none;
+}
+
 .prompt-history-button,
 .layer-browser-button {
   position: absolute;

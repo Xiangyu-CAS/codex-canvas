@@ -5000,6 +5000,7 @@ async function runAppUpdate() {
 }
 
 function renderAppUpdateStatus(override = null) {
+  renderSettingsUpdateIndicator();
   if (!appUpdateButton || !appVersionValue || !appUpdateStatus) return;
   const version = appUpdateInfo?.installedVersion || appUpdateInfo?.pluginVersion || appUpdateInfo?.version || "...";
   appVersionValue.textContent = version;
@@ -5033,6 +5034,16 @@ function renderAppUpdateStatus(override = null) {
     appUpdateStatus.textContent = t("updateCurrent");
   }
   appUpdateButton.setAttribute("aria-label", `${t("appVersion")}: ${version}, ${appUpdateStatus.textContent}`);
+}
+
+function renderSettingsUpdateIndicator() {
+  const updateAvailable = Boolean(appUpdateInfo?.updateAvailable);
+  settingsButton.classList.toggle("update-available", updateAvailable);
+  const label = updateAvailable
+    ? `${t("settings")}: ${t("updateAvailable")}`
+    : t("settings");
+  settingsButton.title = label;
+  settingsButton.setAttribute("aria-label", label);
 }
 
 function appUpdateBlockedLabel(reason) {

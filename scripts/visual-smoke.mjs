@@ -47,6 +47,8 @@ async function main() {
     results.push("edit-elements-layers");
     await runUploadPartialFailureSmoke(browser);
     results.push("upload-partial-failure");
+    await runUpdateIndicatorSmoke(browser);
+    results.push("update-indicator");
   } finally {
     await browser.close();
   }
@@ -913,6 +915,76 @@ async function runUploadPartialFailureSmoke(browser) {
       [],
       "upload partial failure smoke should not emit unexpected console errors"
     );
+  } finally {
+    await context.close();
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+async function runUpdateIndicatorSmoke(browser) {
+  const projectDir = await fsp.mkdtemp(path.join(os.tmpdir(), "codex-canvas-visual-update-indicator-"));
+  const { server, url } = await createServer({ projectDir, port: 0, autoCollect: false });
+  const context = await browser.newContext({
+    viewport: { width: 900, height: 620 }
+  });
+  const page = await context.newPage();
+  const consoleErrors = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => consoleErrors.push(error.message));
+
+  const available = {
+    version: "0.3.0",
+    pluginVersion: "0.3.0",
+    installedVersion: "0.3.0",
+    latestVersion: "0.4.0",
+    canUpdate: true,
+    updateAvailable: true
+  };
+  const current = {
+    ...available,
+    version: "0.4.0",
+    pluginVersion: "0.4.0",
+    installedVersion: "0.4.0",
+    updateAvailable: false
+  };
+
+  await page.route(/\/api\/app-update\/check(?:\?.*)?$/, (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify(available)
+  }));
+  await page.route(/\/api\/app-update(?:\?.*)?$/, (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    return route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(current)
+    });
+  });
+
+  try {
+    await page.goto(url, { waitUntil: "networkidle" });
+    await page.waitForFunction(() => document.querySelector("#settingsButton")?.classList.contains("update-available"));
+    const indicator = await page.locator("#settingsButton").evaluate((button) => {
+      const style = getComputedStyle(button, "::after");
+      return {
+        ariaLabel: button.getAttribute("aria-label"),
+        backgroundColor: style.backgroundColor,
+        height: style.height,
+        width: style.width
+      };
+    });
+    assert(indicator.ariaLabel?.includes("Available"), "update red dot should expose the available state to assistive technology");
+    assertEqual(indicator.backgroundColor, "rgb(217, 48, 37)", "update red dot should use the notification red color");
+    assertEqual(indicator.width, "8px", "update red dot should render at the intended width");
+    assertEqual(indicator.height, "8px", "update red dot should render at the intended height");
+
+    await page.locator("#settingsButton").click();
+    await page.locator("#appUpdateButton").click();
+    await page.waitForFunction(() => !document.querySelector("#settingsButton")?.classList.contains("update-available"));
+    assertDeepEqual(consoleErrors.filter((message) => !/favicon/i.test(message)), [], "update indicator smoke should not emit console errors");
   } finally {
     await context.close();
     await new Promise((resolve) => server.close(resolve));
