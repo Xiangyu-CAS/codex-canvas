@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 import net from "node:net";
-import { resolveCodexExecutable, spawnCodexProcess } from "./codex-runner.mjs";
+import { resolveCodexExecutable, spawnCodexProcess, stopCodexProcess } from "./codex-runner.mjs";
 import { APP_VERSION } from "./version.mjs";
 import { createOperationLease } from "./operation-leases.mjs";
 
@@ -185,7 +185,7 @@ async function startAppServer() {
   try {
     await waitForWebSocket(port, appServerStartupTimeoutMs);
   } catch (error) {
-    stopChild(child);
+    await stopCodexProcess(child);
     const detail = output.join("").trim();
     error.message = detail ? `${error.message}: ${detail}` : error.message;
     throw error;
@@ -199,11 +199,6 @@ async function startAppServer() {
   };
 }
 
-function stopChild(child) {
-  if (!child || child.killed) return;
-  child.kill();
-}
-
 function stopAppServer(child) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
   return new Promise((resolve) => {
@@ -213,13 +208,15 @@ function stopAppServer(child) {
       resolve();
     };
     const forceTimer = setTimeout(() => {
-      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      if (child.exitCode === null && child.signalCode === null) {
+        void stopCodexProcess(child, "SIGKILL");
+      }
     }, 750);
     const resolveTimer = setTimeout(resolve, 2500);
     forceTimer.unref?.();
     resolveTimer.unref?.();
     child.once("close", done);
-    child.kill();
+    void stopCodexProcess(child);
   });
 }
 

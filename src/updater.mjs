@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { resolveCodexExecutable, spawnCodexProcess } from "./codex-runner.mjs";
+import { resolveCodexExecutable, spawnCodexProcess, stopCodexProcess } from "./codex-runner.mjs";
 import { activeOperationLeases, removeStaleUpdateLock, updateLockPath } from "./operation-leases.mjs";
 import { pluginRoot } from "./paths.mjs";
 
@@ -637,7 +637,7 @@ async function runPortableExecutable(command, args, { cwd, timeoutMs = 5000 } = 
   child.stderr.on("data", (chunk) => stderr.push(chunk));
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
-      child.kill();
+      void stopCodexProcess(child);
       const error = new Error(`${path.basename(command)} timed out after ${timeoutMs} ms.`);
       error.stdout = Buffer.concat(stdout).toString();
       error.stderr = Buffer.concat(stderr).toString();

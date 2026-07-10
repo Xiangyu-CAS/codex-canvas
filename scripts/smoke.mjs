@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { normalizePort } from "../src/cli.mjs";
-import { sendImageToBoundChat } from "../src/codex-chat.mjs";
+import { sendImageToBoundChat, stopActiveChatOperations } from "../src/codex-chat.mjs";
 import { collectRecentImages } from "../src/collector.mjs";
 import { createImageJob, getIgnoredGeneratedImagePaths, getImageJob, markTextRecognitionCancelledForTest, placeImportedElementLayersForTest, prepareImageForCollectionForTest } from "../src/jobs.mjs";
 import { checkImageProcessingDepsAvailable } from "../src/ocr-setup.mjs";
@@ -84,8 +84,15 @@ async function main() {
     ["alpha recut edit outputs", testAlphaRecutEditOutputs],
     ["edit elements scripts", testEditElementsScripts]
   ]) {
+    const startedAt = Date.now();
+    if (process.env.CI === "true" || process.env.CODEX_CANVAS_SMOKE_PROGRESS === "1") {
+      console.log(`[smoke] START ${name}`);
+    }
     await test();
     results.push(name);
+    if (process.env.CI === "true" || process.env.CODEX_CANVAS_SMOKE_PROGRESS === "1") {
+      console.log(`[smoke] PASS  ${name} (${Date.now() - startedAt}ms)`);
+    }
   }
   console.log(JSON.stringify({ ok: true, tests: results }, null, 2));
 }
@@ -2864,6 +2871,7 @@ async function testChatTurnActionContract() {
     assertEqual(sent.body.completionPending, true, "visual chat turn should keep completion monitoring in the background");
   } finally {
     process.env.CODEX_CANVAS_CODEX_CLI = previousCli;
+    await stopActiveChatOperations();
     await new Promise((resolve) => server.close(resolve));
   }
 }
@@ -3128,6 +3136,7 @@ async function testChatWebSocketFallback() {
   } finally {
     process.env.CODEX_CANVAS_CODEX_CLI = previousCli;
     globalThis.WebSocket = previousWebSocket;
+    await stopActiveChatOperations();
   }
 }
 
@@ -4212,7 +4221,7 @@ const imageArgs = [];
 for (let index = 0; index < args.length; index += 1) {
   if (args[index] === "--image" && args[index + 1]) imageArgs.push(args[index + 1]);
 }
-const prompt = args[args.length - 1] || "";
+const prompt = fs.readFileSync(0, "utf8");
 fs.mkdirSync(outputDir, { recursive: true });
 fs.writeFileSync(path.join(outputDir, "codex-capture.json"), JSON.stringify({ args, imageArgs, prompt }, null, 2));
 fs.copyFileSync(imageArgs[0], path.join(outputDir, "quick-edit-result.png"));

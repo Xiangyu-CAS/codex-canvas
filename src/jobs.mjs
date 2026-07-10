@@ -8,7 +8,7 @@ import { PNG } from "pngjs";
 import { collectRecentImages } from "./collector.mjs";
 import { jobsDirFor, pluginRoot } from "./paths.mjs";
 import { addJobPlaceholder, deleteObject, readState, transformState, updateObject } from "./store.mjs";
-import { startCodexImageJob } from "./codex-runner.mjs";
+import { startCodexImageJob, stopCodexProcess } from "./codex-runner.mjs";
 import { recognizeTextLocal } from "./local-ocr.mjs";
 import { createOperationLease } from "./operation-leases.mjs";
 
@@ -1402,8 +1402,8 @@ async function runPython(args, options = {}) {
 }
 
 function stopChild(child) {
-  if (!child || child.killed || child.exitCode !== null) return;
-  child.kill();
+  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  void stopCodexProcess(child);
 }
 
 async function rememberGeneratedImages(sinceMs, options = {}) {
