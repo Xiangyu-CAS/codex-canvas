@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
-import { assetsDirFor, legacyCanvasDataDirFor, statePathFor } from "./paths.mjs";
+import { assetsDirFor, dataDirFor, legacyCanvasDataDirFor, statePathFor } from "./paths.mjs";
 
 const defaultState = {
   version: 1,
@@ -25,7 +25,12 @@ const minViewportZoom = 0.12;
 const maxViewportZoom = 2.2;
 const derivedGap = 72;
 const stateLocks = new Map();
+const legacyMigrationLocks = new Map();
 const versionGroupFields = new Set(["sourceObjectId", "batchId", "layoutMode", "prompt"]);
+const legacyThreadMigrationMarkerName = ".legacy-thread-migration.json";
+const crossProcessLockTimeoutMs = 15_000;
+const staleCrossProcessLockMs = 5 * 60_000;
+const crossProcessLockRetryMs = 12;
 
 function canvasIdFrom(options = {}) {
   return typeof options.canvasId === "string" && options.canvasId.trim() ? options.canvasId.trim() : null;
@@ -177,37 +182,140 @@ export async function ensureProjectStore(projectDir, options = {}) {
 }
 
 async function migrateLegacyCanvasIfNeeded(projectDir, canvasId) {
-  const targetStatePath = statePathFor(projectDir, canvasId);
-  if (await fileExists(targetStatePath)) return;
+  return withLegacyMigrationLock(projectDir, () => (
+    withStateLock(projectDir, {}, async () => {
+      const targetStatePath = statePathFor(projectDir, canvasId);
+      if (await fileExists(targetStatePath)) {
+        await ensureLegacyThreadMigrationMarker(projectDir, {
+          canvasId,
+          migrated: false,
+          reason: "existing-thread-canvas"
+        });
+        return;
+      }
 
-  const legacyCanvasDir = legacyCanvasDataDirFor(projectDir, canvasId);
-  const legacyCanvasStatePath = path.join(legacyCanvasDir, "codex-canvas.json");
-  if (legacyCanvasStatePath !== targetStatePath && await fileExists(legacyCanvasStatePath)) {
-    await fs.mkdir(path.dirname(targetStatePath), { recursive: true });
-    await fs.cp(legacyCanvasDir, path.dirname(targetStatePath), {
-      recursive: true,
-      force: false,
-      errorOnExist: false
-    });
-    return;
+      const legacyCanvasDir = legacyCanvasDataDirFor(projectDir, canvasId);
+      const legacyCanvasStatePath = path.join(legacyCanvasDir, "codex-canvas.json");
+      if (legacyCanvasStatePath !== targetStatePath && await fileExists(legacyCanvasStatePath)) {
+        await withStateLock(projectDir, { canvasId }, async () => {
+          await fs.mkdir(path.dirname(targetStatePath), { recursive: true });
+          await fs.cp(legacyCanvasDir, path.dirname(targetStatePath), {
+            recursive: true,
+            force: false,
+            errorOnExist: false
+          });
+          await ensureLegacyThreadMigrationMarker(projectDir, {
+            canvasId,
+            migrated: true,
+            reason: "legacy-thread-storage"
+          });
+        });
+        return;
+      }
+
+      if (await fileExists(legacyThreadMigrationMarkerPath(projectDir))) return;
+
+      const existingThreadState = await findExistingThreadState(projectDir);
+      if (existingThreadState) {
+        await writeLegacyThreadMigrationMarker(projectDir, {
+          canvasId: null,
+          migrated: false,
+          reason: "existing-thread-canvas",
+          existingThreadState
+        });
+        return;
+      }
+
+      const legacyStatePath = statePathFor(projectDir);
+      if (!await fileExists(legacyStatePath)) {
+        await writeLegacyThreadMigrationMarker(projectDir, {
+          canvasId,
+          migrated: false,
+          reason: "no-legacy-canvas"
+        });
+        return;
+      }
+
+      await withStateLock(projectDir, { canvasId }, async () => {
+        await fs.mkdir(path.dirname(targetStatePath), { recursive: true });
+        const legacyAssetsDir = assetsDirFor(projectDir);
+        const targetAssetsDir = assetsDirFor(projectDir, canvasId);
+        const legacyState = await readJsonFile(legacyStatePath);
+
+        if (await fileExists(legacyAssetsDir)) {
+          await fs.cp(legacyAssetsDir, targetAssetsDir, {
+            recursive: true,
+            force: false,
+            errorOnExist: false
+          });
+        }
+        await writeMigratedLegacyState(targetStatePath, legacyState, legacyAssetsDir, targetAssetsDir);
+        await writeLegacyThreadMigrationMarker(projectDir, {
+          canvasId,
+          migrated: true,
+          reason: "legacy-default-canvas"
+        });
+      });
+    })
+  ));
+}
+
+function legacyThreadMigrationMarkerPath(projectDir) {
+  return path.join(dataDirFor(projectDir), legacyThreadMigrationMarkerName);
+}
+
+async function ensureLegacyThreadMigrationMarker(projectDir, payload) {
+  if (await fileExists(legacyThreadMigrationMarkerPath(projectDir))) return;
+  await writeLegacyThreadMigrationMarker(projectDir, payload);
+}
+
+async function writeLegacyThreadMigrationMarker(projectDir, payload) {
+  const markerPath = legacyThreadMigrationMarkerPath(projectDir);
+  await fs.mkdir(path.dirname(markerPath), { recursive: true });
+  const marker = {
+    version: 1,
+    ...payload,
+    claimsDefault: payload.claimsDefault === true
+      || (payload.migrated === true && payload.reason === "legacy-default-canvas"),
+    createdAt: new Date().toISOString()
+  };
+  const tempPath = `${markerPath}.${process.pid}.${Date.now()}.${crypto.randomBytes(3).toString("hex")}.tmp`;
+  await fs.writeFile(tempPath, `${JSON.stringify(marker, null, 2)}\n`);
+  await fs.rename(tempPath, markerPath);
+}
+
+async function findExistingThreadState(projectDir) {
+  const threadsDir = path.join(dataDirFor(projectDir), "threads");
+  let entries;
+  try {
+    entries = await fs.readdir(threadsDir, { withFileTypes: true });
+  } catch {
+    return null;
   }
-
-  const legacyStatePath = statePathFor(projectDir);
-  if (!await fileExists(legacyStatePath)) return;
-
-  await fs.mkdir(path.dirname(targetStatePath), { recursive: true });
-  const legacyAssetsDir = assetsDirFor(projectDir);
-  const targetAssetsDir = assetsDirFor(projectDir, canvasId);
-  const legacyState = await readJsonFile(legacyStatePath);
-
-  if (await fileExists(legacyAssetsDir)) {
-    await fs.cp(legacyAssetsDir, targetAssetsDir, {
-      recursive: true,
-      force: false,
-      errorOnExist: false
-    });
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const candidate = path.join(threadsDir, entry.name, "codex-canvas.json");
+    if (await fileExists(candidate)) return path.relative(dataDirFor(projectDir), candidate);
   }
-  await writeMigratedLegacyState(targetStatePath, legacyState, legacyAssetsDir, targetAssetsDir);
+  return null;
+}
+
+async function withLegacyMigrationLock(projectDir, operation) {
+  const key = legacyThreadMigrationMarkerPath(projectDir);
+  const previous = legacyMigrationLocks.get(key) || Promise.resolve();
+  let release;
+  const current = new Promise((resolve) => {
+    release = resolve;
+  });
+  const chain = previous.catch(() => {}).then(() => current);
+  legacyMigrationLocks.set(key, chain);
+  await previous.catch(() => {});
+  try {
+    return await withCrossProcessLock(`${key}.lock`, operation);
+  } finally {
+    release();
+    if (legacyMigrationLocks.get(key) === chain) legacyMigrationLocks.delete(key);
+  }
 }
 
 async function readJsonFile(filePath) {
@@ -370,7 +478,10 @@ export async function versionGroups(projectDir, { query = "", groupBy = "sourceO
 }
 
 export async function writeState(projectDir, state, options = {}) {
-  return withStateLock(projectDir, options, () => writeStateFile(projectDir, state, options));
+  return withStateLock(projectDir, options, async () => {
+    await assertLegacyDefaultCanvasWritable(projectDir, options);
+    return writeStateFile(projectDir, state, options);
+  });
 }
 
 export async function transformState(projectDir, options = {}, transformer) {
@@ -427,10 +538,32 @@ async function mutateState(projectDir, options = {}, mutator) {
     const state = await readStateFile(projectDir, options);
     const result = await mutator(state);
     if (result?.write === false) return result.value;
+    await assertLegacyDefaultCanvasWritable(projectDir, options);
     const nextState = result?.state || result;
     const written = await writeStateFile(projectDir, nextState, options);
     return Object.hasOwn(result || {}, "value") ? result.value : written;
   });
+}
+
+async function assertLegacyDefaultCanvasWritable(projectDir, options = {}) {
+  if (canvasIdFrom(options)) return;
+  if (!await legacyDefaultCanvasClaimed(projectDir)) return;
+  const error = new Error("The legacy default canvas is read-only after it has been claimed by a thread.");
+  error.statusCode = 409;
+  throw error;
+}
+
+async function legacyDefaultCanvasClaimed(projectDir) {
+  try {
+    const marker = await readJsonFile(legacyThreadMigrationMarkerPath(projectDir));
+    return marker?.claimsDefault === true
+      || (marker?.claimsDefault === undefined
+        && marker?.migrated === true
+        && marker?.reason === "legacy-default-canvas");
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 async function withStateLock(projectDir, options = {}, operation) {
@@ -444,11 +577,104 @@ async function withStateLock(projectDir, options = {}, operation) {
   stateLocks.set(key, chain);
   await previous.catch(() => {});
   try {
-    return await operation();
+    return await withCrossProcessLock(`${key}.lock`, operation);
   } finally {
     release();
     if (stateLocks.get(key) === chain) stateLocks.delete(key);
   }
+}
+
+async function withCrossProcessLock(lockPath, operation) {
+  const lock = await acquireCrossProcessLock(lockPath);
+  try {
+    return await operation();
+  } finally {
+    await releaseCrossProcessLock(lockPath, lock);
+  }
+}
+
+async function acquireCrossProcessLock(lockPath) {
+  await fs.mkdir(path.dirname(lockPath), { recursive: true });
+  const startedAt = Date.now();
+  const token = `${process.pid}-${Date.now()}-${crypto.randomBytes(8).toString("hex")}`;
+  for (;;) {
+    let handle;
+    try {
+      handle = await fs.open(lockPath, "wx");
+      await handle.writeFile(`${JSON.stringify({ token, pid: process.pid, createdAt: new Date().toISOString() })}\n`);
+      return { handle, token };
+    } catch (error) {
+      if (handle) {
+        await handle.close().catch(() => {});
+        await fs.unlink(lockPath).catch(() => {});
+      }
+      if (!isCrossProcessLockContention(error)) throw error;
+      if (error?.code === "EEXIST") {
+        await removeAbandonedCrossProcessLock(lockPath);
+      }
+      if (Date.now() - startedAt >= crossProcessLockTimeoutMs) {
+        const timeoutError = new Error(`Timed out waiting for canvas state lock: ${lockPath}`);
+        timeoutError.statusCode = 503;
+        throw timeoutError;
+      }
+      const jitter = Math.floor(Math.random() * crossProcessLockRetryMs);
+      await new Promise((resolve) => setTimeout(resolve, crossProcessLockRetryMs + jitter));
+    }
+  }
+}
+
+async function removeAbandonedCrossProcessLock(lockPath) {
+  let stat;
+  let owner = null;
+  try {
+    [stat, owner] = await Promise.all([
+      fs.stat(lockPath),
+      fs.readFile(lockPath, "utf8").then((raw) => JSON.parse(raw)).catch(() => null)
+    ]);
+  } catch (error) {
+    if (error?.code === "ENOENT") return;
+    if (isWindowsLockSharingViolation(error)) return;
+    throw error;
+  }
+  const stale = Date.now() - stat.mtimeMs >= staleCrossProcessLockMs;
+  const abandoned = Number.isInteger(owner?.pid) && !processIsAlive(owner.pid);
+  if (!stale && !abandoned) return;
+  await fs.unlink(lockPath).catch((error) => {
+    if (error?.code !== "ENOENT") throw error;
+  });
+}
+
+function isCrossProcessLockContention(error) {
+  return error?.code === "EEXIST" || isWindowsLockSharingViolation(error);
+}
+
+function isWindowsLockSharingViolation(error) {
+  return process.platform === "win32" && (error?.code === "EPERM" || error?.code === "EACCES");
+}
+
+function processIsAlive(pid) {
+  if (pid === process.pid) return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code !== "ESRCH";
+  }
+}
+
+async function releaseCrossProcessLock(lockPath, lock) {
+  await lock.handle.close().catch(() => {});
+  let owner;
+  try {
+    owner = JSON.parse(await fs.readFile(lockPath, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") return;
+    return;
+  }
+  if (owner?.token !== lock.token) return;
+  await fs.unlink(lockPath).catch((error) => {
+    if (error?.code !== "ENOENT") throw error;
+  });
 }
 
 export async function addImage(projectDir, input, options = {}) {
@@ -901,6 +1127,61 @@ export async function reorderLayerGroupLayer(projectDir, groupId, objectId, dire
   });
 }
 
+export async function setLayerGroupOrder(projectDir, groupId, objectIds, options = {}) {
+  const normalizedIds = Array.isArray(objectIds)
+    ? objectIds.map((id) => typeof id === "string" ? id.trim() : "").filter(Boolean)
+    : [];
+  if (!groupId || !normalizedIds.length || normalizedIds.length !== objectIds?.length) {
+    const error = new Error("Layer order requires a layer group id and an ordered list of object ids.");
+    error.statusCode = 400;
+    throw error;
+  }
+  if (new Set(normalizedIds).size !== normalizedIds.length) {
+    const error = new Error("Layer order requires unique object ids.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return mutateState(projectDir, options, (state) => {
+    const firstGroupIndex = state.objects.findIndex((object) => object.layerGroupId === groupId);
+    const groupObjects = state.objects.filter((object) => object.layerGroupId === groupId);
+    const groupIds = new Set(groupObjects.map((object) => object.id));
+    const exactMembership = groupObjects.length === normalizedIds.length
+      && normalizedIds.every((id) => groupIds.has(id));
+    if (firstGroupIndex < 0 || !exactMembership) {
+      const error = new Error("Layer group membership changed outside this history session.");
+      error.statusCode = 409;
+      throw error;
+    }
+
+    const byId = new Map(groupObjects.map((object) => [object.id, object]));
+    const ordered = normalizedIds.map((id, index) => ({
+      ...byId.get(id),
+      layerGroupIndex: index
+    }));
+    const otherObjects = state.objects.filter((object) => object.layerGroupId !== groupId);
+    const insertIndex = Math.min(firstGroupIndex, otherObjects.length);
+    const objects = [
+      ...otherObjects.slice(0, insertIndex),
+      ...ordered,
+      ...otherObjects.slice(insertIndex)
+    ];
+    const existingIds = new Set(state.objects.map((object) => object.id));
+    const selection = typeof options.selection === "string" && existingIds.has(options.selection)
+      ? options.selection
+      : state.selection;
+
+    return {
+      state: { ...state, objects, selection },
+      value: {
+        objects: ordered,
+        changed: groupObjects.some((object, index) => object.id !== normalizedIds[index]),
+        selection
+      }
+    };
+  });
+}
+
 function layerGroupReorderTargetIndex(groupObjects, currentIndex, direction) {
   const selected = groupObjects[currentIndex];
   if (!selected) return -1;
@@ -945,16 +1226,7 @@ export async function updateObject(projectDir, id, patch, options = {}) {
     let updated = null;
     const objects = state.objects.map((object) => {
       if (object.id !== id) return object;
-      updated = {
-        ...object,
-        ...sanitizeObjectPatch(patch),
-        id: object.id,
-        type: object.type,
-        src: object.src,
-        assetPath: object.assetPath,
-        sourcePath: object.sourcePath,
-        createdAt: object.createdAt
-      };
+      updated = objectWithPatch(object, patch);
       return updated;
     });
 
@@ -969,6 +1241,77 @@ export async function updateObject(projectDir, id, patch, options = {}) {
       value: updated
     };
   });
+}
+
+export async function updateObjects(projectDir, updates, options = {}) {
+  if (!Array.isArray(updates) || updates.length === 0) {
+    const error = new Error("update_objects requires at least one object update.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const invalidUpdate = updates.find((update) => (
+    typeof update?.id !== "string"
+    || !update.id.trim()
+    || !update.patch
+    || typeof update.patch !== "object"
+    || Array.isArray(update.patch)
+  ));
+  if (invalidUpdate) {
+    const error = new Error("update_objects requires every update to include an object id and patch object.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const normalizedUpdates = updates.map((update) => ({
+    id: update.id.trim(),
+    patch: update.patch
+  }));
+  if (new Set(normalizedUpdates.map((update) => update.id)).size !== normalizedUpdates.length) {
+    const error = new Error("update_objects requires unique object ids.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return mutateState(projectDir, options, (state) => {
+    const existingIds = new Set(state.objects.map((object) => object.id));
+    const missing = normalizedUpdates.find((update) => !existingIds.has(update.id));
+    if (missing) {
+      const error = new Error(`Canvas object not found: ${missing.id}`);
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const patches = new Map(normalizedUpdates.map((update) => [update.id, update.patch]));
+    const updatedById = new Map();
+    const objects = state.objects.map((object) => {
+      if (!patches.has(object.id)) return object;
+      const updated = objectWithPatch(object, patches.get(object.id));
+      updatedById.set(object.id, updated);
+      return updated;
+    });
+    const selection = Object.hasOwn(options, "selection")
+      ? (typeof options.selection === "string" && existingIds.has(options.selection) ? options.selection : null)
+      : state.selection;
+    return {
+      state: { ...state, objects, selection },
+      value: {
+        objects: normalizedUpdates.map((update) => updatedById.get(update.id)),
+        selection
+      }
+    };
+  });
+}
+
+function objectWithPatch(object, patch) {
+  return {
+    ...object,
+    ...sanitizeObjectPatch(patch),
+    id: object.id,
+    type: object.type,
+    src: object.src,
+    assetPath: object.assetPath,
+    sourcePath: object.sourcePath,
+    createdAt: object.createdAt
+  };
 }
 
 function sanitizeObjectPatch(patch = {}) {
@@ -1040,6 +1383,9 @@ function sanitizeCrop(crop) {
 
 export async function markStaleJobPlaceholders(projectDir, { activePlaceholderIds = [], timeoutMs = 2 * 60_000, backgroundTimeoutMs = 6 * 60_000, canvasId = null } = {}) {
   const options = { canvasId };
+  if (!canvasId && await legacyDefaultCanvasClaimed(projectDir)) {
+    return readState(projectDir, options);
+  }
   return mutateState(projectDir, options, (state) => {
     const active = new Set(activePlaceholderIds);
     const now = Date.now();

@@ -16,12 +16,14 @@ Copy this prompt into Codex:
 
 ```text
 Please install Codex-Canvas according to https://github.com/Xiangyu-CAS/codex-canvas.git and its INSTALL.md.
-After installation, tell the user to type `@Codex-Canvas open the codex canvas` in the current Codex conversation to start.
+After installation, tell the user to start a new Codex task and type `@Codex-Canvas open the codex canvas`.
 ```
 
 See the full installation guide in [`INSTALL.md`](INSTALL.md).
 
-After installation, open the canvas in your current Codex conversation:
+Stable versions ship through GitHub Releases. **Settings → Version** only installs a `vX.Y.Z` release after its assets are complete and its manifest matches the tag, never unreleased commits from `main`. The old server exits after an update; reopen the canvas and start a new Codex task.
+
+After installation, start a new Codex task and open the canvas:
 
 ```text
 @Codex-Canvas open the codex canvas
@@ -37,7 +39,7 @@ After installation, open the canvas in your current Codex conversation:
 
 ### 1. Open a canvas and collect generated images automatically
 
-Type `@Codex-Canvas open the codex canvas` in your current Codex conversation, and Codex-Canvas opens a local project canvas in the in-app browser. Keep chatting on the left while managing visual assets on the right. When Codex/ImageGen creates an image, Codex-Canvas saves it into the current project and places it on the active canvas, so generated results become editable canvas assets immediately.
+Type `@Codex-Canvas open the codex canvas` in your current Codex conversation, and Codex-Canvas opens a local project canvas in the in-app browser. Keep chatting on the left while managing visual assets on the right. Once bound, Codex-Canvas collects only that thread's outputs from `~/.codex/generated_images/<thread-id>`; it does not scan other projects, other threads, or the whole project directory. Results are persisted into that thread's canvas.
 
 <p align="center">
   <img src="assets/readme/auto-collect.webp" alt="Auto collect generated images" width="640">
@@ -86,7 +88,7 @@ Expand provides a visual expansion frame and common aspect-ratio presets such as
 ## Features
 
 - Opens a local infinite canvas in Codex's in-app browser.
-- Automatically collects Codex/ImageGen outputs into the current project canvas.
+- Automatically collects Codex/ImageGen outputs into the bound thread canvas without leaking outputs from other projects or conversations.
 - Supports uploading, importing, arranging, selecting, dragging, deleting, and downloading canvas images.
 - Supports brush annotations and temporary text labels on selected images.
 - Supports Quick Edit, passing annotation colors and text labels to the model as editing references.
@@ -119,6 +121,7 @@ node ./bin/codex-canvas.mjs open --project .
 Related docs:
 
 - [`INSTALL.md`](INSTALL.md): installation guide and optional local dependencies.
+- [`docs/RELEASING.md`](docs/RELEASING.md): versioning, Release PR, tag, and artifact workflow.
 - [`docs/CANVAS_TO_CHAT.md`](docs/CANVAS_TO_CHAT.md): current canvas-to-chat validation results and limitations.
 
 ## Credits

@@ -18,6 +18,6 @@ Use this skill when the user invokes Remove BG from Codex-Canvas or asks to isol
 7. Do not use `#ff00ff` anywhere in the subject.
 8. Keep crisp foreground edges, no cast shadow, no contact shadow, no reflection, and enough padding for reliable alpha conversion.
 9. Save the generated chroma-key PNG under the Codex-Canvas job output directory.
-10. Codex-Canvas will remove the chroma key locally using the imagegen chroma-key helper with soft matte and despill, verify the RGBA alpha PNG, collect it, and place it in a row to the right of the source image.
+10. Codex-Canvas will remove the chroma key locally using its bundled chroma-key helper with soft matte and despill, verify the RGBA alpha PNG, collect it, and place it in a row to the right of the source image.
 
 Do not ask follow-up questions from a background Remove BG job. Make the most reasonable subject isolation from the selected image.

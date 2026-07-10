@@ -206,10 +206,17 @@ async function runViewportSmoke(browser, viewport) {
     await waitForImageDecoded(page, `.canvas-object[data-id="${image.id}"] img`);
 
     await assertCanvasIsNotBlank(page, viewport);
+    if (viewport.name === "desktop") {
+      await assertCanvasInputInteractions(page, image.id);
+    }
+    await activateCanvasTool(page, "select");
 
     await page.locator(`.canvas-object[data-id="${image.id}"]`).click();
     await waitForVisible(page, "#selectionToolbar", "selection toolbar should be visible after image selection");
     await assertLocatorClassContains(page, `.canvas-object[data-id="${image.id}"]`, "selected");
+    if (viewport.name === "desktop") {
+      await assertObjectMoveUndoRedo(page, image.id);
+    }
 
     await assertSingleImageActionToolbar(page);
     await assertExpandComposer(page, viewport);
@@ -222,6 +229,231 @@ async function runViewportSmoke(browser, viewport) {
     await context.close();
     await new Promise((resolve) => server.close(resolve));
   }
+}
+
+async function assertCanvasInputInteractions(page, imageId) {
+  const initialTool = await page.evaluate(() => ({
+    handActive: document.querySelector('[data-tool="hand"]')?.classList.contains("active") || false,
+    selectActive: document.querySelector('[data-tool="select"]')?.classList.contains("active") || false,
+    handCursor: document.querySelector("#board")?.classList.contains("tool-hand") || false
+  }));
+  assert(initialTool.handActive, "Hand should be the default canvas tool");
+  assert(!initialTool.selectActive, "Select should remain available without being the default tool");
+  assert(initialTool.handCursor, "default Hand tool should set the board hand cursor state");
+
+  const blank = await canvasBlankPoint(page);
+  let before = await canvasInputSnapshot(page, imageId);
+  await dragMouse(page, blank, { x: 54, y: 32 });
+  let after = await canvasInputSnapshot(page, imageId);
+  assertNear(after.viewportX - before.viewportX, 54, 0.5, "Hand drag on blank canvas should pan horizontally");
+  assertNear(after.viewportY - before.viewportY, 32, 0.5, "Hand drag on blank canvas should pan vertically");
+  assertNear(after.objectX, before.objectX, 0.01, "Hand drag should not change object x");
+  assertNear(after.objectY, before.objectY, 0.01, "Hand drag should not change object y");
+
+  const objectRect = await page.locator(`.canvas-object[data-id="${imageId}"]`).boundingBox();
+  assertRectVisible(objectRect, "image before Hand drag over object");
+  before = await canvasInputSnapshot(page, imageId);
+  await dragMouse(page, {
+    x: objectRect.x + objectRect.width / 2,
+    y: objectRect.y + objectRect.height / 2
+  }, { x: 38, y: 24 });
+  after = await canvasInputSnapshot(page, imageId);
+  assertNear(after.viewportX - before.viewportX, 38, 0.5, "Hand drag over an object should pan horizontally");
+  assertNear(after.viewportY - before.viewportY, 24, 0.5, "Hand drag over an object should pan vertically");
+  assertNear(after.objectX, before.objectX, 0.01, "Hand drag over an object should not move the object x");
+  assertNear(after.objectY, before.objectY, 0.01, "Hand drag over an object should not move the object y");
+
+  await resetCanvasViewport(page);
+  await activateCanvasTool(page, "select");
+  before = await canvasInputSnapshot(page, imageId);
+  await dragMouse(page, blank, { x: 31, y: -19 }, "middle");
+  after = await canvasInputSnapshot(page, imageId);
+  assertNear(after.viewportX - before.viewportX, 31, 0.5, "middle-button drag should pan in Select mode");
+  assertNear(after.viewportY - before.viewportY, -19, 0.5, "middle-button drag should preserve vertical pointer movement");
+  assertNear(after.objectX, before.objectX, 0.01, "middle-button drag should not move objects");
+
+  await resetCanvasViewport(page);
+  await page.locator("#board").focus();
+  await page.keyboard.down("Space");
+  try {
+    const spacePan = await page.locator("#board").evaluate((element) => element.classList.contains("space-pan"));
+    assert(spacePan, "holding Space should enable temporary pan mode");
+    before = await canvasInputSnapshot(page, imageId);
+    await dragMouse(page, blank, { x: -27, y: 21 });
+    after = await canvasInputSnapshot(page, imageId);
+    assertNear(after.viewportX - before.viewportX, -27, 0.5, "Space plus primary drag should pan horizontally");
+    assertNear(after.viewportY - before.viewportY, 21, 0.5, "Space plus primary drag should pan vertically");
+    assertNear(after.objectX, before.objectX, 0.01, "Space pan should not move objects");
+  } finally {
+    await page.keyboard.up("Space");
+  }
+  const spaceReleased = await page.locator("#board").evaluate((element) => !element.classList.contains("space-pan"));
+  assert(spaceReleased, "releasing Space should leave temporary pan mode");
+
+  await resetCanvasViewport(page);
+  await activateCanvasTool(page, "hand");
+  await page.evaluate(() => {
+    const board = document.querySelector("#board");
+    board.dispatchEvent(new PointerEvent("pointerdown", {
+      bubbles: true,
+      cancelable: true,
+      pointerId: 77,
+      pointerType: "mouse",
+      isPrimary: true,
+      button: 0,
+      clientX: 40,
+      clientY: 160
+    }));
+    board.dispatchEvent(new PointerEvent("pointermove", {
+      bubbles: true,
+      pointerId: 77,
+      pointerType: "mouse",
+      isPrimary: true,
+      buttons: 1,
+      clientX: 62,
+      clientY: 181
+    }));
+    board.dispatchEvent(new PointerEvent("pointercancel", {
+      bubbles: true,
+      pointerId: 77,
+      pointerType: "mouse",
+      isPrimary: true
+    }));
+  });
+  const cancelledPan = await page.locator("#board").evaluate((element) => !element.classList.contains("dragging"));
+  assert(cancelledPan, "pointercancel should fully clean up an active pan");
+
+  await resetCanvasViewport(page);
+  const boardRect = await page.locator("#board").boundingBox();
+  assertRectVisible(boardRect, "board before wheel input checks");
+  const wheelPoint = {
+    x: boardRect.x + Math.min(420, boardRect.width * 0.42),
+    y: boardRect.y + Math.min(310, boardRect.height * 0.42)
+  };
+
+  before = await canvasInputSnapshot(page, imageId);
+  let wheelResult = await dispatchCanvasWheel(page, wheelPoint, { deltaX: 13, deltaY: -17 });
+  after = await canvasInputSnapshot(page, imageId);
+  assert(wheelResult.defaultPrevented, "canvas two-axis wheel pan should prevent native page scrolling");
+  assertNear(after.viewportX - before.viewportX, -13, 0.5, "unmodified wheel should pan horizontally");
+  assertNear(after.viewportY - before.viewportY, 17, 0.5, "unmodified wheel should pan vertically");
+  assertNear(after.zoom, before.zoom, 0.0001, "unmodified wheel should not zoom");
+
+  before = after;
+  wheelResult = await dispatchCanvasWheel(page, wheelPoint, { deltaX: 5, deltaY: 7, metaKey: true });
+  after = await canvasInputSnapshot(page, imageId);
+  assert(wheelResult.defaultPrevented, "Command-modified wheel should still be handled as canvas pan");
+  assertNear(after.viewportX - before.viewportX, -5, 0.5, "metaKey should not misclassify horizontal wheel input as zoom");
+  assertNear(after.viewportY - before.viewportY, -7, 0.5, "metaKey should not misclassify vertical wheel input as zoom");
+  assertNear(after.zoom, before.zoom, 0.0001, "metaKey alone should not zoom the canvas");
+
+  before = after;
+  await dispatchCanvasWheel(page, wheelPoint, { deltaX: 1, deltaY: 2, deltaMode: 1 });
+  after = await canvasInputSnapshot(page, imageId);
+  assertNear(after.viewportX - before.viewportX, -16, 0.5, "line-mode wheel x should normalize to pixels");
+  assertNear(after.viewportY - before.viewportY, -32, 0.5, "line-mode wheel y should normalize to pixels");
+
+  before = after;
+  const localPointer = { x: wheelPoint.x - boardRect.x, y: wheelPoint.y - boardRect.y };
+  const anchoredWorldPoint = {
+    x: (localPointer.x - before.viewportX) / before.zoom,
+    y: (localPointer.y - before.viewportY) / before.zoom
+  };
+  await dispatchCanvasWheel(page, wheelPoint, { deltaY: -42, ctrlKey: true });
+  after = await canvasInputSnapshot(page, imageId);
+  assert(after.zoom > before.zoom, "ctrlKey pinch-style wheel should zoom in");
+  assertNear(after.viewportX + anchoredWorldPoint.x * after.zoom, localPointer.x, 0.05, "pinch zoom should preserve the horizontal cursor anchor");
+  assertNear(after.viewportY + anchoredWorldPoint.y * after.zoom, localPointer.y, 0.05, "pinch zoom should preserve the vertical cursor anchor");
+
+  before = after;
+  const nativeWheel = await page.evaluate(() => {
+    const textarea = document.createElement("textarea");
+    textarea.value = "scrollable\n".repeat(20);
+    document.querySelector("#board").append(textarea);
+    const event = new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      deltaY: 28
+    });
+    textarea.dispatchEvent(event);
+    textarea.remove();
+    return { defaultPrevented: event.defaultPrevented };
+  });
+  after = await canvasInputSnapshot(page, imageId);
+  assert(!nativeWheel.defaultPrevented, "wheel over an input should retain native scrolling");
+  assertNear(after.viewportX, before.viewportX, 0.01, "wheel over an input should not pan canvas x");
+  assertNear(after.viewportY, before.viewportY, 0.01, "wheel over an input should not pan canvas y");
+  assertNear(after.zoom, before.zoom, 0.0001, "wheel over an input should not zoom the canvas");
+
+  await resetCanvasViewport(page);
+  await activateCanvasTool(page, "select");
+  await page.locator(`.canvas-object[data-id="${imageId}"]`).click();
+  await activateCanvasTool(page, "hand");
+  await dragMouse(page, blank, { x: 22, y: 18 });
+  const selectionAfterPan = await page.evaluate((imageId) => ({
+    selected: document.querySelector(`.canvas-object[data-id="${imageId}"]`)?.classList.contains("selected") || false,
+    toolbarVisible: !document.querySelector("#selectionToolbar")?.hidden
+  }), imageId);
+  assert(selectionAfterPan.selected, "Hand pan should preserve the current object selection");
+  assert(selectionAfterPan.toolbarVisible, "Hand pan should not dismiss the selected object toolbar");
+
+  await resetCanvasViewport(page);
+  await activateCanvasTool(page, "select");
+}
+
+async function activateCanvasTool(page, tool) {
+  await page.locator(`[data-tool="${tool}"]`).click();
+  await page.waitForFunction((tool) => (
+    document.querySelector(`[data-tool="${tool}"]`)?.classList.contains("active") || false
+  ), tool);
+}
+
+async function canvasBlankPoint(page) {
+  const rect = await page.locator("#board").boundingBox();
+  assertRectVisible(rect, "board before blank-canvas input");
+  return {
+    x: rect.x + 42,
+    y: rect.y + Math.max(120, rect.height - 118)
+  };
+}
+
+async function dragMouse(page, start, delta, button = "left") {
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down({ button });
+  await page.mouse.move(start.x + delta.x, start.y + delta.y, { steps: 4 });
+  await page.mouse.up({ button });
+}
+
+async function resetCanvasViewport(page) {
+  await page.locator('.tool-dock [data-view-action="reset"]').click();
+}
+
+async function canvasInputSnapshot(page, imageId) {
+  return page.evaluate((imageId) => {
+    const matrix = new DOMMatrixReadOnly(getComputedStyle(document.querySelector("#world")).transform);
+    const object = document.querySelector(`.canvas-object[data-id="${imageId}"]`);
+    return {
+      viewportX: matrix.e,
+      viewportY: matrix.f,
+      zoom: matrix.a,
+      objectX: Number.parseFloat(object?.style.left || "0"),
+      objectY: Number.parseFloat(object?.style.top || "0")
+    };
+  }, imageId);
+}
+
+async function dispatchCanvasWheel(page, point, options) {
+  return page.evaluate(({ point, options }) => {
+    const event = new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      clientX: point.x,
+      clientY: point.y,
+      ...options
+    });
+    document.querySelector("#board").dispatchEvent(event);
+    return { defaultPrevented: event.defaultPrevented };
+  }, { point, options });
 }
 
 async function assertDiscoveryVersionBrowser(page, versionIds) {
@@ -381,6 +613,14 @@ async function runEditElementsLayerSmoke(browser) {
     width: 260,
     height: 180
   });
+  const unrelated = await addImage(projectDir, {
+    dataUrl: `data:image/png;base64,${pngTwo}`,
+    name: "visual-elements-unrelated.png",
+    x: 760,
+    y: 250,
+    width: 82,
+    height: 64
+  });
   const foreground = await addImage(projectDir, {
     dataUrl: `data:image/png;base64,${pngOne}`,
     name: "visual-elements-object.png",
@@ -421,6 +661,22 @@ async function runEditElementsLayerSmoke(browser) {
     layerGroupOriginalLayerWidth: 92,
     layerGroupOriginalLayerHeight: 70
   });
+  await updateObject(projectDir, unrelated.id, {
+    layerGroupId: groupId,
+    layerGroupName: "Edit Elements Visual Fixture",
+    layerGroupSourceObjectId: "source-fixture",
+    layerGroupIndex: 1,
+    layerGroupKind: "object",
+    layerGroupLocked: false,
+    layerGroupOriginalX: 360,
+    layerGroupOriginalY: 250,
+    layerGroupOriginalWidth: 260,
+    layerGroupOriginalHeight: 180,
+    layerGroupRelativeX: 400,
+    layerGroupRelativeY: 0,
+    layerGroupOriginalLayerWidth: 82,
+    layerGroupOriginalLayerHeight: 64
+  });
 
   const { server, url } = await createServer({ projectDir, port: 0, autoCollect: false });
   const context = await browser.newContext({
@@ -437,8 +693,10 @@ async function runEditElementsLayerSmoke(browser) {
     await page.goto(url, { waitUntil: "networkidle" });
     await waitForVisible(page, `.canvas-object[data-id="${background.id}"]`, "Edit Elements background layer should render");
     await waitForVisible(page, `.canvas-object[data-id="${foreground.id}"]`, "Edit Elements object layer should render");
+    await waitForVisible(page, `.canvas-object[data-id="${unrelated.id}"]`, "Edit Elements unrelated middle layer should render");
     await waitForImageDecoded(page, `.canvas-object[data-id="${background.id}"] img`);
     await waitForImageDecoded(page, `.canvas-object[data-id="${foreground.id}"] img`);
+    await activateCanvasTool(page, "select");
 
     await assertEditElementsLayerStack(page, {
       backgroundId: background.id,
@@ -452,6 +710,11 @@ async function runEditElementsLayerSmoke(browser) {
       backgroundId: background.id,
       foregroundId: foreground.id,
       groupId
+    });
+    await assertExactLayerReorderHistory(page, {
+      backgroundId: background.id,
+      unrelatedId: unrelated.id,
+      foregroundId: foreground.id
     });
     await assertEditElementsLayerSelectionClears(page);
     await assertVisibleControlsDoNotOverlap(page, viewport);
@@ -641,6 +904,51 @@ async function assertEditElementsLayerSelectionClears(page) {
   assertDeepEqual(toolbarState.visibleGroupActions, [], "Edit Elements group-only actions should be hidden after clearing selection");
 }
 
+async function assertExactLayerReorderHistory(page, { backgroundId, unrelatedId, foregroundId }) {
+  const originalOrder = [backgroundId, unrelatedId, foregroundId];
+  const movedOrder = [foregroundId, backgroundId, unrelatedId];
+  await waitForCanvasObjectOrder(page, originalOrder, "Edit Elements fixture should start in its indexed layer order");
+
+  await page.waitForFunction((foregroundId) => (
+    document.querySelector(`.canvas-object[data-id="${foregroundId}"]`)?.classList.contains("selected") || false
+  ), foregroundId, { timeout: 5_000 });
+  await waitForVisible(page, '#selectionToolbar [data-action="layer-down"]', "Layer down should be available for exact history coverage");
+  await page.waitForFunction(() => !document.querySelector('#selectionToolbar [data-action="layer-down"]')?.disabled, null, { timeout: 5_000 });
+  await page.locator('#selectionToolbar [data-action="layer-down"]').click();
+  await waitForCanvasObjectOrder(page, movedOrder, "Layer down should skip the non-overlapping middle layer");
+  await waitForHistoryButton(page, "undo");
+
+  await page.locator('[data-history-action="undo"]').click();
+  await waitForCanvasObjectOrder(page, originalOrder, "Undo should restore the exact original layer order");
+  await waitForHistoryButton(page, "redo");
+
+  await page.locator('[data-history-action="redo"]').click();
+  await waitForCanvasObjectOrder(page, movedOrder, "Redo should restore the exact moved layer order");
+  await waitForHistoryButton(page, "undo");
+
+  await page.locator('[data-history-action="undo"]').click();
+  await waitForCanvasObjectOrder(page, originalOrder, "final Undo should leave the fixture in its original layer order");
+}
+
+async function waitForCanvasObjectOrder(page, expectedOrder, message) {
+  await page.waitForFunction((expected) => {
+    const expectedIds = new Set(expected);
+    const actual = [...document.querySelectorAll(".canvas-object")]
+      .map((element) => element.dataset.id)
+      .filter((id) => expectedIds.has(id));
+    return actual.join(",") === expected.join(",");
+  }, expectedOrder, { timeout: 5_000 }).catch((error) => {
+    throw new Error(`${message}: ${error.message}`);
+  });
+}
+
+async function waitForHistoryButton(page, action) {
+  await page.waitForFunction((action) => {
+    const button = document.querySelector(`[data-history-action="${action}"]`);
+    return Boolean(button && !button.disabled);
+  }, action, { timeout: 5_000 });
+}
+
 async function assertEditElementsLayerSelection(page, { backgroundId, foregroundId, groupId }) {
   const selection = await page.evaluate(({ backgroundId, foregroundId, groupId }) => {
     const background = document.querySelector(`.canvas-object[data-id="${backgroundId}"]`);
@@ -824,6 +1132,57 @@ async function assertDeleteUndoShortcut(page, objectId) {
   ), objectId);
   assert(restored.exists, "Ctrl+Z undo should restore the deleted object in persisted state");
   assert(restored.selected, "Ctrl+Z undo should restore selection to the deleted object");
+
+  await page.keyboard.press("Control+Shift+Z");
+  await waitForHidden(page, `.canvas-object[data-id="${objectId}"]`, "Ctrl+Shift+Z redo should delete the restored object again");
+  await page.keyboard.press("Control+Z");
+  await waitForVisible(page, `.canvas-object[data-id="${objectId}"]`, "Ctrl+Z should undo the shortcut redo");
+  await page.keyboard.press("Control+Y");
+  await waitForHidden(page, `.canvas-object[data-id="${objectId}"]`, "Ctrl+Y redo should delete the restored object on Windows-style shortcuts");
+  await page.keyboard.press("Control+Z");
+  await waitForVisible(page, `.canvas-object[data-id="${objectId}"]`, "final undo should leave the deleted object restored for later checks");
+}
+
+async function assertObjectMoveUndoRedo(page, objectId) {
+  const before = await persistedObjectPosition(page, objectId);
+  const rect = await page.locator(`.canvas-object[data-id="${objectId}"]`).boundingBox();
+  assertRectVisible(rect, "selected object before move history check");
+  await dragMouse(page, {
+    x: rect.x + rect.width / 2,
+    y: rect.y + rect.height / 2
+  }, { x: 36, y: 20 });
+  const moved = await waitForPersistedObjectPosition(page, objectId, before, { different: true });
+
+  await page.keyboard.press("Control+Z");
+  await waitForPersistedObjectPosition(page, objectId, before);
+  await page.keyboard.press("Control+Shift+Z");
+  await waitForPersistedObjectPosition(page, objectId, moved);
+  await page.keyboard.press("Control+Z");
+  await waitForPersistedObjectPosition(page, objectId, before);
+}
+
+async function persistedObjectPosition(page, objectId) {
+  return page.evaluate((objectId) => fetch(`/api/state${window.location.search}`)
+    .then((response) => response.json())
+    .then((state) => {
+      const object = state.objects.find((item) => item.id === objectId);
+      return { x: object?.x, y: object?.y };
+    }), objectId);
+}
+
+async function waitForPersistedObjectPosition(page, objectId, expected, { different = false } = {}) {
+  const handle = await page.waitForFunction(({ objectId, expected, different }) => fetch(`/api/state${window.location.search}`)
+    .then((response) => response.json())
+    .then((state) => {
+      const object = state.objects.find((item) => item.id === objectId);
+      if (!object) return null;
+      const position = { x: object.x, y: object.y };
+      const matches = different
+        ? position.x !== expected.x || position.y !== expected.y
+        : position.x === expected.x && position.y === expected.y;
+      return matches ? position : null;
+    }), { objectId, expected, different }, { timeout: 5000 });
+  return handle.jsonValue();
 }
 
 async function assertVisibleControlsDoNotOverlap(page, viewport) {
@@ -886,8 +1245,8 @@ async function waitForHidden(page, selector, message) {
 
 async function waitForImageDecoded(page, selector) {
   await page.waitForFunction((target) => {
-    const image = document.querySelector(target);
-    return Boolean(image?.complete && image.naturalWidth > 0 && image.naturalHeight > 0);
+    const images = [...document.querySelectorAll(target)];
+    return images.length > 0 && images.every((image) => image.complete && image.naturalWidth > 0 && image.naturalHeight > 0);
   }, selector, { timeout: 5000 });
 }
 
@@ -927,6 +1286,10 @@ function assertRectVisible(rect, label) {
   assert(Boolean(rect), `${label} should have a bounding box`);
   assert(rect.width > 0, `${label} should have visible width`);
   assert(rect.height > 0, `${label} should have visible height`);
+}
+
+function assertNear(actual, expected, tolerance, message) {
+  assert(Math.abs(actual - expected) <= tolerance, `${message}. Expected ${expected} ± ${tolerance}, got ${actual}.`);
 }
 
 function assertDeepEqual(actual, expected, message) {

@@ -12,10 +12,14 @@ const editGap = 72;
 const batchWindowMs = 12_000;
 const defaultCollectLimit = 20;
 const maxCollectLimit = 100;
+const generatedImagesRootEnv = "CODEX_CANVAS_GENERATED_IMAGES_ROOT";
 
 export async function collectRecentImages(projectDir, options = {}) {
   const storeOptions = { canvasId: options.canvasId || null };
-  const roots = normalizeRoots(projectDir, options.roots);
+  const roots = normalizeRoots(projectDir, options.roots, {
+    threadId: options.threadId,
+    generatedImagesRoot: options.generatedImagesRoot
+  });
   const sinceMs = Number.isFinite(options.sinceMs) ? options.sinceMs : Date.now() - 2 * 60 * 60 * 1000;
   const limit = normalizeCollectLimit(options.limit);
   const excludePaths = new Set((options.excludePaths || []).map((item) => path.resolve(item)));
@@ -178,11 +182,27 @@ function displayHeight(candidate) {
   return Number.isFinite(candidate.height) ? candidate.height : 360;
 }
 
-function normalizeRoots(projectDir, roots) {
+function normalizeRoots(projectDir, roots, options = {}) {
   if (!roots || roots.length === 0) {
-    return [path.join(os.homedir(), ".codex", "generated_images"), projectDir];
+    const threadRoot = generatedImagesDirForThread(options.threadId, options.generatedImagesRoot);
+    return threadRoot ? [threadRoot] : [];
   }
   return roots.map((root) => path.resolve(projectDir, root));
+}
+
+export function defaultGeneratedImagesRoot() {
+  return path.resolve(
+    process.env[generatedImagesRootEnv]
+    || path.join(os.homedir(), ".codex", "generated_images")
+  );
+}
+
+export function generatedImagesDirForThread(threadId, generatedImagesRoot = defaultGeneratedImagesRoot()) {
+  const normalizedThreadId = typeof threadId === "string" ? threadId.trim() : "";
+  if (!normalizedThreadId || normalizedThreadId === "." || normalizedThreadId === ".." || /[\\/\0]/.test(normalizedThreadId)) {
+    return null;
+  }
+  return path.join(path.resolve(generatedImagesRoot), normalizedThreadId);
 }
 
 async function walkImages(currentPath, context) {

@@ -17,11 +17,25 @@
     "AGENTS.md",
     "INSTALL.md",
     "README.md",
-    "assets/",
+    "README.en.md",
+    "README.ja.md",
+    "SKILL.md",
+    "LICENSE",
+    "assets/icon.png",
     "bin/",
-    "docs/",
-    "public/",
-    "scripts/",
+    "public/app.js",
+    "public/canvas-history.js",
+    "public/icon.png",
+    "public/index.html",
+    "public/styles.css",
+    "scripts/compose_annotations.py",
+    "scripts/checkout-stable-release.mjs",
+    "scripts/install-personal-plugin.mjs",
+    "scripts/prepare_completed_background.py",
+    "scripts/prepare_expand_canvas.py",
+    "scripts/remove_chroma_key_connected.py",
+    "scripts/split_elements.py",
+    "scripts/verify_elements_layers.py",
     "skills/",
     "src/"
   ],
@@ -29,6 +43,7 @@
     "setup:ocr": "node ./bin/codex-canvas.mjs setup-ocr",
     "setup:image-deps": "node ./bin/codex-canvas.mjs setup-image-deps",
     "setup:deps": "node ./bin/codex-canvas.mjs setup-deps",
+    "checkout:stable": "node ./scripts/checkout-stable-release.mjs",
     "install:personal": "node ./scripts/install-personal-plugin.mjs",
     "install:dev-cache": "node ./scripts/link-dev-plugin-cache.mjs",
     "doctor:ocr": "node ./bin/codex-canvas.mjs doctor-ocr --json",
@@ -39,6 +54,9 @@
     "smoke": "node ./scripts/smoke.mjs",
     "smoke:visual": "node ./scripts/visual-smoke.mjs",
     "visual:regression": "node ./scripts/visual-regression.mjs",
+    "verify:release": "node ./scripts/verify-release.mjs",
+    "verify:archive": "node ./scripts/verify-release-archive.mjs",
+    "build:release": "node ./scripts/build-release.mjs",
     "test": "npm run smoke"
   },
   "keywords": [
@@ -56,6 +74,7 @@
   },
   "dependencies": {
     "ag-psd": "^31.0.0",
+    "cross-spawn": "^7.0.6",
     "pngjs": "^7.0.0"
   }
 }

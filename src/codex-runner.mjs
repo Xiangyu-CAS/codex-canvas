@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import crossSpawn from "cross-spawn";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -47,7 +48,7 @@ export async function startCodexImageJob({ projectDir, action, imagePath, output
   for (const attachedImagePath of imagePaths) {
     args.push("--image", attachedImagePath);
   }
-  args.push("--", prompt);
+  args.push("--", "-");
 
   const child = spawnCodexProcess(executable, args, {
     cwd: projectDir,
@@ -56,9 +57,11 @@ export async function startCodexImageJob({ projectDir, action, imagePath, output
       CODEX_CANVAS_JOB_OUTPUT_DIR: outputDir,
       NO_COLOR: "1"
     },
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true
   });
+  child.stdin.on("error", () => {});
+  child.stdin.end(prompt);
 
   const done = new Promise((resolve, reject) => {
     const output = [];
@@ -92,9 +95,48 @@ export async function startCodexImageJob({ projectDir, action, imagePath, output
 }
 
 export function spawnCodexProcess(executable, args, options = {}) {
-  return spawn(executable, args, {
+  return crossSpawn(executable, args, {
     ...options,
-    shell: options.shell ?? shouldUseShellForCommandScript(executable)
+    shell: false
+  });
+}
+
+export function stopCodexProcess(child, signal = "SIGTERM") {
+  if (!child || child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve(false);
+  }
+  if (process.platform !== "win32") {
+    try {
+      return Promise.resolve(child.kill(signal));
+    } catch {
+      return Promise.resolve(false);
+    }
+  }
+  if (!Number.isInteger(child.pid) || child.pid <= 0) {
+    return Promise.resolve(false);
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (stopped) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve(stopped);
+    };
+    const killer = spawn("taskkill.exe", ["/pid", String(child.pid), "/t", "/f"], {
+      stdio: "ignore",
+      windowsHide: true
+    });
+    const timeout = setTimeout(() => {
+      try {
+        killer.kill();
+      } catch {}
+      finish(false);
+    }, 2500);
+    timeout.unref?.();
+    killer.once("error", () => finish(false));
+    killer.once("close", (code) => finish(code === 0));
   });
 }
 
@@ -155,10 +197,6 @@ async function isExecutable(filePath) {
   } catch {
     return false;
   }
-}
-
-function shouldUseShellForCommandScript(filePath) {
-  return process.platform === "win32" && /\.(?:cmd|bat)$/i.test(filePath);
 }
 
 function transparentLayerChromaInstructions() {

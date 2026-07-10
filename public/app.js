@@ -1,3 +1,5 @@
+import { CanvasHistory } from "./canvas-history.js";
+
 const board = document.querySelector("#board");
 const world = document.querySelector("#world");
 const objectLayer = document.querySelector("#objects");
@@ -28,11 +30,15 @@ const quickEditColorPalette = document.querySelector("#quickEditColorPalette");
 const zoomLabel = document.querySelector("#zoomLabel");
 const toast = document.querySelector("#toast");
 const toolDock = document.querySelector(".tool-dock");
+const undoButton = document.querySelector('[data-history-action="undo"]');
+const redoButton = document.querySelector('[data-history-action="redo"]');
 const imageUploadInput = document.querySelector("#imageUploadInput");
 const colorPalette = document.querySelector("#colorPalette");
 const canvasSearch = createCanvasSearchUi();
+const defaultCanvasTool = "hand";
 const zoomWheelSensitivity = 0.0024;
 const maxWheelZoomDelta = 160;
+const wheelLinePixelSize = 16;
 const uploadMaxDisplaySize = 420;
 const searchDebounceMs = 180;
 const languageStorageKey = "codexCanvasLanguage";
@@ -65,8 +71,11 @@ const translations = {
     updateBlockedDetached: "Detached HEAD",
     updateBlockedNoUpstream: "No upstream",
     updateBlockedNotGit: "Manual",
+    updateBlockedSource: "Reinstall",
+    updateBlockedRemote: "Offline",
+    updateBlockedRelease: "Manual",
     updateRunning: "Updating...",
-    updateDone: "Updated. Refresh canvas to use the new version.",
+    updateDone: "Updated. Close the canvas and start a new Codex task to load the new version.",
     updateFailed: "Update failed.",
     projectOptions: "Project options",
     switchCanvas: "Switch canvas",
@@ -125,6 +134,7 @@ const translations = {
     jobRunning: "Running...",
     jobDone: "finished and was added to the canvas.",
     jobFailed: "failed.",
+    jobDeleteBlocked: "A running image job cannot be deleted. Wait for it to finish or fail.",
     chatSendStarted: "Sending image to bound chat...",
     chatSendDone: "Image submitted through Codex app-server. If it does not appear in the visible chat, use Copy @file.",
     fileMentionCopied: "@file reference copied. Paste it into the Codex chat box.",
@@ -164,12 +174,15 @@ const translations = {
       "download": "Download"
     },
     tools: {
+      hand: "Hand",
       select: "Select",
       pencil: "Pencil",
       text: "Text",
       "upload-image": "Upload image"
     },
     controls: {
+      undo: "Undo",
+      redo: "Redo",
       reset: "Reset view"
     },
     objectTypes: {
@@ -197,8 +210,11 @@ const translations = {
     updateBlockedDetached: "游离 HEAD",
     updateBlockedNoUpstream: "无上游",
     updateBlockedNotGit: "需手动",
+    updateBlockedSource: "需重装",
+    updateBlockedRemote: "网络不可用",
+    updateBlockedRelease: "需手动",
     updateRunning: "更新中...",
-    updateDone: "已更新，刷新画布后生效。",
+    updateDone: "已更新。请关闭画布并新建 Codex 任务，以加载新版 MCP 和技能。",
     updateFailed: "更新失败。",
     projectOptions: "项目选项",
     switchCanvas: "切换画布",
@@ -257,6 +273,7 @@ const translations = {
     jobRunning: "运行中...",
     jobDone: "已完成并添加到画布。",
     jobFailed: "失败。",
+    jobDeleteBlocked: "图片任务仍在运行，完成或失败后才能删除。",
     chatSendStarted: "正在发送图片到已绑定对话...",
     chatSendDone: "图片已通过 Codex app-server 提交；如果当前对话没有显示，请用“复制 @文件”。",
     fileMentionCopied: "@file 引用已复制，请粘贴到 Codex 聊天框。",
@@ -296,12 +313,15 @@ const translations = {
       "download": "下载"
     },
     tools: {
+      hand: "抓手",
       select: "选择",
       pencil: "画笔",
       text: "文字",
       "upload-image": "上传图片"
     },
     controls: {
+      undo: "撤销",
+      redo: "重做",
       reset: "重置视图"
     },
     objectTypes: {
@@ -315,10 +335,12 @@ const translations = {
 
 let state = null;
 let knownObjectIds = null;
+let suppressNextAutoFocus = false;
 let selectedId = null;
 let selectedIds = new Set();
 let hasUserSelection = false;
-let activeTool = "select";
+let activeTool = defaultCanvasTool;
+let spacePanPressed = false;
 let activeColor = loadToolColor();
 let editingTextId = null;
 let language = loadLanguage();
@@ -353,9 +375,12 @@ let appUpdateBusy = false;
 const composerImageActions = new Set(["quick-edit", "expand", "edit-text"]);
 const immediateImageJobActions = new Set(["remove-bg", "edit-elements"]);
 const groupSelectionActions = new Set(["reset-layer-group", "layer-up", "layer-down", "group-layer-group"]);
-const undoStack = [];
 const maxUndoStackSize = 50;
-let undoInProgress = false;
+const canvasHistory = new CanvasHistory({
+  maxSize: maxUndoStackSize,
+  onChange: renderCanvasHistoryStatus
+});
+let canvasScope = null;
 const singleSelectionActions = new Set([
   ...composerImageActions,
   ...immediateImageJobActions,
@@ -366,6 +391,8 @@ const singleSelectionActions = new Set([
 
 initPromptHistoryUi();
 applyLanguage();
+setActiveTool(defaultCanvasTool);
+renderCanvasHistoryStatus();
 renderColorPalette();
 await loadProjects();
 await loadState();
@@ -426,10 +453,17 @@ appUpdateButton?.addEventListener("click", (event) => {
 });
 
 toolDock.addEventListener("click", (event) => {
+  const historyButton = event.target.closest("[data-history-action]");
+  if (historyButton) {
+    event.preventDefault();
+    runCanvasHistoryAction(historyButton.dataset.historyAction);
+    return;
+  }
   const button = event.target.closest("[data-tool]");
   if (!button) return;
   event.preventDefault();
   setActiveTool(button.dataset.tool);
+  if (event.detail > 0) board.focus({ preventScroll: true });
 });
 
 imageUploadInput.addEventListener("change", () => {
@@ -551,10 +585,16 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
-  if (isUndoShortcut(event)) {
+  const historyDirection = canvasHistoryShortcut(event);
+  if (historyDirection) {
     if (isNativeUndoTarget(event.target)) return;
     event.preventDefault();
-    undoLastCanvasAction();
+    runCanvasHistoryAction(historyDirection);
+    return;
+  }
+  if (event.code === "Space" && !isShortcutEditingTarget(event.target)) {
+    event.preventDefault();
+    setSpacePanPressed(true);
     return;
   }
   if (!selectedIds.size && !selectedId) return;
@@ -565,7 +605,7 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   if (isShortcutEditingTarget(event.target)) return;
-  if (event.key === "Enter" || event.key === " ") {
+  if (event.key === "Enter") {
     if (selectedIds.size > 1) return;
     const object = state.objects.find((item) => item.id === selectedId);
     if (!object || (object.type || "image") !== "image") return;
@@ -574,18 +614,26 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+document.addEventListener("keyup", (event) => {
+  if (event.code === "Space") setSpacePanPressed(false);
+});
+
+window.addEventListener("blur", () => setSpacePanPressed(false));
+
+board.addEventListener("pointerdown", (event) => {
+  if (!shouldStartPan(event) || isCanvasPanBlockedTarget(event.target)) return;
+  startPan(event);
+}, { capture: true });
+
 board.addEventListener("pointerdown", (event) => {
   if (event.target === board || event.target === world || event.target === objectLayer) {
+    if (event.button !== 0 || event.isPrimary === false) return;
     if (activeTool === "pencil") {
       startDrawing(event);
       return;
     }
     if (activeTool === "text") {
       createTextObject(event);
-      return;
-    }
-    if (event.button === 1 || event.altKey) {
-      startPan(event);
       return;
     }
     startMarqueeSelection(event);
@@ -655,18 +703,20 @@ quickEditPrompt.addEventListener("keydown", (event) => {
 });
 
 board.addEventListener("wheel", (event) => {
+  if (shouldUseNativeWheel(event.target)) return;
   event.preventDefault();
-  if (event.ctrlKey || event.metaKey) {
+  const delta = normalizedWheelDelta(event);
+  if (event.ctrlKey) {
     const rect = board.getBoundingClientRect();
     const before = screenToWorld(event.clientX - rect.left, event.clientY - rect.top);
-    const delta = clamp(event.deltaY, -maxWheelZoomDelta, maxWheelZoomDelta);
-    const factor = Math.exp(-delta * zoomWheelSensitivity);
+    const zoomDelta = clamp(delta.y, -maxWheelZoomDelta, maxWheelZoomDelta);
+    const factor = Math.exp(-zoomDelta * zoomWheelSensitivity);
     viewport.zoom = clamp(viewport.zoom * factor, 0.12, 2.2);
     viewport.x = event.clientX - rect.left - before.x * viewport.zoom;
     viewport.y = event.clientY - rect.top - before.y * viewport.zoom;
   } else {
-    viewport.x -= event.deltaX;
-    viewport.y -= event.deltaY;
+    viewport.x -= delta.x;
+    viewport.y -= delta.y;
   }
   applyViewport();
   updateSelectionUi();
@@ -1111,14 +1161,16 @@ async function copyPromptToClipboard(prompt) {
 }
 
 async function loadState() {
-  if (drag || resize || marquee || editingTextId || isComposerActive()) return;
+  if (drag || resize || marquee || pan || drawing || editingTextId || canvasHistory.busy || isComposerActive()) return;
   const response = await fetch(apiPath("/api/state"));
   const nextState = await response.json();
+  updateCanvasScope(nextState.canvasScope);
   const previousObjectIds = knownObjectIds;
   const addedObjects = previousObjectIds
     ? nextState.objects.filter((object) => !previousObjectIds.has(object.id))
     : [];
-  const autoFocusObject = autoFocusObjectForStateUpdate(nextState, addedObjects);
+  const autoFocusObject = suppressNextAutoFocus ? null : autoFocusObjectForStateUpdate(nextState, addedObjects);
+  suppressNextAutoFocus = false;
 
   state = nextState;
   knownObjectIds = new Set(state.objects.map((object) => object.id));
@@ -1496,6 +1548,7 @@ function render() {
     }
 
     element.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || event.isPrimary === false || activeTool === "hand") return;
       if (activeTool === "pencil") {
         startDrawing(event);
         return;
@@ -2016,6 +2069,7 @@ function renderResizeHandles(object) {
 }
 
 function startDrag(event, object, options = {}) {
+  if (event.button !== 0 || event.isPrimary === false) return;
   event.preventDefault();
   event.stopPropagation();
   const element = event.currentTarget;
@@ -2052,7 +2106,9 @@ function startDrag(event, object, options = {}) {
     startX: event.clientX,
     startY: event.clientY,
     objectX: object.x,
-    objectY: object.y
+    objectY: object.y,
+    selectionBefore: captureSelectionSnapshot(),
+    scopeMeta: currentCanvasScopeMeta()
   };
   updateSelectionUi();
   fetch(apiPath("/api/selection"), {
@@ -2133,7 +2189,7 @@ function updateVersionDiffOverlayElement() {
   else element.remove();
 }
 
-async function endDrag(event) {
+function endDrag(event) {
   window.removeEventListener("pointermove", moveDrag);
   window.removeEventListener("pointerup", endDrag);
   window.removeEventListener("pointercancel", endDrag);
@@ -2150,30 +2206,36 @@ async function endDrag(event) {
     }
   }
   drag = null;
+  const before = activeDrag.multiMembers?.length
+    ? activeDrag.multiMembers.map((item) => ({ id: item.id, patch: { x: item.x, y: item.y } }))
+    : activeDrag.groupId
+      ? activeDrag.members.map((item) => ({ id: item.id, patch: { x: item.x, y: item.y } }))
+      : [{ id: activeDrag.id, patch: { x: activeDrag.objectX, y: activeDrag.objectY } }];
+  const after = before.map((update) => {
+    const member = state.objects.find((item) => item.id === update.id);
+    return {
+      id: update.id,
+      patch: { x: member?.x ?? update.patch.x, y: member?.y ?? update.patch.y }
+    };
+  });
+  if (event?.type === "pointercancel") {
+    applyObjectPatchesLocally(before);
+    render();
+    return;
+  }
   if (activeDrag.expandPreview) {
     updateExpandPreviewPosition();
     updateSelectionUi();
-  } else if (activeDrag.multiMembers?.length) {
-    await Promise.all(activeDrag.multiIds.map((id) => {
-      const member = state.objects.find((item) => item.id === id);
-      if (!member) return Promise.resolve();
-      return fetch(apiPath(`/api/objects/${member.id}`), {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ x: member.x, y: member.y })
-      }).catch(() => {});
-    }));
-    render();
-  } else if (activeDrag.groupId) {
-    await patchLayerGroupMembersSequentially(layerGroupMembers(activeDrag.groupId), (member) => ({ x: member.x, y: member.y }));
-    render();
-  } else if (object) {
-    await fetch(apiPath(`/api/objects/${object.id}`), {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ x: object.x, y: object.y })
+    return;
+  }
+  if (object || activeDrag.multiMembers?.length || activeDrag.groupId) {
+    commitObjectUpdateHistory({
+      before,
+      after,
+      selectionBefore: activeDrag.selectionBefore,
+      selectionAfter: captureSelectionSnapshot(),
+      scopeMeta: activeDrag.scopeMeta
     });
-    render();
   }
 }
 
@@ -2195,7 +2257,9 @@ function startResize(event, object, direction) {
     objectHeight: object.height,
     aspectRatio: object.width / Math.max(1, object.height),
     anchorX: direction.includes("w") ? object.x + object.width : object.x,
-    anchorY: direction.includes("n") ? object.y + object.height : object.y
+    anchorY: direction.includes("n") ? object.y + object.height : object.y,
+    selectionBefore: captureSelectionSnapshot(),
+    scopeMeta: currentCanvasScopeMeta()
   };
   fetch(apiPath("/api/selection"), {
     method: "POST",
@@ -2227,22 +2291,41 @@ function moveResize(event) {
   updateSelectionUi();
 }
 
-async function endResize() {
+function endResize(event) {
   window.removeEventListener("pointermove", moveResize);
   window.removeEventListener("pointerup", endResize);
   window.removeEventListener("pointercancel", endResize);
   if (!resize) return;
-  const object = state.objects.find((item) => item.id === resize.id);
-  resize.element?.classList.remove("resizing");
+  const activeResize = resize;
+  const object = state.objects.find((item) => item.id === activeResize.id);
+  activeResize.element?.classList.remove("resizing");
   resize = null;
-  if (object) {
-    await fetch(apiPath(`/api/objects/${object.id}`), {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ x: object.x, y: object.y, width: object.width, height: object.height })
-    }).catch(() => {});
+  if (!object) return;
+  const before = [{
+    id: object.id,
+    patch: {
+      x: activeResize.objectX,
+      y: activeResize.objectY,
+      width: activeResize.objectWidth,
+      height: activeResize.objectHeight
+    }
+  }];
+  const after = [{
+    id: object.id,
+    patch: { x: object.x, y: object.y, width: object.width, height: object.height }
+  }];
+  if (event?.type === "pointercancel") {
+    applyObjectPatchesLocally(before);
     render();
+    return;
   }
+  commitObjectUpdateHistory({
+    before,
+    after,
+    selectionBefore: activeResize.selectionBefore,
+    selectionAfter: captureSelectionSnapshot(),
+    scopeMeta: activeResize.scopeMeta
+  });
 }
 
 function resizedImageRect(start, dx, dy) {
@@ -2315,7 +2398,7 @@ function cancelCropSession(event) {
   render();
 }
 
-async function applyCropSession(event) {
+function applyCropSession(event) {
   event?.preventDefault();
   event?.stopPropagation();
   if (!cropSession) return;
@@ -2333,35 +2416,52 @@ async function applyCropSession(event) {
     width: previousCrop.width * (box.width / object.width),
     height: previousCrop.height * (box.height / object.height)
   });
+  const scopeMeta = currentCanvasScopeMeta();
+  const selectionBefore = captureSelectionSnapshot();
 
-  try {
-    const dataUrl = await renderCroppedImageDataUrl(object, crop);
-    const croppedWidth = Math.max(1, Math.round(box.width));
-    const croppedHeight = Math.max(1, Math.round(box.height));
-    const response = await fetch(apiPath("/api/images"), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        dataUrl,
-        name: croppedImageName(object),
-        prompt: `Cropped from ${object.name || object.id}`,
-        layoutMode: "canvas-row",
-        sourceObjectId: object.id,
-        x: Math.round(object.x + object.width + 72),
-        y: Math.round(object.y),
-        width: croppedWidth,
-        height: croppedHeight
-      })
-    });
-    const croppedObject = await response.json();
-    if (!response.ok) throw new Error(croppedObject.error || t("jobFailed"));
-    cropSession = null;
-    cropDrag = null;
-    setLocalSelection([croppedObject.id], { fromUser: true });
-    await loadState();
-  } catch (error) {
-    showToast(error?.message || t("jobFailed"));
-  }
+  return canvasHistory.commit(async () => {
+    try {
+      const dataUrl = await renderCroppedImageDataUrl(object, crop);
+      const croppedWidth = Math.max(1, Math.round(box.width));
+      const croppedHeight = Math.max(1, Math.round(box.height));
+      const response = await fetch(apiPath("/api/images"), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(withExpectedCanvasScope({
+          dataUrl,
+          name: croppedImageName(object),
+          prompt: `Cropped from ${object.name || object.id}`,
+          layoutMode: "canvas-row",
+          sourceObjectId: object.id,
+          x: Math.round(object.x + object.width + 72),
+          y: Math.round(object.y),
+          width: croppedWidth,
+          height: croppedHeight
+        }, scopeMeta))
+      });
+      const croppedObject = await response.json();
+      if (!response.ok) throw new Error(croppedObject.error || t("jobFailed"));
+      const index = state.objects.length;
+      state.objects.push(croppedObject);
+      cropSession = null;
+      cropDrag = null;
+      setLocalSelection([croppedObject.id], { fromUser: true });
+      refreshKnownObjectIds();
+      render();
+      return {
+        action: {
+          type: "create",
+          entries: [{ object: cloneCanvasObject(croppedObject), index }],
+          selectionBefore,
+          selectionAfter: selectionSnapshotForIds([croppedObject.id]),
+          scopeMeta
+        }
+      };
+    } catch (error) {
+      showToast(error?.message || t("jobFailed"));
+      return null;
+    }
+  });
 }
 
 async function renderCroppedImageDataUrl(object, crop) {
@@ -2703,18 +2803,38 @@ function hideSelectionToolbar() {
   });
 }
 
+function shouldStartPan(event) {
+  if (event.isPrimary === false) return false;
+  if (event.button === 1) return true;
+  return event.button === 0 && (activeTool === "hand" || spacePanPressed);
+}
+
+function isCanvasPanBlockedTarget(target) {
+  if (!(target instanceof Element)) return false;
+  return Boolean(target.closest("button, input, textarea, select, [contenteditable='true'], .selection-toolbar, .quick-edit-composer"));
+}
+
 function startPan(event) {
+  if (pan) return;
   event.preventDefault();
+  event.stopImmediatePropagation();
   board.classList.add("dragging");
-  board.setPointerCapture(event.pointerId);
   pan = {
+    pointerId: event.pointerId,
     startX: event.clientX,
     startY: event.clientY,
     viewportX: viewport.x,
     viewportY: viewport.y
   };
-  board.addEventListener("pointermove", movePan);
-  board.addEventListener("pointerup", endPan, { once: true });
+  window.addEventListener("pointermove", movePan);
+  window.addEventListener("pointerup", endPan);
+  window.addEventListener("pointercancel", endPan);
+  board.addEventListener("lostpointercapture", endPan);
+  try {
+    board.setPointerCapture(event.pointerId);
+  } catch {
+    // Window-level listeners keep panning usable when capture is unavailable.
+  }
 }
 
 function startDrawing(event) {
@@ -2777,7 +2897,7 @@ async function endDrawing() {
     });
     setLocalSelection([object.id], { fromUser: true });
     render();
-    setActiveTool("select");
+    setActiveTool(defaultCanvasTool);
   } catch (error) {
     showToast(error?.message || t("jobFailed"));
   }
@@ -2814,184 +2934,420 @@ async function createTextObject(event) {
     editingTextId = object.id;
     render();
     focusTextObject(object.id);
-    setActiveTool("select");
+    setActiveTool(defaultCanvasTool);
   } catch (error) {
     showToast(error?.message || t("jobFailed"));
   }
 }
 
 async function createObject(payload) {
-  const response = await fetch(apiPath("/api/objects"), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload)
+  const scopeMeta = currentCanvasScopeMeta();
+  const selectionBefore = captureSelectionSnapshot();
+  return canvasHistory.commit(async () => {
+    const response = await fetch(apiPath("/api/objects"), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(withExpectedCanvasScope(payload, scopeMeta))
+    });
+    const object = await response.json();
+    if (!response.ok) throw new Error(object.error || t("jobFailed"));
+    const index = state.objects.length;
+    state.objects.push(object);
+    refreshKnownObjectIds();
+    return {
+      value: object,
+      action: {
+        type: "create",
+        entries: [{ object: cloneCanvasObject(object), index }],
+        selectionBefore,
+        selectionAfter: selectionSnapshotForIds([object.id]),
+        scopeMeta
+      }
+    };
   });
-  const object = await response.json();
-  if (!response.ok) throw new Error(object.error || t("jobFailed"));
-  state.objects.push(object);
-  return object;
 }
 
-async function deleteSelectedObject() {
+function deleteSelectedObject() {
   const ids = selectedIds.size ? [...selectedIds] : (selectedId ? [selectedId] : []);
   if (!ids.length) return;
-  const previousObjects = [...state.objects];
-  const previousSelection = state.selection;
-  const previousSelectedIds = new Set(selectedIds);
-  const previousSelectedId = selectedId;
+  const groupId = ids.length === 1 ? selectedLayerGroupId() : null;
+  const deleteIds = groupId ? layerGroupMembers(groupId).map((object) => object.id) : ids;
+  const blockedJob = state.objects.find((object) => deleteIds.includes(object.id)
+    && object.type === "job"
+    && !["done", "failed"].includes(object.status));
+  if (blockedJob) {
+    showToast(t("jobDeleteBlocked"));
+    return;
+  }
+
+  const previousObjects = state.objects.map(cloneCanvasObject);
+  const previousSelection = captureSelectionSnapshot();
+  const scopeMeta = currentCanvasScopeMeta();
   const deletedEntriesFor = (deleteIds) => state.objects
     .map((object, index) => ({ object: cloneCanvasObject(object), index }))
     .filter((entry) => deleteIds.includes(entry.object.id));
+  const undoEntries = deletedEntriesFor(deleteIds);
   const restoreDeletedState = (error) => {
     state.objects = previousObjects;
-    state.selection = previousSelection;
-    selectedIds = previousSelectedIds;
-    selectedId = previousSelectedId;
+    restoreSelectionSnapshot(previousSelection);
+    refreshKnownObjectIds();
     render();
     showToast(error?.message || t("jobFailed"));
   };
-  const groupId = ids.length === 1 ? selectedLayerGroupId() : null;
-  if (groupId) {
-    const members = layerGroupMembers(groupId);
-    const memberIds = members.map((object) => object.id);
-    const undoEntries = deletedEntriesFor(memberIds);
+
+  return canvasHistory.commit(async () => {
     setLocalSelection([]);
     editingTextId = null;
-    state.objects = state.objects.filter((object) => object.layerGroupId !== groupId);
+    state.objects = state.objects.filter((object) => !deleteIds.includes(object.id));
     state.selection = null;
+    refreshKnownObjectIds();
     render();
     try {
-      await deleteObjectsById(memberIds);
-      pushUndoAction({
-        type: "delete",
-        entries: undoEntries,
-        selection: previousSelection,
-        selectedId: previousSelectedId,
-        selectedIds: [...previousSelectedIds]
-      });
+      await deleteObjectsById(deleteIds, scopeMeta);
+      return {
+        action: {
+          type: "delete",
+          entries: undoEntries,
+          selectionBefore: previousSelection,
+          selectionAfter: selectionSnapshotForIds([]),
+          scopeMeta
+        }
+      };
     } catch (error) {
       restoreDeletedState(error);
+      return null;
     }
+  });
+}
+
+async function runCanvasHistoryAction(direction) {
+  if (!['undo', 'redo'].includes(direction)) return;
+  try {
+    await canvasHistory[direction](applyCanvasHistoryAction);
+  } catch (error) {
+    showToast(error?.message || t("jobFailed"));
+  }
+}
+
+async function applyCanvasHistoryAction(action, direction) {
+  const restore = (action.type === "delete" && direction === "undo")
+    || (action.type === "create" && direction === "redo");
+  const remove = (action.type === "create" && direction === "undo")
+    || (action.type === "delete" && direction === "redo");
+  const selection = direction === "undo" ? action.selectionBefore : action.selectionAfter;
+
+  if (restore) {
+    const payload = await restoreCanvasObjects(action.entries, selection, action.scopeMeta);
+    restoreEntriesLocally(action.entries, payload.objects || []);
+  } else if (remove) {
+    await deleteObjectsById(action.entries.map((entry) => entry.object.id), action.scopeMeta);
+    const removedIds = new Set(action.entries.map((entry) => entry.object.id));
+    state.objects = state.objects.filter((object) => !removedIds.has(object.id));
+  } else if (action.type === "update") {
+    const updates = direction === "undo" ? action.before : action.after;
+    const payload = await patchCanvasObjects(updates, selection, action.scopeMeta);
+    replaceLocalObjects(payload.objects || []);
+  } else if (action.type === "reorder") {
+    const objectIds = direction === "undo" ? action.beforeOrder : action.afterOrder;
+    const payload = await setCanvasLayerGroupOrder({
+      groupId: action.groupId,
+      objectIds,
+      selection,
+      scopeMeta: action.scopeMeta
+    });
+    replaceLocalLayerGroupObjects(action.groupId, payload.objects || []);
+  } else {
     return;
   }
-  const undoEntries = deletedEntriesFor(ids);
-  setLocalSelection([]);
-  editingTextId = null;
-  state.objects = state.objects.filter((object) => !ids.includes(object.id));
+
+  restoreSelectionSnapshot(selection);
+  refreshKnownObjectIds();
+  suppressNextAutoFocus = true;
   render();
-  try {
-    await deleteObjectsById(ids);
-    pushUndoAction({
-      type: "delete",
-      entries: undoEntries,
-      selection: previousSelection,
-      selectedId: previousSelectedId,
-      selectedIds: [...previousSelectedIds]
-    });
-  } catch (error) {
-    restoreDeletedState(error);
-  }
-}
-
-function pushUndoAction(action) {
-  if (!action?.type || !Array.isArray(action.entries) || action.entries.length === 0) return;
-  undoStack.push(action);
-  if (undoStack.length > maxUndoStackSize) undoStack.shift();
-}
-
-async function undoLastCanvasAction() {
-  if (undoInProgress || undoStack.length === 0) return;
-  const action = undoStack.pop();
-  undoInProgress = true;
-  try {
-    if (action.type !== "delete") return;
-    const response = await fetch(apiPath("/api/objects/restore"), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        objects: action.entries,
-        selection: action.selection || action.selectedId || null
-      })
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(payload.error || t("jobFailed"));
-    const stateResponse = await fetch(apiPath("/api/state"));
-    state = await stateResponse.json();
-    const restoredIds = new Set((payload.objects || []).map((object) => object.id));
-    const nextSelectedIds = (action.selectedIds || []).filter((id) => restoredIds.has(id));
-    if (nextSelectedIds.length > 0) {
-      setLocalSelection(nextSelectedIds, { fromUser: true });
-    } else if (action.selectedId && restoredIds.has(action.selectedId)) {
-      setLocalSelection([action.selectedId], { fromUser: true });
-    } else {
-      setLocalSelection([]);
-    }
-    render();
-  } catch (error) {
-    undoStack.push(action);
-    showToast(error?.message || t("jobFailed"));
-  } finally {
-    undoInProgress = false;
-  }
 }
 
 function cloneCanvasObject(object) {
   return JSON.parse(JSON.stringify(object));
 }
 
-async function deleteObjectsById(ids) {
+function updateCanvasScope(serverScope = null) {
+  const project = registeredProjects.find((item) => item.id === currentProjectId)
+    || registeredProjects.find((item) => item.chatThreadId && item.chatThreadId === currentThreadId)
+    || null;
+  const nextScope = serverScope && typeof serverScope === "object"
+    ? serverScope
+    : {
+        projectId: project?.id || currentProjectId || null,
+        canvasId: project?.canvasId || null,
+        threadId: project?.chatThreadId || currentThreadId || null
+      };
+  if (!nextScope.projectId && !nextScope.canvasId && !nextScope.threadId) return;
+  canvasScope = {
+    projectId: typeof nextScope.projectId === "string" ? nextScope.projectId : null,
+    canvasId: typeof nextScope.canvasId === "string" ? nextScope.canvasId : null,
+    threadId: typeof nextScope.threadId === "string" ? nextScope.threadId : null
+  };
+  canvasHistory.setScope(canvasScope);
+}
+
+function currentCanvasScopeMeta() {
+  if (!canvasScope) updateCanvasScope();
+  return canvasScope ? { ...canvasScope } : {
+    projectId: currentProjectId || null,
+    canvasId: null,
+    threadId: currentThreadId || null
+  };
+}
+
+function withExpectedCanvasScope(payload, scopeMeta = currentCanvasScopeMeta()) {
+  return {
+    ...payload,
+    expectedProjectId: scopeMeta?.projectId || null,
+    expectedCanvasId: scopeMeta?.canvasId || null
+  };
+}
+
+function captureSelectionSnapshot() {
+  return {
+    ids: [...selectedIds],
+    primary: selectedId,
+    fromUser: hasUserSelection
+  };
+}
+
+function selectionSnapshotForIds(ids, { fromUser = true } = {}) {
+  const normalized = ids.filter(Boolean);
+  return {
+    ids: normalized,
+    primary: normalized.length === 1 ? normalized[0] : null,
+    fromUser: normalized.length > 0 && fromUser
+  };
+}
+
+function restoreSelectionSnapshot(snapshot = null) {
+  const existingIds = new Set(state.objects.map((object) => object.id));
+  const ids = Array.isArray(snapshot?.ids) ? snapshot.ids.filter((id) => existingIds.has(id)) : [];
+  setLocalSelection(ids, { fromUser: snapshot?.fromUser !== false });
+  if (snapshot?.primary && existingIds.has(snapshot.primary) && ids.length <= 1) {
+    selectedId = snapshot.primary;
+    state.selection = selectedId;
+  }
+}
+
+function refreshKnownObjectIds() {
+  knownObjectIds = new Set(state.objects.map((object) => object.id));
+}
+
+async function restoreCanvasObjects(entries, selection, scopeMeta) {
+  const response = await fetch(apiPath("/api/objects/restore"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(withExpectedCanvasScope({
+      objects: entries,
+      selection: selection?.primary || null
+    }, scopeMeta))
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || t("jobFailed"));
+  return payload;
+}
+
+async function patchCanvasObjects(updates, selection, scopeMeta) {
+  const response = await fetch(apiPath("/api/objects"), {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(withExpectedCanvasScope({
+      updates,
+      selection: selection?.primary || null
+    }, scopeMeta))
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || t("jobFailed"));
+  return payload;
+}
+
+async function reorderCanvasLayerGroup({ groupId, objectId, direction, scopeMeta }) {
+  const response = await fetch(apiPath(`/api/layer-groups/${encodeURIComponent(groupId)}/reorder`), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(withExpectedCanvasScope({ objectId, direction }, scopeMeta))
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || t("jobFailed"));
+  return payload;
+}
+
+async function setCanvasLayerGroupOrder({ groupId, objectIds, selection, scopeMeta }) {
+  const response = await fetch(apiPath(`/api/layer-groups/${encodeURIComponent(groupId)}/order`), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(withExpectedCanvasScope({
+      objectIds,
+      selection: selection?.primary || null
+    }, scopeMeta))
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || t("jobFailed"));
+  return payload;
+}
+
+function restoreEntriesLocally(entries, restoredObjects) {
+  const byId = new Map(restoredObjects.map((object) => [object.id, object]));
+  const objects = [...state.objects];
+  for (const entry of entries) {
+    const object = byId.get(entry.object.id) || cloneCanvasObject(entry.object);
+    const index = Number.isInteger(entry.index)
+      ? Math.min(Math.max(entry.index, 0), objects.length)
+      : objects.length;
+    objects.splice(index, 0, object);
+  }
+  state.objects = objects;
+}
+
+function replaceLocalObjects(objects) {
+  const byId = new Map(objects.map((object) => [object.id, object]));
+  state.objects = state.objects.map((object) => byId.get(object.id) || object);
+}
+
+function replaceLocalLayerGroupObjects(groupId, objects) {
+  const firstGroupIndex = state.objects.findIndex((object) => object.layerGroupId === groupId);
+  if (firstGroupIndex < 0 || !objects.length) return;
+  const otherObjects = state.objects.filter((object) => object.layerGroupId !== groupId);
+  const insertIndex = Math.min(firstGroupIndex, otherObjects.length);
+  state.objects = [
+    ...otherObjects.slice(0, insertIndex),
+    ...objects,
+    ...otherObjects.slice(insertIndex)
+  ];
+}
+
+function applyObjectPatchesLocally(updates) {
+  const byId = new Map(updates.map((update) => [update.id, update.patch]));
+  state.objects = state.objects.map((object) => byId.has(object.id)
+    ? { ...object, ...byId.get(object.id) }
+    : object);
+}
+
+function commitObjectUpdateHistory({ before, after, selectionBefore, selectionAfter, scopeMeta }) {
+  if (!objectUpdatesChanged(before, after)) {
+    render();
+    return Promise.resolve();
+  }
+  return canvasHistory.commit(async () => {
+    try {
+      const payload = await patchCanvasObjects(after, selectionAfter, scopeMeta);
+      replaceLocalObjects(payload.objects || []);
+      refreshKnownObjectIds();
+      render();
+      return {
+        action: {
+          type: "update",
+          before: cloneCanvasObject(before),
+          after: cloneCanvasObject(after),
+          selectionBefore,
+          selectionAfter,
+          scopeMeta
+        }
+      };
+    } catch (error) {
+      applyObjectPatchesLocally(before);
+      refreshKnownObjectIds();
+      render();
+      showToast(error?.message || t("jobFailed"));
+      return null;
+    }
+  });
+}
+
+function objectUpdatesChanged(before, after) {
+  if (before.length !== after.length) return true;
+  return before.some((update, index) => update.id !== after[index]?.id
+    || JSON.stringify(update.patch) !== JSON.stringify(after[index]?.patch));
+}
+
+function renderCanvasHistoryStatus(status = canvasHistory.status) {
+  if (undoButton) {
+    undoButton.disabled = !status.canUndo;
+    undoButton.setAttribute("aria-disabled", String(undoButton.disabled));
+  }
+  if (redoButton) {
+    redoButton.disabled = !status.canRedo;
+    redoButton.setAttribute("aria-disabled", String(redoButton.disabled));
+  }
+}
+
+async function deleteObjectsById(ids, scopeMeta = currentCanvasScopeMeta()) {
   if (!ids.length) return;
   const response = await fetch(apiPath("/api/objects"), {
     method: "DELETE",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ ids })
+    body: JSON.stringify(withExpectedCanvasScope({ ids }, scopeMeta))
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || t("jobFailed"));
+  return payload;
 }
 
-async function uploadImageFiles(files) {
-  let nextX = null;
-  let lastObject = null;
-  let lastError = null;
+function uploadImageFiles(files) {
+  const scopeMeta = currentCanvasScopeMeta();
+  const selectionBefore = captureSelectionSnapshot();
+  return canvasHistory.commit(async () => {
+    let nextX = null;
+    let lastObject = null;
+    let lastError = null;
+    const entries = [];
 
-  for (const file of files) {
-    try {
-      const dataUrl = await readFileAsDataUrl(file);
-      const naturalSize = await readImageFileSize(dataUrl);
-      const displaySize = displaySizeForUpload(naturalSize);
-      const position = uploadPosition(displaySize, nextX);
-      nextX = position.x + displaySize.width + 72;
+    for (const file of files) {
+      try {
+        const dataUrl = await readFileAsDataUrl(file);
+        const naturalSize = await readImageFileSize(dataUrl);
+        const displaySize = displaySizeForUpload(naturalSize);
+        const position = uploadPosition(displaySize, nextX);
+        nextX = position.x + displaySize.width + 72;
 
-      const response = await fetch(apiPath("/api/images"), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          dataUrl,
-          name: file.name,
-          prompt: "Uploaded from local file",
-          layoutMode: "manual",
-          x: position.x,
-          y: position.y,
-          width: displaySize.width,
-          height: displaySize.height
-        })
-      });
-      const object = await response.json();
-      if (!response.ok) throw new Error(object.error || t("uploadFailed"));
-      lastObject = object;
-    } catch (error) {
-      lastError = error;
+        const response = await fetch(apiPath("/api/images"), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(withExpectedCanvasScope({
+            dataUrl,
+            name: file.name,
+            prompt: "Uploaded from local file",
+            layoutMode: "manual",
+            x: position.x,
+            y: position.y,
+            width: displaySize.width,
+            height: displaySize.height
+          }, scopeMeta))
+        });
+        const object = await response.json();
+        if (!response.ok) throw new Error(object.error || t("uploadFailed"));
+        entries.push({ object: cloneCanvasObject(object), index: state.objects.length });
+        state.objects.push(object);
+        lastObject = object;
+      } catch (error) {
+        lastError = error;
+      }
     }
-  }
 
-  if (lastObject) {
-    setLocalSelection([lastObject.id], { fromUser: true });
-    await loadState();
-  }
+    if (lastObject) {
+      setLocalSelection([lastObject.id], { fromUser: true });
+      refreshKnownObjectIds();
+      render();
+    }
 
-  if (lastError) showToast(lastError?.message || t("uploadFailed"));
-  else if (lastObject) showToast(t("uploadDone"));
+    if (lastError) showToast(lastError?.message || t("uploadFailed"));
+    else if (lastObject) showToast(t("uploadDone"));
+    if (!entries.length) return null;
+    return {
+      action: {
+        type: "create",
+        entries,
+        selectionBefore,
+        selectionAfter: selectionSnapshotForIds([lastObject.id]),
+        scopeMeta
+      }
+    };
+  });
 }
 
 function isUploadImageCandidate(file) {
@@ -3553,17 +3909,25 @@ function pollImageJob(jobId) {
   runningJobs.set(jobId, window.setTimeout(tick, 2500));
 }
 
-async function saveTextObject(id, text) {
+function saveTextObject(id, text) {
   const object = state.objects.find((item) => item.id === id);
   if (!object) return;
   const nextText = text.trim() || t("textPlaceholder");
+  const previousText = object.text || t("textPlaceholder");
+  if (nextText === previousText) {
+    render();
+    return;
+  }
+  const selection = captureSelectionSnapshot();
+  const scopeMeta = currentCanvasScopeMeta();
   object.text = nextText;
-  await fetch(apiPath(`/api/objects/${id}`), {
-    method: "PATCH",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ text: nextText })
-  }).catch(() => {});
-  render();
+  commitObjectUpdateHistory({
+    before: [{ id, patch: { text: previousText } }],
+    after: [{ id, patch: { text: nextText } }],
+    selectionBefore: selection,
+    selectionAfter: selection,
+    scopeMeta
+  });
 }
 
 function focusTextObject(id) {
@@ -3598,10 +3962,14 @@ function isShortcutEditingTarget(target) {
   return Boolean(target.closest("button, [role='button'], .selection-toolbar, .quick-edit-composer, .settings-menu, .color-palette, .prompt-history-panel, .canvas-search"));
 }
 
-function isUndoShortcut(event) {
-  if (event.defaultPrevented || event.altKey || event.shiftKey) return false;
-  if (event.key.toLowerCase() !== "z") return false;
-  return event.metaKey || event.ctrlKey;
+function canvasHistoryShortcut(event) {
+  if (event.defaultPrevented || event.altKey || event.isComposing) return null;
+  const key = event.key.toLowerCase();
+  if (key === "z" && (event.metaKey || event.ctrlKey)) {
+    return event.shiftKey ? "redo" : "undo";
+  }
+  if (key === "y" && event.ctrlKey && !event.metaKey && !event.shiftKey) return "redo";
+  return null;
 }
 
 function isNativeUndoTarget(target) {
@@ -3615,7 +3983,7 @@ function isDeleteEditingTarget(target) {
 }
 
 function setActiveTool(tool) {
-  activeTool = tool || "select";
+  activeTool = tool || defaultCanvasTool;
   toolDock.querySelectorAll("[data-tool]").forEach((button) => {
     button.classList.toggle("active", button.dataset.tool === activeTool);
   });
@@ -3623,9 +3991,15 @@ function setActiveTool(tool) {
     button.classList.toggle("active", button.dataset.quickEditTool === activeTool);
     button.setAttribute("aria-pressed", String(button.dataset.quickEditTool === activeTool));
   });
+  board.classList.toggle("tool-hand", activeTool === "hand");
   board.classList.toggle("tool-pencil", activeTool === "pencil");
   board.classList.toggle("tool-text", activeTool === "text");
   updateColorPalette();
+}
+
+function setSpacePanPressed(pressed) {
+  spacePanPressed = Boolean(pressed);
+  board.classList.toggle("space-pan", spacePanPressed);
 }
 
 function loadToolColor() {
@@ -3662,30 +4036,38 @@ function updateColorPalette() {
   }
 }
 
-async function setActiveColor(color) {
+function setActiveColor(color) {
   if (!toolColors.includes(color)) return;
   activeColor = color;
   localStorage.setItem(toolColorStorageKey, activeColor);
   updateColorPalette();
   const object = state?.objects.find((item) => item.id === selectedId);
   if (!object) return;
+  const selection = captureSelectionSnapshot();
+  const scopeMeta = currentCanvasScopeMeta();
   if (object.type === "drawing") {
+    const previous = object.stroke || "#202124";
+    if (previous === activeColor) return;
     object.stroke = activeColor;
-    await patchObjectColor(object.id, { stroke: activeColor });
-    render();
+    commitObjectUpdateHistory({
+      before: [{ id: object.id, patch: { stroke: previous } }],
+      after: [{ id: object.id, patch: { stroke: activeColor } }],
+      selectionBefore: selection,
+      selectionAfter: selection,
+      scopeMeta
+    });
   } else if (object.type === "text") {
+    const previous = object.color || "#202124";
+    if (previous === activeColor) return;
     object.color = activeColor;
-    await patchObjectColor(object.id, { color: activeColor });
-    render();
+    commitObjectUpdateHistory({
+      before: [{ id: object.id, patch: { color: previous } }],
+      after: [{ id: object.id, patch: { color: activeColor } }],
+      selectionBefore: selection,
+      selectionAfter: selection,
+      scopeMeta
+    });
   }
-}
-
-async function patchObjectColor(id, patch) {
-  await fetch(apiPath(`/api/objects/${id}`), {
-    method: "PATCH",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(patch)
-  }).catch(() => {});
 }
 
 function loadLanguage() {
@@ -3705,7 +4087,11 @@ async function refreshAppUpdateStatus({ checkRemote = false, showToastOnError = 
   appUpdateBusy = true;
   renderAppUpdateStatus({ label: t("updateChecking"), disabled: true });
   try {
-    const response = await fetch(apiPath(`/api/app-update${checkRemote ? "?check=1" : ""}`));
+    const response = await fetch(apiPath(checkRemote ? "/api/app-update/check" : "/api/app-update"), checkRemote ? {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({})
+    } : undefined);
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || t("updateFailed"));
     appUpdateInfo = payload;
@@ -3743,7 +4129,7 @@ async function runAppUpdate() {
 
 function renderAppUpdateStatus(override = null) {
   if (!appUpdateButton || !appVersionValue || !appUpdateStatus) return;
-  const version = appUpdateInfo?.pluginVersion || appUpdateInfo?.version || "...";
+  const version = appUpdateInfo?.installedVersion || appUpdateInfo?.pluginVersion || appUpdateInfo?.version || "...";
   appVersionValue.textContent = version;
   appUpdateButton.disabled = Boolean(override?.disabled);
 
@@ -3783,7 +4169,14 @@ function appUpdateBlockedLabel(reason) {
     "local-ahead": "updateBlockedAhead",
     "detached-head": "updateBlockedDetached",
     "no-upstream": "updateBlockedNoUpstream",
-    "not-git": "updateBlockedNotGit"
+    "not-git": "updateBlockedNotGit",
+    "source-not-found": "updateBlockedSource",
+    "plugin-reinstall-unavailable": "updateBlockedSource",
+    "remote-check-failed": "updateBlockedRemote",
+    "release-check-failed": "updateBlockedRemote",
+    "release-version-mismatch": "updateBlockedRelease",
+    "release-not-fast-forward": "updateBlockedRelease",
+    "plugin-reinstall-invalid": "updateBlockedRelease"
   };
   return t(labels[reason] || "updateUnavailable");
 }
@@ -3865,6 +4258,15 @@ function applyLanguage() {
     button.setAttribute("aria-label", label);
   });
 
+  document.querySelectorAll("[data-history-action]").forEach((button) => {
+    const label = historyActionLabel(button.dataset.historyAction);
+    button.dataset.tooltip = label;
+    button.title = label;
+    button.setAttribute("aria-label", label);
+  });
+
+  renderCanvasHistoryStatus();
+
   if (state) updateSelectionUi();
 }
 
@@ -3915,6 +4317,10 @@ function viewActionLabel(action) {
   return action;
 }
 
+function historyActionLabel(action) {
+  return translations[language].controls[action] || translations.en.controls[action] || action;
+}
+
 function objectTypeLabel(type) {
   const key = type || "image";
   return translations[language].objectTypes[key] || translations.en.objectTypes[key] || key;
@@ -3923,6 +4329,27 @@ function objectTypeLabel(type) {
 function pointerToWorld(event) {
   const rect = board.getBoundingClientRect();
   return screenToWorld(event.clientX - rect.left, event.clientY - rect.top);
+}
+
+function shouldUseNativeWheel(target) {
+  if (!(target instanceof Element)) return false;
+  return Boolean(target.closest("input, textarea, select, [contenteditable='true'], .quick-edit-composer, .canvas-search, .prompt-history-panel"));
+}
+
+function normalizedWheelDelta(event) {
+  if (event.deltaMode === 1) {
+    return {
+      x: event.deltaX * wheelLinePixelSize,
+      y: event.deltaY * wheelLinePixelSize
+    };
+  }
+  if (event.deltaMode === 2) {
+    return {
+      x: event.deltaX * Math.max(1, board.clientWidth),
+      y: event.deltaY * Math.max(1, board.clientHeight)
+    };
+  }
+  return { x: event.deltaX, y: event.deltaY };
 }
 
 function pathForPoints(points) {
@@ -3962,18 +4389,24 @@ function isEditableTarget(target) {
 }
 
 function movePan(event) {
-  if (!pan) return;
+  if (!pan || event.pointerId !== pan.pointerId) return;
   viewport.x = pan.viewportX + event.clientX - pan.startX;
   viewport.y = pan.viewportY + event.clientY - pan.startY;
   applyViewport();
   updateSelectionUi();
 }
 
-async function endPan() {
-  board.classList.remove("dragging");
-  board.removeEventListener("pointermove", movePan);
+function endPan(event) {
+  if (!pan || event.pointerId !== pan.pointerId) return;
+  const pointerId = pan.pointerId;
   pan = null;
-  await saveViewport();
+  board.classList.remove("dragging");
+  window.removeEventListener("pointermove", movePan);
+  window.removeEventListener("pointerup", endPan);
+  window.removeEventListener("pointercancel", endPan);
+  board.removeEventListener("lostpointercapture", endPan);
+  releaseBoardPointer(pointerId);
+  saveViewport();
 }
 
 function scheduleViewportSave() {
@@ -4300,10 +4733,10 @@ function layerGroupReorderTargetIndex(members, currentIndex, direction) {
 function objectsOverlap(left, right) {
   const leftBounds = boundsForObjects([left]);
   const rightBounds = boundsForObjects([right]);
-  return leftBounds.left < rightBounds.right
-    && leftBounds.right > rightBounds.left
-    && leftBounds.top < rightBounds.bottom
-    && leftBounds.bottom > rightBounds.top;
+  return leftBounds.x < rightBounds.x + rightBounds.width
+    && leftBounds.x + leftBounds.width > rightBounds.x
+    && leftBounds.y < rightBounds.y + rightBounds.height
+    && leftBounds.y + leftBounds.height > rightBounds.y;
 }
 
 function worldToScreen(x, y) {
@@ -4446,6 +4879,12 @@ async function resetSelectedLayerGroup() {
   if (!groupId) return;
   const origin = layerGroupOrigin(groupId);
   const members = layerGroupMembers(groupId);
+  const selectionBefore = captureSelectionSnapshot();
+  const scopeMeta = currentCanvasScopeMeta();
+  const before = members.map((member) => ({
+    id: member.id,
+    patch: { x: member.x, y: member.y, width: member.width, height: member.height }
+  }));
   for (const member of members) {
     const relativeX = Number.isFinite(member.layerGroupRelativeX) ? member.layerGroupRelativeX : member.x - origin.x;
     const relativeY = Number.isFinite(member.layerGroupRelativeY) ? member.layerGroupRelativeY : member.y - origin.y;
@@ -4454,13 +4893,18 @@ async function resetSelectedLayerGroup() {
     if (Number.isFinite(member.layerGroupOriginalLayerWidth)) member.width = member.layerGroupOriginalLayerWidth;
     if (Number.isFinite(member.layerGroupOriginalLayerHeight)) member.height = member.layerGroupOriginalLayerHeight;
   }
-  render();
-  await patchLayerGroupMembersSequentially(members, (member) => ({
-    x: member.x,
-    y: member.y,
-    width: member.width,
-    height: member.height
+  const after = members.map((member) => ({
+    id: member.id,
+    patch: { x: member.x, y: member.y, width: member.width, height: member.height }
   }));
+  render();
+  await commitObjectUpdateHistory({
+    before,
+    after,
+    selectionBefore,
+    selectionAfter: captureSelectionSnapshot(),
+    scopeMeta
+  });
 }
 
 async function toggleSelectedLayerGroupLock() {
@@ -4468,12 +4912,28 @@ async function toggleSelectedLayerGroupLock() {
   if (!groupId) return;
   const members = layerGroupMembers(groupId);
   if (!members.length) return;
+  const selectionBefore = captureSelectionSnapshot();
+  const scopeMeta = currentCanvasScopeMeta();
+  const before = members.map((member) => ({
+    id: member.id,
+    patch: { layerGroupLocked: member.layerGroupLocked === true }
+  }));
   const nextLocked = !isLayerGroupLocked(groupId);
   for (const member of members) {
     member.layerGroupLocked = nextLocked;
   }
+  const after = members.map((member) => ({
+    id: member.id,
+    patch: { layerGroupLocked: nextLocked }
+  }));
   render();
-  await patchLayerGroupMembersSequentially(members, () => ({ layerGroupLocked: nextLocked }));
+  await commitObjectUpdateHistory({
+    before,
+    after,
+    selectionBefore,
+    selectionAfter: captureSelectionSnapshot(),
+    scopeMeta
+  });
 }
 
 async function moveSelectedLayerInGroup(direction) {
@@ -4482,29 +4942,37 @@ async function moveSelectedLayerInGroup(direction) {
   const members = layerGroupMembers(groupId);
   const currentIndex = members.findIndex((member) => member.id === selectedId);
   if (layerGroupReorderTargetIndex(members, currentIndex, direction) < 0) return;
+  const objectId = selectedId;
+  const beforeOrder = members.map((member) => member.id);
+  const selectionBefore = captureSelectionSnapshot();
+  const scopeMeta = currentCanvasScopeMeta();
 
-  try {
-    const response = await fetch(apiPath(`/api/layer-groups/${encodeURIComponent(groupId)}/reorder`), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ objectId: selectedId, direction })
-    });
-    const payload = await response.json();
-    if (!response.ok) throw new Error(payload.error || `${labelAction(direction === "up" ? "layer-up" : "layer-down")} ${t("jobFailed")}`);
-    await loadState();
-  } catch (error) {
-    showToast(error?.message || t("jobFailed"));
-  }
-}
-
-async function patchLayerGroupMembersSequentially(members, patchForMember) {
-  for (const member of members) {
-    await fetch(apiPath(`/api/objects/${member.id}`), {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(patchForMember(member))
-    }).catch(() => {});
-  }
+  return canvasHistory.commit(async () => {
+    try {
+      const payload = await reorderCanvasLayerGroup({ groupId, objectId, direction, scopeMeta });
+      if (!payload.changed) return null;
+      replaceLocalLayerGroupObjects(groupId, payload.objects || []);
+      refreshKnownObjectIds();
+      render();
+      const afterOrder = (payload.objects || []).map((member) => member.id);
+      return {
+        action: {
+          type: "reorder",
+          groupId,
+          objectId,
+          direction,
+          beforeOrder,
+          afterOrder,
+          selectionBefore,
+          selectionAfter: captureSelectionSnapshot(),
+          scopeMeta
+        }
+      };
+    } catch (error) {
+      showToast(error?.message || `${labelAction(direction === "up" ? "layer-up" : "layer-down")} ${t("jobFailed")}`);
+      return null;
+    }
+  });
 }
 
 function updateQuickEditPosition() {

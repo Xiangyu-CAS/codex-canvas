@@ -1,17 +1,17 @@
 import http from "node:http";
 import fs from "node:fs/promises";
 import { watch } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { collectRecentImages } from "./collector.mjs";
-import { sendImageToBoundChat, sendMentionToBoundChat } from "./codex-chat.mjs";
-import { createImageJob, createTextRecognitionJob, getActivePlaceholderIds, getIgnoredGeneratedImagePaths, getImageJob, getTextRecognitionJob, hasRunningImageJobs, submitTextRecognitionEdit } from "./jobs.mjs";
+import { collectRecentImages, defaultGeneratedImagesRoot, generatedImagesDirForThread } from "./collector.mjs";
+import { hasActiveChatOperations, sendImageToBoundChat, sendMentionToBoundChat, stopActiveChatOperations } from "./codex-chat.mjs";
+import { createImageJob, createTextRecognitionJob, getActivePlaceholderIds, getIgnoredGeneratedImagePaths, getImageJob, getTextRecognitionJob, hasActiveCanvasJobs, hasRunningImageJobs, submitTextRecognitionEdit } from "./jobs.mjs";
 import { assetsDirFor, projectRegistryPath, publicDir, runtimePathFor } from "./paths.mjs";
 import { exportLayerGroupPsd } from "./psd-export.mjs";
-import { addImage, addObject, deleteObject, deleteObjects, ensureProjectStore, markStaleJobPlaceholders, promptHistory, readState, reorderLayerGroupLayer, restoreObjects, searchObjects, updateObject, updateProjectMeta, updateSelection, updateViewport, versionGroups } from "./store.mjs";
+import { addImage, addObject, deleteObject, deleteObjects, ensureProjectStore, markStaleJobPlaceholders, promptHistory, readState, reorderLayerGroupLayer, restoreObjects, searchObjects, setLayerGroupOrder, updateObject, updateObjects, updateProjectMeta, updateSelection, updateViewport, versionGroups } from "./store.mjs";
 import { canvasIdForThread, normalizeThreadId } from "./runtime.mjs";
 import { appUpdateStatus, updateApp } from "./updater.mjs";
+import { APP_VERSION } from "./version.mjs";
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -29,14 +29,14 @@ const contentTypes = {
 const defaultMaxJsonBodyBytes = 32 * 1024 * 1024;
 const maxQueryLimit = 100;
 
-export async function createServer({ projectDir, host = "127.0.0.1", port = 43217, autoCollect = true, chatThreadId = null, autoCollectIntervalMs = 5000, autoCollectWatchDebounceMs = 250, maxJsonBodyBytes = defaultMaxJsonBodyBytes, persistentRegistryPath = projectRegistryPath() } = {}) {
-  const registry = createProjectRegistry({ host, port, autoCollect, autoCollectIntervalMs, autoCollectWatchDebounceMs, maxJsonBodyBytes, persistentRegistryPath });
+export async function createServer({ projectDir, host = "127.0.0.1", port = 43217, autoCollect = true, chatThreadId = null, autoCollectIntervalMs = 5000, autoCollectWatchDebounceMs = 250, maxJsonBodyBytes = defaultMaxJsonBodyBytes, persistentRegistryPath = projectRegistryPath(), generatedImagesRoot = defaultGeneratedImagesRoot(), hasActiveJobs = hasActiveCanvasJobs } = {}) {
+  const registry = createProjectRegistry({ host, port, autoCollect, autoCollectIntervalMs, autoCollectWatchDebounceMs, maxJsonBodyBytes, persistentRegistryPath, generatedImagesRoot, hasActiveJobs });
   const initialProject = await registerProject(registry, projectDir, { autoCollect, chatThreadId });
   await restorePersistedProjects(registry);
 
   const server = http.createServer(async (request, response) => {
     try {
-      await handleRequest(request, response, { registry });
+      await handleRequest(request, response, { registry, server });
     } catch (error) {
       const status = error.statusCode || 500;
       sendJson(response, status, {
@@ -63,6 +63,7 @@ export async function createServer({ projectDir, host = "127.0.0.1", port = 4321
     for (const project of registry.projects.values()) {
       stopAutoCollector(project);
     }
+    stopActiveChatOperations().catch(() => {});
   });
 
   return { server, url: projectUrl(registry, initialProject.id) };
@@ -73,17 +74,48 @@ async function handleRequest(request, response, context) {
   const pathname = decodePathname(requestUrl.pathname);
 
   if (request.method === "GET" && pathname === "/api/projects") {
-    return sendJson(response, 200, { projects: await listProjects(context.registry) });
+    return sendJson(response, 200, {
+      projects: await listProjects(context.registry),
+      server: serverInfoFor(context.registry)
+    });
   }
 
   if (request.method === "GET" && pathname === "/api/app-update") {
-    return sendJson(response, 200, await appUpdateStatus({
-      checkRemote: requestUrl.searchParams.get("check") === "1"
-    }));
+    return sendJson(response, 200, await appUpdateStatus({ checkRemote: false }));
+  }
+
+  if (request.method === "POST" && pathname === "/api/app-update/check") {
+    requireLocalUpdateRequest(request, context.registry);
+    await readJson(request, context.registry);
+    return sendJson(response, 200, await appUpdateStatus({ checkRemote: true }));
   }
 
   if (request.method === "POST" && pathname === "/api/app-update") {
-    return sendJson(response, 200, await updateApp());
+    requireLocalUpdateRequest(request, context.registry);
+    const body = await readJson(request, context.registry);
+    if (body?.expectedInstanceId !== undefined) requireExpectedServerInstance(body, context.registry);
+    await beginServerMaintenance(context.registry, "update");
+    let result;
+    try {
+      result = await updateApp();
+    } catch (error) {
+      endServerMaintenance(context.registry);
+      throw error;
+    }
+    sendJson(response, 200, result);
+    if (result.restartRequired) scheduleServerShutdown(context.server);
+    else endServerMaintenance(context.registry);
+    return;
+  }
+
+  if (request.method === "POST" && pathname === "/api/shutdown") {
+    requireLocalUpdateRequest(request, context.registry);
+    const body = await readJson(request, context.registry);
+    requireExpectedServerInstance(body, context.registry);
+    await beginServerMaintenance(context.registry, "shutdown");
+    sendJson(response, 200, { ok: true, pid: context.registry.pid });
+    scheduleServerShutdown(context.server);
+    return;
   }
 
   if (request.method === "POST" && pathname === "/api/projects") {
@@ -97,7 +129,8 @@ async function handleRequest(request, response, context) {
     await persistProjectRegistrySafely(context.registry);
     return sendJson(response, 201, {
       project: await publicProject(project),
-      url: projectUrl(context.registry, project.id)
+      url: projectUrl(context.registry, project.id),
+      server: serverInfoFor(context.registry)
     });
   }
 
@@ -105,10 +138,18 @@ async function handleRequest(request, response, context) {
   const projectDir = project.projectDir;
 
   if (request.method === "GET" && pathname === "/api/state") {
-    return sendJson(response, 200, await markStaleJobPlaceholders(projectDir, {
+    const state = await markStaleJobPlaceholders(projectDir, {
       activePlaceholderIds: getActivePlaceholderIds(jobScopeFor(project)),
       canvasId: project.canvasId
-    }));
+    });
+    return sendJson(response, 200, {
+      ...state,
+      canvasScope: {
+        projectId: project.id,
+        canvasId: project.canvasId || null,
+        threadId: project.chatThreadId || null
+      }
+    });
   }
 
   if (request.method === "GET" && pathname === "/api/search") {
@@ -148,22 +189,35 @@ async function handleRequest(request, response, context) {
 
   if (request.method === "POST" && pathname === "/api/images") {
     const body = await readJson(request, context.registry);
+    assertExpectedCanvasScope(project, body);
     requireSingleImageInput(body);
     return sendJson(response, 201, await addImage(projectDir, body, storeOptionsFor(project)));
   }
 
   if (request.method === "POST" && pathname === "/api/objects") {
     const body = await readJson(request, context.registry);
+    assertExpectedCanvasScope(project, body);
     return sendJson(response, 201, await addObject(projectDir, body, storeOptionsFor(project)));
+  }
+
+  if (request.method === "PATCH" && pathname === "/api/objects") {
+    const body = await readJson(request, context.registry);
+    assertExpectedCanvasScope(project, body);
+    return sendJson(response, 200, await updateObjects(projectDir, body.updates || [], {
+      ...storeOptionsFor(project),
+      selection: body.selection || null
+    }));
   }
 
   if (request.method === "DELETE" && pathname === "/api/objects") {
     const body = await readJson(request, context.registry);
+    assertExpectedCanvasScope(project, body);
     return sendJson(response, 200, await deleteObjects(projectDir, body.ids || [], storeOptionsFor(project)));
   }
 
   if (request.method === "POST" && pathname === "/api/objects/restore") {
     const body = await readJson(request, context.registry);
+    assertExpectedCanvasScope(project, body);
     return sendJson(response, 201, await restoreObjects(projectDir, body.objects || [], {
       ...storeOptionsFor(project),
       selection: body.selection || null
@@ -178,12 +232,28 @@ async function handleRequest(request, response, context) {
   const layerGroupReorderMatch = /^\/api\/layer-groups\/([^/]+)\/reorder$/.exec(pathname);
   if (request.method === "POST" && layerGroupReorderMatch) {
     const body = await readJson(request, context.registry);
+    assertExpectedCanvasScope(project, body);
     return sendJson(response, 200, await reorderLayerGroupLayer(
       projectDir,
       layerGroupReorderMatch[1],
       body.objectId,
       body.direction,
       storeOptionsFor(project)
+    ));
+  }
+
+  const layerGroupOrderMatch = /^\/api\/layer-groups\/([^/]+)\/order$/.exec(pathname);
+  if (request.method === "POST" && layerGroupOrderMatch) {
+    const body = await readJson(request, context.registry);
+    assertExpectedCanvasScope(project, body);
+    return sendJson(response, 200, await setLayerGroupOrder(
+      projectDir,
+      layerGroupOrderMatch[1],
+      body.objectIds,
+      {
+        ...storeOptionsFor(project),
+        selection: body.selection || null
+      }
     ));
   }
 
@@ -226,17 +296,26 @@ async function handleRequest(request, response, context) {
 
   if (request.method === "POST" && pathname === "/api/chat-turn") {
     const body = await readJson(request, context.registry);
-    return sendJson(response, 200, await sendObjectToBoundChat(projectDir, project, body));
+    return sendJson(response, 200, await runMaintenanceSensitiveOperation(
+      context.registry,
+      () => sendObjectToBoundChat(projectDir, project, body)
+    ));
   }
 
   if (request.method === "POST" && pathname === "/api/jobs") {
     const body = await readJson(request, context.registry);
-    return sendJson(response, 202, await createImageJob(projectDir, body, storeOptionsFor(project)));
+    return sendJson(response, 202, await runMaintenanceSensitiveOperation(
+      context.registry,
+      () => createImageJob(projectDir, body, storeOptionsFor(project))
+    ));
   }
 
   if (request.method === "POST" && pathname === "/api/text-recognition") {
     const body = await readJson(request, context.registry);
-    return sendJson(response, 202, await createTextRecognitionJob(projectDir, body, storeOptionsFor(project)));
+    return sendJson(response, 202, await runMaintenanceSensitiveOperation(
+      context.registry,
+      () => createTextRecognitionJob(projectDir, body, storeOptionsFor(project))
+    ));
   }
 
   const jobMatch = /^\/api\/jobs\/([^/]+)$/.exec(pathname);
@@ -252,12 +331,16 @@ async function handleRequest(request, response, context) {
   const textRecognitionRunMatch = /^\/api\/text-recognition\/([^/]+)\/run$/.exec(pathname);
   if (request.method === "POST" && textRecognitionRunMatch) {
     const body = await readJson(request, context.registry);
-    return sendJson(response, 202, await submitTextRecognitionEdit(projectDir, textRecognitionRunMatch[1], body, storeOptionsFor(project)));
+    return sendJson(response, 202, await runMaintenanceSensitiveOperation(
+      context.registry,
+      () => submitTextRecognitionEdit(projectDir, textRecognitionRunMatch[1], body, storeOptionsFor(project))
+    ));
   }
 
   const objectMatch = /^\/api\/objects\/([^/]+)$/.exec(pathname);
   if (request.method === "PATCH" && objectMatch) {
     const body = await readJson(request, context.registry);
+    assertExpectedCanvasScope(project, body);
     return sendJson(response, 200, await updateObject(projectDir, objectMatch[1], body, storeOptionsFor(project)));
   }
 
@@ -332,6 +415,111 @@ function sendJson(response, status, body) {
   response.end(JSON.stringify(body));
 }
 
+function requireLocalUpdateRequest(request, registry) {
+  if (!isLoopbackHost(registry.host)) {
+    const error = new Error("Plugin updates are only available from a loopback Codex-Canvas server.");
+    error.statusCode = 403;
+    throw error;
+  }
+
+  const contentType = String(request.headers["content-type"] || "").toLowerCase();
+  if (!contentType.startsWith("application/json")) {
+    const error = new Error("Plugin updates require an application/json request.");
+    error.statusCode = 415;
+    throw error;
+  }
+
+  const fetchSite = String(request.headers["sec-fetch-site"] || "").toLowerCase();
+  if (fetchSite && fetchSite !== "same-origin" && fetchSite !== "none") {
+    const error = new Error("Cross-origin plugin update requests are not allowed.");
+    error.statusCode = 403;
+    throw error;
+  }
+
+  const origin = request.headers.origin;
+  if (origin && origin !== new URL(registry.baseUrl).origin) {
+    const error = new Error("Plugin update request origin does not match the canvas server.");
+    error.statusCode = 403;
+    throw error;
+  }
+}
+
+function serverInfoFor(registry) {
+  return {
+    name: "codex-canvas",
+    protocolVersion: 1,
+    version: APP_VERSION,
+    pid: registry.pid,
+    instanceId: registry.instanceId,
+    maintenance: registry.maintenanceReason
+  };
+}
+
+function requireExpectedServerInstance(body, registry) {
+  if (typeof body?.expectedInstanceId === "string" && body.expectedInstanceId === registry.instanceId) return;
+  const error = new Error("The canvas server instance changed; reload its status before requesting shutdown.");
+  error.statusCode = 409;
+  throw error;
+}
+
+async function runMaintenanceSensitiveOperation(registry, operation) {
+  if (registry.maintenanceReason) {
+    const error = new Error("Codex-Canvas is preparing to restart; no new background operation can start.");
+    error.statusCode = 409;
+    throw error;
+  }
+  registry.maintenanceOperations += 1;
+  try {
+    return await operation();
+  } finally {
+    registry.maintenanceOperations -= 1;
+    if (registry.maintenanceOperations === 0) {
+      for (const resolve of registry.maintenanceWaiters) resolve();
+      registry.maintenanceWaiters.clear();
+    }
+  }
+}
+
+async function beginServerMaintenance(registry, reason) {
+  if (registry.maintenanceReason) {
+    const error = new Error(`Codex-Canvas is already preparing to ${registry.maintenanceReason}.`);
+    error.statusCode = 409;
+    throw error;
+  }
+
+  // Setting the flag and incrementing operation counters are synchronous, so
+  // requests that are still reading their body cannot slip into the gap.
+  registry.maintenanceReason = reason;
+  if (registry.maintenanceOperations > 0) {
+    await new Promise((resolve) => registry.maintenanceWaiters.add(resolve));
+  }
+  if (registry.hasActiveJobs() || hasActiveChatOperations()) {
+    endServerMaintenance(registry);
+    const error = new Error("Wait for running Codex-Canvas image, text, and chat operations to finish before updating or closing the server.");
+    error.statusCode = 409;
+    throw error;
+  }
+}
+
+function endServerMaintenance(registry) {
+  registry.maintenanceReason = null;
+}
+
+function isLoopbackHost(host) {
+  const normalized = String(host || "").trim().toLowerCase().replace(/^\[|\]$/g, "");
+  return normalized === "localhost" || normalized === "::1" || normalized.startsWith("127.");
+}
+
+function scheduleServerShutdown(server) {
+  const timer = setTimeout(async () => {
+    server.close();
+    server.closeIdleConnections?.();
+    server.closeAllConnections?.();
+    await stopActiveChatOperations().catch(() => {});
+  }, 250);
+  timer.unref?.();
+}
+
 function sendBinary(response, status, buffer, headers = {}) {
   response.writeHead(status, headers);
   response.end(buffer);
@@ -349,7 +537,7 @@ function parsePositiveIntegerQueryParam(searchParams, name, defaultValue, fallba
   return Math.min(maxQueryLimit, Math.max(1, Math.round(parsed)));
 }
 
-function createProjectRegistry({ host, port, autoCollect, autoCollectIntervalMs, autoCollectWatchDebounceMs, maxJsonBodyBytes, persistentRegistryPath }) {
+function createProjectRegistry({ host, port, autoCollect, autoCollectIntervalMs, autoCollectWatchDebounceMs, maxJsonBodyBytes, persistentRegistryPath, generatedImagesRoot, hasActiveJobs }) {
   return {
     host,
     port,
@@ -358,8 +546,14 @@ function createProjectRegistry({ host, port, autoCollect, autoCollectIntervalMs,
     autoCollectWatchDebounceMs,
     maxJsonBodyBytes,
     persistentRegistryPath,
+    generatedImagesRoot: path.resolve(generatedImagesRoot),
     baseUrl: `http://${host}:${port}/`,
     pid: process.pid,
+    instanceId: crypto.randomUUID(),
+    maintenanceReason: null,
+    maintenanceOperations: 0,
+    maintenanceWaiters: new Set(),
+    hasActiveJobs,
     defaultProjectId: null,
     projects: new Map(),
     projectAliases: new Map()
@@ -399,6 +593,21 @@ function requireSingleImageInput(body = {}) {
   if (present.length === 1) return;
   const error = new Error("POST /api/images requires exactly one image input: path, url, or dataUrl.");
   error.statusCode = 400;
+  throw error;
+}
+
+function assertExpectedCanvasScope(project, body = {}) {
+  const expectedProjectId = Object.hasOwn(body, "expectedProjectId")
+    ? (typeof body.expectedProjectId === "string" ? body.expectedProjectId : null)
+    : undefined;
+  const expectedCanvasId = Object.hasOwn(body, "expectedCanvasId")
+    ? normalizeThreadId(body.expectedCanvasId)
+    : undefined;
+  const projectChanged = expectedProjectId !== undefined && expectedProjectId !== project.id;
+  const canvasChanged = expectedCanvasId !== undefined && expectedCanvasId !== (project.canvasId || null);
+  if (!projectChanged && !canvasChanged) return;
+  const error = new Error("Canvas scope changed. Reload the canvas before editing.");
+  error.statusCode = 409;
   throw error;
 }
 
@@ -520,10 +729,11 @@ async function directoryExists(directoryPath) {
 }
 
 function startAutoCollector(project, registry) {
+  if (!project.autoCollect || !project.chatThreadId) return;
   if (project.collectorTimer) return;
   const intervalMs = registry.autoCollectIntervalMs || 5000;
   project.collectorTimer = setInterval(() => {
-    runAutoCollectorPass(project).catch((error) => {
+    runAutoCollectorPass(project, registry).catch((error) => {
       console.error(`Codex-Canvas auto-collect failed for ${project.projectDir}: ${error.message}`);
     });
   }, intervalMs);
@@ -533,10 +743,10 @@ function startAutoCollector(project, registry) {
 
 function startAutoCollectorWatchers(project, registry) {
   stopAutoCollectorWatchers(project);
-  for (const root of autoCollectorWatchRoots(project.projectDir)) {
+  for (const root of autoCollectorWatchRoots(project, registry)) {
     let watcher;
     try {
-      watcher = watch(root, { persistent: false }, () => scheduleAutoCollectorPass(project, registry.autoCollectWatchDebounceMs));
+      watcher = watch(root, { persistent: false }, () => scheduleAutoCollectorPass(project, registry, registry.autoCollectWatchDebounceMs));
     } catch {
       continue;
     }
@@ -549,19 +759,17 @@ function startAutoCollectorWatchers(project, registry) {
   }
 }
 
-function autoCollectorWatchRoots(projectDir) {
-  return [...new Set([
-    path.resolve(projectDir),
-    path.join(os.homedir(), ".codex", "generated_images")
-  ])];
+function autoCollectorWatchRoots(project, registry) {
+  const threadRoot = generatedImagesDirForThread(project.chatThreadId, registry.generatedImagesRoot);
+  return threadRoot ? [threadRoot] : [];
 }
 
-function scheduleAutoCollectorPass(project, debounceMs = 250) {
+function scheduleAutoCollectorPass(project, registry, debounceMs = 250) {
   if (!project.autoCollect) return;
   if (project.collectorWatchDebounceTimer) clearTimeout(project.collectorWatchDebounceTimer);
   project.collectorWatchDebounceTimer = setTimeout(() => {
     project.collectorWatchDebounceTimer = null;
-    runAutoCollectorPass(project).catch((error) => {
+    runAutoCollectorPass(project, registry).catch((error) => {
       console.error(`Codex-Canvas auto-collect watcher failed for ${project.projectDir}: ${error.message}`);
     });
   }, Math.max(25, debounceMs));
@@ -587,7 +795,8 @@ function stopAutoCollectorWatchers(project) {
   project.collectorWatchers = [];
 }
 
-async function runAutoCollectorPass(project) {
+async function runAutoCollectorPass(project, registry) {
+  if (!project.autoCollect || !project.chatThreadId) return;
   if (project.collectorRunning) return;
   if (hasRunningImageJobs(jobScopeFor(project))) return;
   project.collectorRunning = true;
@@ -598,7 +807,9 @@ async function runAutoCollectorPass(project) {
       limit: 10,
       prompt: "Auto-collected while Codex-Canvas was open",
       excludePaths: getIgnoredGeneratedImagePaths(jobScopeFor(project)),
-      canvasId: project.canvasId
+      canvasId: project.canvasId,
+      threadId: project.chatThreadId,
+      generatedImagesRoot: registry.generatedImagesRoot
     });
     project.collectSinceMs = Math.max(project.collectSinceMs, scanStartedAt);
   } finally {
@@ -725,10 +936,12 @@ async function bindProjectToThread(registry, project, threadId) {
       stopAutoCollector(project);
       if (registry.defaultProjectId === project.id) registry.defaultProjectId = nextId;
     }
+    if (existing.autoCollect) startAutoCollector(existing, registry);
     return existing;
   }
 
   const previousId = project.id;
+  stopAutoCollector(project);
   project.id = nextId;
   project.chatThreadId = normalizedThreadId;
   project.canvasId = canvasId;
@@ -737,6 +950,7 @@ async function bindProjectToThread(registry, project, threadId) {
   registry.projects.set(nextId, project);
   aliasProjectId(registry, previousId, nextId);
   if (registry.defaultProjectId === previousId) registry.defaultProjectId = nextId;
+  if (project.autoCollect) startAutoCollector(project, registry);
   return project;
 }
 
@@ -765,6 +979,10 @@ async function writeProjectRuntime(registry, project) {
     `${JSON.stringify({
       url: projectUrl(registry, project.id),
       pid: registry.pid,
+      serverName: "codex-canvas",
+      serverProtocolVersion: 1,
+      serverVersion: APP_VERSION,
+      serverInstanceId: registry.instanceId,
       projectDir: project.projectDir,
       projectId: project.id,
       canvasId: project.canvasId || null,

@@ -8,8 +8,9 @@ import { PNG } from "pngjs";
 import { collectRecentImages } from "./collector.mjs";
 import { jobsDirFor, pluginRoot } from "./paths.mjs";
 import { addJobPlaceholder, deleteObject, readState, transformState, updateObject } from "./store.mjs";
-import { startCodexImageJob } from "./codex-runner.mjs";
+import { startCodexImageJob, stopCodexProcess } from "./codex-runner.mjs";
 import { recognizeTextLocal } from "./local-ocr.mjs";
+import { createOperationLease } from "./operation-leases.mjs";
 
 const execFileAsync = promisify(execFile);
 const jobs = new Map();
@@ -21,7 +22,6 @@ const outputPollMs = 1000;
 const jobTimeoutMs = 5 * 60_000;
 const backgroundCompletionTimeoutMs = 5 * 60_000;
 const chromaKeyColor = "#ff00ff";
-const imagegenChromaKeyScript = path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "skills", ".system", "imagegen", "scripts", "remove_chroma_key.py");
 const transparentLayerChromaActions = new Set(["quick-edit", "edit-text"]);
 const quickEditAnnotationPromptSuffix = [
   "",
@@ -106,24 +106,35 @@ export async function createImageJob(projectDir, input, options = {}) {
     placeholder: null,
     placeholderId: null,
     backgroundCompletionRunning: false,
+    backgroundCompletionPromise: null,
     error: null
   };
-  const placeholder = await addJobPlaceholder(projectDir, {
-    id: `${id}_placeholder`,
-    action,
-    status: "running",
-    name: actionLabel(action),
-    sourceObjectId: object.id,
-    width: expandOptions?.targetWidth || object.width,
-    height: expandOptions?.targetHeight || object.height
-  }, storeOptions);
+  const operationLease = await createOperationLease("image-job", { action, projectDir, canvasId });
+  let placeholder;
+  try {
+    placeholder = await addJobPlaceholder(projectDir, {
+      id: `${id}_placeholder`,
+      action,
+      status: "running",
+      name: actionLabel(action),
+      sourceObjectId: object.id,
+      width: expandOptions?.targetWidth || object.width,
+      height: expandOptions?.targetHeight || object.height
+    }, storeOptions);
+  } catch (error) {
+    await operationLease.release();
+    throw error;
+  }
   job.placeholder = placeholder;
   job.placeholderId = placeholder.id;
   jobs.set(id, job);
 
-  runJob(projectDir, job, startedAtMs).catch((error) => {
-    markFailed(projectDir, job, error).catch(() => {});
-  });
+  runJob(projectDir, job, startedAtMs)
+    .catch((error) => markFailed(projectDir, job, error).catch(() => {}))
+    .finally(async () => {
+      await job.backgroundCompletionPromise?.catch(() => {});
+      await operationLease.release();
+    });
 
   return publicJob(job);
 }
@@ -174,11 +185,16 @@ export async function createTextRecognitionJob(projectDir, input, options = {}) 
     items: [],
     error: null
   };
+  const operationLease = await createOperationLease("text-recognition", {
+    action: "edit-text",
+    projectDir,
+    canvasId
+  });
   textRecognitionJobs.set(id, job);
 
-  runTextRecognitionJob(projectDir, job, Date.now()).catch((error) => {
-    markTextRecognitionFailed(job, error).catch(() => {});
-  });
+  runTextRecognitionJob(projectDir, job, Date.now())
+    .catch((error) => markTextRecognitionFailed(job, error).catch(() => {}))
+    .finally(() => operationLease.release());
 
   return publicTextRecognitionJob(job);
 }
@@ -276,6 +292,19 @@ export function hasRunningImageJobs(options = {}) {
     || Array.from(textRecognitionJobs.values()).some((job) => jobMatchesScope(job, options) && job.status === "running" && job.stage === "generating");
 }
 
+// Server maintenance must also account for recognition sessions that have not
+// reached the generation stage yet. Stopping the server while one of these is
+// queued or recognizing would strand the frontend session and its child work.
+export function hasActiveCanvasJobs(options = {}) {
+  return Array.from(jobs.values()).some((job) => (
+    jobMatchesScope(job, options)
+    && (job.status === "queued" || job.status === "running" || job.backgroundCompletionRunning)
+  )) || Array.from(textRecognitionJobs.values()).some((job) => (
+    jobMatchesScope(job, options)
+    && (job.status === "queued" || job.status === "running")
+  ));
+}
+
 export function getActivePlaceholderIds(options = {}) {
   return [
     ...Array.from(jobs.values()),
@@ -344,7 +373,7 @@ async function runJob(projectDir, job, startedAtMs) {
     await collectAndPlaceResult(projectDir, job, startedAtMs, { final: false, detectedImagePath: first.imagePath });
   }
   if (job.status === "done") {
-    stopChild(codexJob.child);
+    await stopChild(codexJob.child);
     return;
   }
 
@@ -414,7 +443,7 @@ async function runTextRecognitionJob(projectDir, job, startedAtMs) {
   if (recognized.type === "done") throw new Error("Codex exited before text recognition completed.");
   if (recognized.type === "edit-plan") {
     if (recognized.plan.cancelled) {
-      stopChild(codexJob.child);
+      await stopChild(codexJob.child);
       await markTextRecognitionCancelled(job, startedAtMs);
       return;
     }
@@ -456,7 +485,7 @@ async function runTextRecognitionJob(projectDir, job, startedAtMs) {
     await collectAndPlaceResult(projectDir, job, generationStartedAtMs, { final: false, detectedImagePath: first.imagePath });
   }
   if (job.status === "done") {
-    stopChild(codexJob.child);
+    await stopChild(codexJob.child);
     return;
   }
 
@@ -506,7 +535,7 @@ async function runStandaloneTextEditGeneration(projectDir, job, startedAtMs, edi
     await collectAndPlaceResult(projectDir, job, generationStartedAtMs, { final: false, detectedImagePath: first.imagePath });
   }
   if (job.status === "done") {
-    stopChild(codexJob.child);
+    await stopChild(codexJob.child);
     return;
   }
 
@@ -588,8 +617,10 @@ async function readTextInventory(filePath) {
 
 function timeoutAfter(timeoutMs, onTimeout) {
   return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      onTimeout?.();
+    const timer = setTimeout(async () => {
+      try {
+        await onTimeout?.();
+      } catch {}
       resolve({ type: "timeout" });
     }, timeoutMs);
     timer.unref?.();
@@ -1198,7 +1229,7 @@ async function completeElementBackground(job, manifest, layersDir, backgroundObj
     return manifest;
   } finally {
     job.backgroundCompletionRunning = false;
-    stopChild(codexJob.child);
+    await stopChild(codexJob.child);
   }
 }
 
@@ -1333,35 +1364,22 @@ async function hasTransparentPixels(filePath) {
 }
 
 async function removeChromaKey(inputPath, outputPath, options = {}) {
-  let scriptPath = imagegenChromaKeyScript;
-  let useImagegenHelper = true;
-  try {
-    await fs.access(scriptPath);
-  } catch {
-    scriptPath = path.join(pluginRoot, "scripts", "remove_chroma_key_connected.py");
-    useImagegenHelper = false;
-    await fs.access(scriptPath);
-  }
+  const scriptPath = path.join(pluginRoot, "scripts", "remove_chroma_key_connected.py");
+  await fs.access(scriptPath);
   const args = [
     scriptPath,
     "--input", inputPath,
     "--out", outputPath,
     "--key-color", chromaKeyColor,
     "--auto-key", "border",
-    "--force"
+    "--force",
+    "--soft-matte",
+    "--transparent-threshold", "12",
+    "--opaque-threshold", "220",
+    "--despill"
   ];
-  if (useImagegenHelper) {
-    args.push(
-      "--soft-matte",
-      "--transparent-threshold", "12",
-      "--opaque-threshold", "220",
-      "--despill"
-    );
-    if (options.edgeContract) {
-      args.push("--edge-contract", String(options.edgeContract));
-    }
-  } else {
-    args.push("--tolerance", "36");
+  if (options.edgeContract) {
+    args.push("--edge-contract", String(options.edgeContract));
   }
   await runPython(args);
 }
@@ -1385,9 +1403,9 @@ async function runPython(args, options = {}) {
   throw new Error(`Python is required for image post-processing. ${errors.join(" | ")}`);
 }
 
-function stopChild(child) {
-  if (!child || child.killed || child.exitCode !== null) return;
-  child.kill();
+async function stopChild(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return false;
+  return stopCodexProcess(child);
 }
 
 async function rememberGeneratedImages(sinceMs, options = {}) {
@@ -1693,7 +1711,7 @@ function layerGroupIndexFor(layer, importedOrder) {
 
 function startElementBackgroundCompletion(projectDir, job, manifest, backgroundObject) {
   const layersDir = path.join(job.outputDir, "elements");
-  completeElementBackground(job, manifest, layersDir, backgroundObject).catch(async (error) => {
+  job.backgroundCompletionPromise = completeElementBackground(job, manifest, layersDir, backgroundObject).catch(async (error) => {
     await appendJobLog(job, `Edit Elements background completion failed after layers were placed: ${error?.message || String(error)}`);
     await updateObject(projectDir, backgroundObject.id, {
       layerGroupBackgroundStatus: "failed"

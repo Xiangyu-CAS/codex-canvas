@@ -7,6 +7,7 @@ import { createImageJob } from "./jobs.mjs";
 import { addImage, promptHistory, readState, searchObjects, versionGroups } from "./store.mjs";
 import { pluginRoot, resolveProjectDir } from "./paths.mjs";
 import { canvasIdForThread, normalizeThreadId } from "./runtime.mjs";
+import { APP_VERSION } from "./version.mjs";
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -43,7 +44,7 @@ async function handle(method, params) {
     return {
       protocolVersion: params.protocolVersion || "2024-11-05",
       capabilities: { tools: {} },
-      serverInfo: { name: "codex-canvas", version: "0.1.1" }
+      serverInfo: { name: "codex-canvas", version: APP_VERSION }
     };
   }
 
@@ -59,8 +60,7 @@ async function handle(method, params) {
             properties: {
               projectDir: { type: "string", description: "Absolute path to the active Codex project." },
               port: { type: "number", description: "Local port. Defaults to 43217." },
-              threadId: { type: "string", description: "Codex thread id to bind this canvas to for canvas-to-chat and thread-scoped canvas state. Defaults to the current Codex thread when available." },
-              autoUpdate: { type: "boolean", description: "Run the best-effort Codex-Canvas fast-forward updater before opening. Defaults to true." }
+              threadId: { type: "string", description: "Codex thread id to bind this canvas to for canvas-to-chat and thread-scoped canvas state. Defaults to the current Codex thread when available." }
             }
           }
         },
@@ -151,7 +151,7 @@ async function handle(method, params) {
         },
         {
           name: "collect_recent_images",
-          description: "Scan recent generated and project images and import them into Codex-Canvas. Use as a fallback after imagegen when exact output paths are not known.",
+          description: "Import recent images from the bound Codex thread directory, or from explicit recovery roots. Use as a fallback after imagegen when exact output paths are not known.",
           inputSchema: {
             type: "object",
             required: ["projectDir"],
@@ -160,13 +160,13 @@ async function handle(method, params) {
               roots: {
                 type: "array",
                 items: { type: "string" },
-                description: "Optional absolute or project-relative directories to scan. Defaults to ~/.codex/generated_images plus the current project, excluding canvas assets."
+                description: "Optional absolute or project-relative recovery directories. When omitted, only ~/.codex/generated_images/<threadId> is scanned; without a bound thread the default scan is a safe no-op."
               },
               sourceObjectId: {
                 type: "string",
                 description: "When collecting an image generated from a selected canvas object, place results in a row to the right of that source object."
               },
-              threadId: { type: "string", description: "Codex thread id whose canvas should receive collected images. Pass this explicitly for thread-scoped canvases; omitted means the default project canvas." },
+              threadId: { type: "string", description: "Codex thread id whose generated_images directory and canvas should be used. Pass explicitly for thread-scoped collection; omitted collection is a no-op unless roots are provided." },
               canvasId: { type: "string", description: "Explicit Codex-Canvas canvas id. Overrides the canvas id derived from threadId." },
               sinceMinutes: { type: "number", description: "Only import images modified in the last N minutes. Defaults to 120." },
               limit: { type: "number", description: "Maximum number of images to import. Defaults to 20." },
@@ -225,7 +225,6 @@ async function handle(method, params) {
       const entrypoint = path.join(pluginRoot, "bin", "codex-canvas.mjs");
       const cliArgs = ["open", "--project", projectDir, "--port", String(normalizePort(args.port))];
       if (args.threadId) cliArgs.push("--thread-id", args.threadId);
-      if (args.autoUpdate === false) cliArgs.push("--no-update");
       const output = await captureConsole(() => cliMain(
         cliArgs,
         { entrypoint }
@@ -302,7 +301,8 @@ async function handle(method, params) {
         limit: normalizeToolLimit(args.limit),
         prompt: args.prompt || "Collected after image generation",
         sourceObjectId: args.sourceObjectId || null,
-        canvasId: canvas.canvasId
+        canvasId: canvas.canvasId,
+        threadId: canvas.threadId
       });
       return textResult(`Collected ${result.imported.length} recent image(s) into Codex-Canvas.`, result);
     }
