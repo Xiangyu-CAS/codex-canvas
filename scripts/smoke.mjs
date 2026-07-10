@@ -2824,7 +2824,7 @@ async function testDoctorOptionalDepsWithoutPython() {
 }
 
 async function testChatTurnActionContract() {
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-chat-turn-"));
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas chat-turn & 100%-"));
   const fakeCodex = path.join(tmp, process.platform === "win32" ? "codex.cmd" : "codex");
   await writeNodeExecutable(fakeCodex, fakeCodexAppServerScript());
 
@@ -3114,7 +3114,7 @@ async function testChatBindingAlias() {
 }
 
 async function testChatWebSocketFallback() {
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-chat-"));
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas chat & 100%-"));
   const fakeCodex = path.join(tmp, process.platform === "win32" ? "codex.cmd" : "codex");
   const imagePath = path.join(tmp, "image.png");
   await fs.writeFile(imagePath, Buffer.from(pngOne, "base64"));
@@ -3181,7 +3181,7 @@ async function testQuickEditAnnotations() {
     return;
   }
 
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-quick-edit-annotations-"));
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas quick-edit & 100%-"));
   const fakeCodex = path.join(tmp, process.platform === "win32" ? "codex.cmd" : "codex");
   const makeSource = path.join(tmp, "make-source.py");
   await fs.writeFile(makeSource, [
@@ -3200,7 +3200,8 @@ async function testQuickEditAnnotations() {
   const previousCli = process.env.CODEX_CANVAS_CODEX_CLI;
   process.env.CODEX_CANVAS_CODEX_CLI = fakeCodex;
   try {
-    const plainProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-quick-edit-plain-"));
+    const plainProjectDir = path.join(tmp, "plain project & 100%");
+    await fs.mkdir(plainProjectDir);
     const plainSource = await addImage(plainProjectDir, {
       path: path.join(tmp, "source.png"),
       name: "plain-source.png",
@@ -3221,7 +3222,8 @@ async function testQuickEditAnnotations() {
       throw new Error("Quick Edit without annotations should not append the annotation prompt suffix.");
     }
 
-    const annotatedProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-quick-edit-marked-"));
+    const annotatedProjectDir = path.join(tmp, "marked project & 100%");
+    await fs.mkdir(annotatedProjectDir);
     const markedSource = await addImage(annotatedProjectDir, {
       path: path.join(tmp, "source.png"),
       name: "marked-source.png",

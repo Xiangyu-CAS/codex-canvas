@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import crossSpawn from "cross-spawn";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -94,9 +95,9 @@ export async function startCodexImageJob({ projectDir, action, imagePath, output
 }
 
 export function spawnCodexProcess(executable, args, options = {}) {
-  return spawn(executable, args, {
+  return crossSpawn(executable, args, {
     ...options,
-    shell: options.shell ?? shouldUseShellForCommandScript(executable)
+    shell: false
   });
 }
 
@@ -196,10 +197,6 @@ async function isExecutable(filePath) {
   } catch {
     return false;
   }
-}
-
-function shouldUseShellForCommandScript(filePath) {
-  return process.platform === "win32" && /\.(?:cmd|bat)$/i.test(filePath);
 }
 
 function transparentLayerChromaInstructions() {

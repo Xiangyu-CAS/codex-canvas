@@ -373,7 +373,7 @@ async function runJob(projectDir, job, startedAtMs) {
     await collectAndPlaceResult(projectDir, job, startedAtMs, { final: false, detectedImagePath: first.imagePath });
   }
   if (job.status === "done") {
-    stopChild(codexJob.child);
+    await stopChild(codexJob.child);
     return;
   }
 
@@ -443,7 +443,7 @@ async function runTextRecognitionJob(projectDir, job, startedAtMs) {
   if (recognized.type === "done") throw new Error("Codex exited before text recognition completed.");
   if (recognized.type === "edit-plan") {
     if (recognized.plan.cancelled) {
-      stopChild(codexJob.child);
+      await stopChild(codexJob.child);
       await markTextRecognitionCancelled(job, startedAtMs);
       return;
     }
@@ -485,7 +485,7 @@ async function runTextRecognitionJob(projectDir, job, startedAtMs) {
     await collectAndPlaceResult(projectDir, job, generationStartedAtMs, { final: false, detectedImagePath: first.imagePath });
   }
   if (job.status === "done") {
-    stopChild(codexJob.child);
+    await stopChild(codexJob.child);
     return;
   }
 
@@ -535,7 +535,7 @@ async function runStandaloneTextEditGeneration(projectDir, job, startedAtMs, edi
     await collectAndPlaceResult(projectDir, job, generationStartedAtMs, { final: false, detectedImagePath: first.imagePath });
   }
   if (job.status === "done") {
-    stopChild(codexJob.child);
+    await stopChild(codexJob.child);
     return;
   }
 
@@ -617,8 +617,10 @@ async function readTextInventory(filePath) {
 
 function timeoutAfter(timeoutMs, onTimeout) {
   return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      onTimeout?.();
+    const timer = setTimeout(async () => {
+      try {
+        await onTimeout?.();
+      } catch {}
       resolve({ type: "timeout" });
     }, timeoutMs);
     timer.unref?.();
@@ -1227,7 +1229,7 @@ async function completeElementBackground(job, manifest, layersDir, backgroundObj
     return manifest;
   } finally {
     job.backgroundCompletionRunning = false;
-    stopChild(codexJob.child);
+    await stopChild(codexJob.child);
   }
 }
 
@@ -1401,9 +1403,9 @@ async function runPython(args, options = {}) {
   throw new Error(`Python is required for image post-processing. ${errors.join(" | ")}`);
 }
 
-function stopChild(child) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) return;
-  void stopCodexProcess(child);
+async function stopChild(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) return false;
+  return stopCodexProcess(child);
 }
 
 async function rememberGeneratedImages(sinceMs, options = {}) {

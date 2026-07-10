@@ -74,6 +74,7 @@
   },
   "dependencies": {
     "ag-psd": "^31.0.0",
+    "cross-spawn": "^7.0.6",
     "pngjs": "^7.0.0"
   }
 }

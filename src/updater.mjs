@@ -636,20 +636,26 @@ async function runPortableExecutable(command, args, { cwd, timeoutMs = 5000 } = 
   child.stdout.on("data", (chunk) => stdout.push(chunk));
   child.stderr.on("data", (chunk) => stderr.push(chunk));
   return new Promise((resolve, reject) => {
+    let timedOut = false;
     const timeout = setTimeout(() => {
-      void stopCodexProcess(child);
-      const error = new Error(`${path.basename(command)} timed out after ${timeoutMs} ms.`);
-      error.stdout = Buffer.concat(stdout).toString();
-      error.stderr = Buffer.concat(stderr).toString();
-      reject(error);
+      timedOut = true;
+      void (async () => {
+        await stopCodexProcess(child);
+        const error = new Error(`${path.basename(command)} timed out after ${timeoutMs} ms.`);
+        error.stdout = Buffer.concat(stdout).toString();
+        error.stderr = Buffer.concat(stderr).toString();
+        reject(error);
+      })();
     }, timeoutMs);
     timeout.unref?.();
     child.once("error", (error) => {
       clearTimeout(timeout);
+      if (timedOut) return;
       reject(error);
     });
     child.once("close", (code, signal) => {
       clearTimeout(timeout);
+      if (timedOut) return;
       const result = {
         stdout: Buffer.concat(stdout).toString(),
         stderr: Buffer.concat(stderr).toString()
