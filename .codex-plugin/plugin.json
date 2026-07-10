@@ -1,6 +1,6 @@
 {
   "name": "codex-canvas",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Local infinite canvas for Codex image generation and editing workflows.",
   "author": {
     "name": "Codex-Canvas Contributors"
