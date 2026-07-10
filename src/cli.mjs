@@ -108,7 +108,8 @@ export async function main(args, context = {}) {
       sinceMs: Date.now() - sinceMinutes * 60 * 1000,
       prompt: optionValue(options, ["prompt"], "--prompt") || "Collected after image generation",
       sourceObjectId: optionValue(options, ["source-object-id", "sourceObjectId"], "--source-object-id") || null,
-      canvasId: canvas.canvasId
+      canvasId: canvas.canvasId,
+      threadId: canvas.threadId
     });
     console.log(JSON.stringify(result, null, 2));
     return;
@@ -537,7 +538,7 @@ Commands:
   open      Best-effort fast-forward update, then start or reuse the local server and print the canvas URL.
   start     Run the local canvas server in the foreground with auto-collection enabled.
   import    Copy an image into the project canvas and place it on the board.
-  collect   Import recent image files from ~/.codex/generated_images and the project.
+  collect   Import recent images from the bound thread directory, or explicit --from recovery roots.
   search    Search canvas objects by name, prompt, text, source path, or grouping metadata.
   prompts   List recent unique prompts from canvas objects.
   versions  Group canvas object version history by sourceObjectId, batchId, layoutMode, or prompt.
@@ -551,7 +552,8 @@ Commands:
   doctor-deps Check all optional Python dependencies without installing them.
 
 Canvas scope:
-  --thread-id selects the canvas bound to a Codex thread.
+  --thread-id selects the canvas and default generated_images/<thread-id> collection scope.
   --canvas-id selects an explicit Codex-Canvas canvas scope and overrides --thread-id.
+  --from selects explicit project-relative or absolute recovery roots and bypasses the default thread directory.
 `.trim());
 }

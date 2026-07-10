@@ -27,10 +27,11 @@ description: 打开并操作 Codex-Canvas，让它既可以作为独立 Agent Sk
 
 1. 对生成或编辑后的图片，尽量将输出保存到当前工作区。
 2. 已知图片路径时，用以下命令导入：
-   `node <codex-canvas-root>/bin/codex-canvas.mjs import <image-path> --project <workspace>`
+   `node <codex-canvas-root>/bin/codex-canvas.mjs import <image-path> --project <workspace> --thread-id <thread-id>`
 3. 如果输出路径不明确，用以下命令收集近期图片：
-   `node <codex-canvas-root>/bin/codex-canvas.mjs collect --project <workspace> --since-minutes 30 --limit 5`
-4. 遵守 Codex-Canvas 的放置规则：同一批生成图横向排列；从画布对象派生的结果放到源图片右侧。
+   `node <codex-canvas-root>/bin/codex-canvas.mjs collect --project <workspace> --thread-id <thread-id> --since-minutes 30 --limit 5`
+4. 默认收集只扫描 `~/.codex/generated_images/<thread-id>`。未绑定 thread 时默认收集会安全地不执行；只有用户明确要求手动恢复时，才使用 `--from <dir,dir>` 扫描指定目录。
+5. 遵守 Codex-Canvas 的放置规则：同一批生成图横向排列；从画布对象派生的结果放到源图片右侧。
 
 ## AI 操作边界
 

@@ -263,7 +263,15 @@
           </div>
 
           <nav class="tool-dock" aria-label="Canvas tools">
-            <button class="active" title="Select" aria-label="Select" data-tooltip="Select" data-tool="select">
+            <button class="active" title="Hand" aria-label="Hand" data-tooltip="Hand" data-tool="hand">
+              <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M8 13v-8.5a1.5 1.5 0 0 1 3 0v6.5"></path>
+                <path d="M11 5.5v-2a1.5 1.5 0 0 1 3 0v7.5"></path>
+                <path d="M14 5.5a1.5 1.5 0 0 1 3 0v5.5"></path>
+                <path d="M17 7.5a1.5 1.5 0 0 1 3 0v6.5a6 6 0 0 1 -6 6h-2c-2.4 0 -3.4 -.6 -4.8 -2l-3.6 -4.5a1.5 1.5 0 0 1 2.3 -1.9l2.1 1.4"></path>
+              </svg>
+            </button>
+            <button title="Select" aria-label="Select" data-tooltip="Select" data-tool="select">
               <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M7.904 17.563a1.2 1.2 0 0 0 2.228 .308l2.09 -3.093l4.907 4.907a1.067 1.067 0 0 0 1.509 0l1.047 -1.047a1.067 1.067 0 0 0 0 -1.509l-4.907 -4.907l3.113 -2.09a1.2 1.2 0 0 0 -.309 -2.228l-13.582 -3.904l3.904 13.563"></path>
               </svg>
@@ -291,6 +299,18 @@
               </svg>
             </button>
             <span class="dock-separator"></span>
+            <button title="Undo" aria-label="Undo" data-tooltip="Undo" data-history-action="undo" disabled>
+              <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M9 14l-4 -4l4 -4"></path>
+                <path d="M5 10h11a4 4 0 1 1 0 8h-1"></path>
+              </svg>
+            </button>
+            <button title="Redo" aria-label="Redo" data-tooltip="Redo" data-history-action="redo" disabled>
+              <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M15 14l4 -4l-4 -4"></path>
+                <path d="M19 10h-11a4 4 0 1 0 0 8h1"></path>
+              </svg>
+            </button>
             <button title="Reset view" aria-label="Reset view" data-tooltip="Reset view" data-view-action="reset">
               <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M3.06 13a9 9 0 1 0 .49 -4.087"></path>

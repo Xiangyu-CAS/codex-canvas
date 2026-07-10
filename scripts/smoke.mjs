@@ -12,7 +12,7 @@ import { assetsDirFor, jobsDirFor, legacyCanvasDataDirFor, statePathFor } from "
 import { exportLayerGroupPsd } from "../src/psd-export.mjs";
 import { canvasIdForThread } from "../src/runtime.mjs";
 import { createServer as createAgentCanvasServer } from "../src/server.mjs";
-import { addImage, addObject, deleteObjects, markStaleJobPlaceholders, promptHistory, readState, reorderLayerGroupLayer, restoreObjects, searchObjects, transformState, updateObject, updateSelection, updateViewport, versionGroups } from "../src/store.mjs";
+import { addImage, addObject, deleteObjects, markStaleJobPlaceholders, promptHistory, readState, reorderLayerGroupLayer, restoreObjects, searchObjects, setLayerGroupOrder, transformState, updateObject, updateObjects, updateSelection, updateViewport, versionGroups } from "../src/store.mjs";
 import { appUpdateStatus } from "../src/updater.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -26,7 +26,9 @@ async function main() {
   const results = [];
   for (const [name, test] of [
     ["store concurrency", testStoreConcurrency],
+    ["cross process store locking", testCrossProcessStoreLocking],
     ["delete undo restore", testDeleteUndoRestore],
+    ["batch object update atomicity", testBatchObjectUpdateAtomicity],
     ["object patch sanitization", testObjectPatchSanitization],
     ["object input sanitization", testObjectInputSanitization],
     ["layer group overlap reorder", testLayerGroupOverlapReorder],
@@ -42,6 +44,7 @@ async function main() {
     ["canvas prompt history", testCanvasPromptHistory],
     ["canvas version groups", testCanvasVersionGroups],
     ["collector numeric boundaries", testCollectorNumericBoundaries],
+    ["thread scoped collector defaults", testThreadScopedCollectorDefaults],
     ["cli numeric boundaries", testCliNumericBoundaries],
     ["port numeric boundaries", testPortNumericBoundaries],
     ["http query numeric boundaries", testHttpQueryNumericBoundaries],
@@ -49,13 +52,15 @@ async function main() {
     ["http file response boundaries", testHttpFileResponseBoundaries],
     ["http project registration boundaries", testHttpProjectRegistrationBoundaries],
     ["frontend action contract", testFrontendActionContract],
+    ["canvas history queue", testCanvasHistoryQueue],
+    ["http canvas mutation scope", testHttpCanvasMutationScope],
     ["image job error contract", testImageJobErrorContract],
     ["thread migration asset paths", testThreadMigrationAssetPaths],
     ["persistent project registry", testPersistentProjectRegistry],
     ["persistent project registry restored auto collector", testPersistentProjectRegistryRestoredAutoCollector],
     ["mcp canvas status", testMcpCanvasStatus],
     ["mcp numeric boundaries", testMcpNumericBoundaries],
-    ["auto collector watcher watermark", testAutoCollectorWatermark],
+    ["thread scoped auto collector", testAutoCollectorWatermark],
     ["package optional dependency scripts", testPackageOptionalDependencyScripts],
     ["plugin package manifest", testPluginPackageManifest],
     ["personal plugin installer", testPersonalPluginInstaller],
@@ -270,6 +275,18 @@ async function testLayerGroupOverlapReorder() {
     unchanged.map((object) => object.id).join(","),
     [bottom.id, unrelated.id, top.id, selected.id].join(","),
     "Layer reorder no-op should preserve layer order"
+  );
+
+  const restoredOrder = [bottom.id, unrelated.id, selected.id, top.id];
+  const restored = await setLayerGroupOrder(projectDir, groupId, restoredOrder);
+  assertEqual(restored.objects.map((object) => object.id).join(","), restoredOrder.join(","), "exact layer-order restore should return the requested order");
+  assertEqual(restored.objects.map((object) => object.layerGroupIndex).join(","), "0,1,2,3", "exact layer-order restore should reindex every group member");
+  const restoredState = (await readState(projectDir)).objects.filter((object) => object.layerGroupId === groupId);
+  assertEqual(restoredState.map((object) => object.id).join(","), restoredOrder.join(","), "exact layer-order restore should rebuild persisted object order for DOM stacking");
+
+  await setLayerGroupOrder(projectDir, groupId, restoredOrder.slice(1)).then(
+    () => { throw new Error("exact layer-order restore should reject changed group membership"); },
+    (error) => assertEqual(error.statusCode, 409, "exact layer-order restore should reject changed group membership")
   );
 }
 
@@ -788,6 +805,54 @@ async function testCollectorNumericBoundaries() {
   assertEqual(capped.imported.length, 100, "collector should cap oversized limits");
 }
 
+async function testThreadScopedCollectorDefaults() {
+  const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-thread-collector-"));
+  const projectDir = path.join(fixtureRoot, "project");
+  const generatedImagesRoot = path.join(fixtureRoot, "generated_images");
+  const threadId = "thread-collector-a";
+  const threadDir = path.join(generatedImagesRoot, threadId);
+  await fs.mkdir(threadDir, { recursive: true });
+  await fs.mkdir(projectDir, { recursive: true });
+
+  const targetPath = path.join(threadDir, "target.png");
+  const globalPath = path.join(generatedImagesRoot, "global.png");
+  const projectPath = path.join(projectDir, "project.png");
+  await writeDistinctPng(targetPath, "thread-target");
+  await writeDistinctPng(globalPath, "global-output");
+  await writeDistinctPng(projectPath, "project-output");
+
+  const scoped = await collectRecentImages(projectDir, {
+    threadId,
+    canvasId: canvasIdForThread(threadId),
+    generatedImagesRoot,
+    sinceMs: 0
+  });
+  assertEqual(scoped.scannedRoots.length, 1, "default collection should scan exactly one thread directory");
+  assertEqual(scoped.scannedRoots[0], threadDir, "default collection should use generated_images/<threadId>");
+  assertEqual(scoped.imported.length, 1, "default collection should import only the bound thread output");
+  assertEqual(path.resolve(scoped.imported[0].sourcePath), path.resolve(targetPath), "default collection should not import global or project-root images");
+
+  const unboundProjectDir = path.join(fixtureRoot, "unbound-project");
+  await fs.mkdir(unboundProjectDir, { recursive: true });
+  const unbound = await collectRecentImages(unboundProjectDir, {
+    generatedImagesRoot,
+    sinceMs: 0
+  });
+  assertEqual(unbound.scannedRoots.length, 0, "unbound default collection should be a safe no-op");
+  assertEqual(unbound.imported.length, 0, "unbound default collection should not import global images");
+
+  const recoveryDir = path.join(fixtureRoot, "recovery");
+  const recoveryPath = path.join(recoveryDir, "recovered.png");
+  await writeDistinctPng(recoveryPath, "direct-explicit-recovery");
+  const recovered = await collectRecentImages(unboundProjectDir, {
+    roots: [recoveryDir],
+    generatedImagesRoot,
+    sinceMs: 0
+  });
+  assertEqual(recovered.imported.length, 1, "explicit recovery roots should remain available without a thread binding");
+  assertEqual(path.resolve(recovered.imported[0].sourcePath), path.resolve(recoveryPath), "explicit recovery should scan only the requested root");
+}
+
 async function testCliNumericBoundaries() {
   const projectDir = await createLimitFixtureProject("cli-limit");
   const invalid = await runCliJson(["search", "cli-limit", "--project", projectDir, "--limit", "-5", "--json"]);
@@ -970,6 +1035,87 @@ async function testHttpProjectRegistrationBoundaries() {
   }
 }
 
+async function testHttpCanvasMutationScope() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-http-scope-"));
+  const { server, url } = await createServer({
+    projectDir,
+    port: 0,
+    autoCollect: false,
+    chatThreadId: "thread-scope-a"
+  });
+  const base = url.replace(/\?.*/, "");
+  const oldSearch = new URL(url).search;
+  try {
+    const initialStateResponse = await fetch(`${base}api/state${oldSearch}`);
+    const initialState = await initialStateResponse.json();
+    assertEqual(initialState.canvasScope?.threadId, "thread-scope-a", "HTTP state should expose its server-resolved thread scope");
+
+    const created = await postJson(`${base}api/objects${oldSearch}`, {
+      type: "text",
+      text: "scope-a-only",
+      expectedProjectId: initialState.canvasScope.projectId,
+      expectedCanvasId: initialState.canvasScope.canvasId
+    });
+    assertEqual(created.status, 201, "matching expected canvas scope should allow a mutation");
+
+    const groupPeer = await postJson(`${base}api/objects${oldSearch}`, {
+      type: "text",
+      text: "scope-a-peer",
+      x: 8,
+      y: 8,
+      expectedProjectId: initialState.canvasScope.projectId,
+      expectedCanvasId: initialState.canvasScope.canvasId
+    });
+    assertEqual(groupPeer.status, 201, "scope fixture should create an overlapping layer peer");
+    const groupId = "scope-history-group";
+    const grouped = await fetch(`${base}api/objects${oldSearch}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        updates: [
+          { id: created.body.id, patch: { layerGroupId: groupId, layerGroupIndex: 0 } },
+          { id: groupPeer.body.id, patch: { layerGroupId: groupId, layerGroupIndex: 1 } }
+        ],
+        expectedProjectId: initialState.canvasScope.projectId,
+        expectedCanvasId: initialState.canvasScope.canvasId
+      })
+    });
+    assertEqual(grouped.status, 200, "matching expected canvas scope should allow an atomic layer-group setup");
+
+    const rebound = await postJson(`${base}api/chat-binding${oldSearch}`, { threadId: "thread-scope-b" });
+    assertEqual(rebound.status, 200, "scope fixture should rebind through the original project URL");
+
+    const staleRestore = await postJson(`${base}api/objects/restore${oldSearch}`, {
+      objects: [{ object: created.body, index: 0 }],
+      expectedProjectId: initialState.canvasScope.projectId,
+      expectedCanvasId: initialState.canvasScope.canvasId
+    });
+    assertEqual(staleRestore.status, 409, "a stale undo must not restore objects through a project alias into another thread");
+
+    const staleReorder = await postJson(`${base}api/layer-groups/${groupId}/reorder${oldSearch}`, {
+      objectId: created.body.id,
+      direction: "up",
+      expectedProjectId: initialState.canvasScope.projectId,
+      expectedCanvasId: initialState.canvasScope.canvasId
+    });
+    assertEqual(staleReorder.status, 409, "a stale layer-order undo must not mutate a rebound thread canvas");
+
+    const staleExactOrder = await postJson(`${base}api/layer-groups/${groupId}/order${oldSearch}`, {
+      objectIds: [created.body.id, groupPeer.body.id],
+      expectedProjectId: initialState.canvasScope.projectId,
+      expectedCanvasId: initialState.canvasScope.canvasId
+    });
+    assertEqual(staleExactOrder.status, 409, "an exact layer-order history restore must reject a stale rebound canvas scope");
+
+    const reboundStateResponse = await fetch(`${base}api/state${oldSearch}`);
+    const reboundState = await reboundStateResponse.json();
+    assertEqual(reboundState.canvasScope?.threadId, "thread-scope-b", "old project URLs should report the rebound server scope");
+    assertEqual(reboundState.objects.some((object) => object.text === "scope-a-only"), false, "rebound thread should remain free of stale undo objects");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
 async function testFrontendActionContract() {
   const html = await fs.readFile(path.join(process.cwd(), "public", "index.html"), "utf8");
   const app = await fs.readFile(path.join(process.cwd(), "public", "app.js"), "utf8");
@@ -1003,6 +1149,12 @@ async function testFrontendActionContract() {
   if (!app.includes('const defaultQuickEditMarkColor = "#d93025"') || !app.includes("applyQuickEditDefaultMarkColor(action)")) {
     throw new Error("Quick Edit should default temporary markup to red without changing the global tool color default.");
   }
+  if (!html.includes('data-tool="hand"') || !html.includes('data-history-action="undo"') || !html.includes('data-history-action="redo"')) {
+    throw new Error("frontend should expose the default Hand tool plus Undo and Redo controls.");
+  }
+  if (!app.includes('const defaultCanvasTool = "hand"') || !app.includes('import { CanvasHistory } from "./canvas-history.js"')) {
+    throw new Error("frontend should initialize the scoped canvas history with Hand as the default tool.");
+  }
 
   const frontendImageJobActions = [...domActions].filter((action) => stableFrontendImageActions.includes(action));
   for (const action of frontendImageJobActions) {
@@ -1017,6 +1169,17 @@ async function testFrontendActionContract() {
   }
 
   await assertHttpImageJobActionsAccepted();
+}
+
+async function testCanvasHistoryQueue() {
+  const result = await execFileAsync(process.execPath, [path.join(process.cwd(), "scripts", "history-smoke.mjs")], {
+    cwd: process.cwd(),
+    maxBuffer: 1024 * 1024,
+    windowsHide: true
+  });
+  const payload = JSON.parse(result.stdout);
+  assertEqual(payload.ok, true, "canvas history queue smoke should pass");
+  assertEqual(payload.checks.length, 10, "canvas history queue smoke should cover its concurrency and scope boundaries");
 }
 
 async function assertHttpImageJobActionsAccepted() {
@@ -1094,6 +1257,10 @@ async function testThreadMigrationAssetPaths() {
     throw new Error("Thread canvas migration should rewrite assetPath into the thread assets directory.");
   }
   await fs.access(migratedImage.assetPath);
+
+  const secondThreadCanvasId = "thread-migration-second";
+  const secondThreadState = await readState(projectDir, { canvasId: secondThreadCanvasId });
+  assertEqual(secondThreadState.objects.length, 0, "legacy default canvas objects should migrate only once and must not leak into a second thread");
 }
 
 async function testPersistentProjectRegistry() {
@@ -1211,11 +1378,16 @@ async function testPersistentProjectRegistryRestoredAutoCollector() {
   const restoredProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-registry-auto-restored-"));
   const registryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-registry-auto-file-"));
   const persistentRegistryPath = path.join(registryRoot, "projects.json");
+  const generatedImagesRoot = path.join(registryRoot, "generated_images");
+  const restoredThreadId = "thread-restored-auto-collector";
+  const restoredThreadDir = path.join(generatedImagesRoot, restoredThreadId);
+  await fs.mkdir(restoredThreadDir, { recursive: true });
   const first = await createServer({
     projectDir: firstProjectDir,
     port: 0,
     autoCollect: true,
     persistentRegistryPath,
+    generatedImagesRoot,
     autoCollectIntervalMs: 100,
     autoCollectWatchDebounceMs: 25
   });
@@ -1224,7 +1396,8 @@ async function testPersistentProjectRegistryRestoredAutoCollector() {
   let restoredProjectId;
   try {
     const registered = await postJson(`${firstBase}api/projects${firstSearch}`, {
-      projectDir: restoredProjectDir
+      projectDir: restoredProjectDir,
+      threadId: restoredThreadId
     });
     assertEqual(registered.status, 201, "HTTP project registration should persist an auto-collecting project");
     assertEqual(registered.body.project?.autoCollect, true, "newly registered projects should auto-collect by default");
@@ -1238,6 +1411,7 @@ async function testPersistentProjectRegistryRestoredAutoCollector() {
     port: 0,
     autoCollect: true,
     persistentRegistryPath,
+    generatedImagesRoot,
     autoCollectIntervalMs: 100,
     autoCollectWatchDebounceMs: 25
   });
@@ -1250,51 +1424,84 @@ async function testPersistentProjectRegistryRestoredAutoCollector() {
     assertEqual(restored.projectDir, restoredProjectDir, "Restored auto-collecting project should keep its projectDir");
     assertEqual(restored.autoCollect, true, "Restored auto-collecting project should resume auto-collection when the service enables it");
 
-    const imagePath = path.join(restoredProjectDir, `restored-auto-${Date.now()}.png`);
-    await fs.writeFile(imagePath, Buffer.from(pngOne, "base64"));
+    const imagePath = path.join(restoredThreadDir, `restored-auto-${Date.now()}.png`);
+    await writeDistinctPng(imagePath, "restored-thread-output");
     const imported = await waitForStateObject(
       `${secondBase}api/state?project=${encodeURIComponent(restoredProjectId)}`,
       (object) => path.resolve(object.sourcePath || "") === path.resolve(imagePath),
       "restored project auto collector should import a new image after server restart"
     );
-    assertEqual(imported.name, path.basename(imagePath), "restored project auto collector should import the new project image");
+    assertEqual(imported.name, path.basename(imagePath), "restored project auto collector should import the bound thread image");
   } finally {
     await new Promise((resolve) => second.server.close(resolve));
   }
 }
 
 async function testAutoCollectorWatermark() {
-  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-collector-"));
+  const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-collector-"));
+  const projectDir = path.join(fixtureRoot, "project");
+  const generatedImagesRoot = path.join(fixtureRoot, "generated_images");
+  const threadA = "thread-auto-collector-a";
+  const threadB = "thread-auto-collector-b";
+  const threadADir = path.join(generatedImagesRoot, threadA);
+  const threadBDir = path.join(generatedImagesRoot, threadB);
+  await fs.mkdir(projectDir, { recursive: true });
+  await fs.mkdir(threadADir, { recursive: true });
+  await fs.mkdir(threadBDir, { recursive: true });
   const { server, url } = await createServer({
     projectDir,
     port: 0,
     autoCollect: true,
+    chatThreadId: threadA,
+    generatedImagesRoot,
     autoCollectIntervalMs: 60_000,
     autoCollectWatchDebounceMs: 50
   });
   const base = url.replace(/\?.*/, "");
   const search = new URL(url).search;
   try {
+    const registeredB = await postJson(`${base}api/projects${search}`, {
+      projectDir,
+      threadId: threadB
+    });
+    assertEqual(registeredB.status, 201, "a second thread canvas should register for isolation coverage");
+    const threadBSearch = new URL(registeredB.body.url).search;
+
+    const registeredUnbound = await postJson(`${base}api/projects${search}`, {
+      projectDir
+    });
+    assertEqual(registeredUnbound.status, 201, "an unbound canvas should register for safe no-op coverage");
+    const unboundSearch = new URL(registeredUnbound.body.url).search;
+
     const staleMtimeMs = Date.now();
-    const firstPath = path.join(projectDir, "first.png");
-    await fs.writeFile(firstPath, Buffer.from(pngOne, "base64"));
-    await waitForObjectCount(`${base}api/state${search}`, 1, "auto collector watcher should import a new project image before the polling fallback");
+    const firstPath = path.join(threadADir, "first.png");
+    await writeDistinctPng(firstPath, "thread-a-first");
+    await waitForObjectCount(`${base}api/state${search}`, 1, "auto collector watcher should import a new bound-thread image before the polling fallback");
+    await delay(250);
+    const untouchedB = await (await fetch(`${base}api/state${threadBSearch}`)).json();
+    assertEqual(untouchedB.objects.length, 0, "thread A generated images must not leak into thread B");
 
-    const stalePath = path.join(projectDir, "stale-but-new-file.png");
-    await fs.writeFile(stalePath, Buffer.from("not a real png, but a unique image candidate"));
+    const secondPath = path.join(threadBDir, "second.png");
+    await writeDistinctPng(secondPath, "thread-b-first");
+    await waitForObjectCount(`${base}api/state${threadBSearch}`, 1, "thread B should collect its own generated image");
+    const unchangedA = await (await fetch(`${base}api/state${search}`)).json();
+    assertEqual(unchangedA.objects.length, 1, "thread B generated images must not leak into thread A");
+
+    const stalePath = path.join(threadADir, "stale-but-new-file.png");
+    await writeDistinctPng(stalePath, "stale-thread-a");
     await fs.utimes(stalePath, staleMtimeMs / 1000, staleMtimeMs / 1000);
-    await delay(450);
-    const stateResponse = await fetch(`${base}api/state${search}`);
-    const state = await stateResponse.json();
-    assertEqual(state.objects.length, 1, "auto collector should ignore files that only have image extensions");
 
-    const baselineDir = path.join(projectDir, "scripts", "reference-screenshots");
-    await fs.mkdir(baselineDir, { recursive: true });
-    await fs.writeFile(path.join(baselineDir, "baseline.png"), Buffer.from(pngOne, "base64"));
+    const invalidPath = path.join(threadADir, "extension-only.png");
+    await fs.writeFile(invalidPath, Buffer.from("not a real png, but a unique image candidate"));
+    await writeDistinctPng(path.join(projectDir, "project-root.png"), "project-root-output");
+    await writeDistinctPng(path.join(generatedImagesRoot, "global-root.png"), "global-root-output");
     await delay(450);
-    const baselineStateResponse = await fetch(`${base}api/state${search}`);
-    const baselineState = await baselineStateResponse.json();
-    assertEqual(baselineState.objects.length, 1, "auto collector should ignore visual regression reference screenshots");
+    const stateA = await (await fetch(`${base}api/state${search}`)).json();
+    const stateB = await (await fetch(`${base}api/state${threadBSearch}`)).json();
+    const unboundState = await (await fetch(`${base}api/state${unboundSearch}`)).json();
+    assertEqual(stateA.objects.length, 1, "thread auto collector should ignore stale, invalid, project-root, and global-root images");
+    assertEqual(stateB.objects.length, 1, "thread B should remain isolated from project and global roots");
+    assertEqual(unboundState.objects.length, 0, "unbound auto collection should be a safe no-op");
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
@@ -1353,7 +1560,14 @@ async function testMcpCanvasStatus() {
       arguments: { projectDir, canvasId: customCanvasId }
     });
     assertEqual(customStatus.structuredContent?.canvasId, customCanvasId, "MCP canvas_status should accept an explicit canvasId");
-    assertEqual(customStatus.structuredContent?.objects, 3, "MCP explicit canvasId scope should include migrated default objects plus the new image");
+    const inheritedMcpThread = Boolean(process.env.CODEX_CANVAS_CODEX_THREAD_ID || process.env.CODEX_THREAD_ID);
+    assertEqual(
+      customStatus.structuredContent?.objects,
+      inheritedMcpThread ? 1 : 3,
+      inheritedMcpThread
+        ? "a second MCP canvas scope should not inherit default objects after the environment thread consumed the one-time migration"
+        : "the first MCP canvas scope should include the one-time migrated default objects plus the new image"
+    );
     const customSearch = await client.request("tools/call", {
       name: "search_canvas",
       arguments: { projectDir, canvasId: customCanvasId, query: "unique explicit canvas prompt" }
@@ -1642,6 +1856,7 @@ async function testPluginPackageManifest() {
     "assets/icon.png",
     "bin/codex-canvas.mjs",
     "public/app.js",
+    "public/canvas-history.js",
     "scripts/install-personal-plugin.mjs",
     "skills/canvas/SKILL.md",
     "src/mcp-server.mjs"
@@ -1952,8 +2167,14 @@ async function testCliCollectHelp() {
   if (!stdout.includes("--canvas-id selects an explicit Codex-Canvas canvas scope and overrides --thread-id.")) {
     throw new Error("CLI help should document explicit canvas scope precedence.");
   }
-  if (!stdout.includes("Import recent image files from ~/.codex/generated_images and the project.")) {
-    throw new Error("CLI help should document collect default roots.");
+  if (!stdout.includes("Import recent images from the bound thread directory, or explicit --from recovery roots.")) {
+    throw new Error("CLI help should document thread-scoped collection defaults.");
+  }
+  if (!stdout.includes("--thread-id selects the canvas and default generated_images/<thread-id> collection scope.")) {
+    throw new Error("CLI help should document the default thread collection directory.");
+  }
+  if (!stdout.includes("--from selects explicit project-relative or absolute recovery roots and bypasses the default thread directory.")) {
+    throw new Error("CLI help should document explicit recovery roots.");
   }
   if (!stdout.includes("Search canvas objects by name, prompt, text, source path, or grouping metadata.")) {
     throw new Error("CLI help should document search behavior.");
@@ -2070,6 +2291,67 @@ async function testCliCodexThreadEnvironment() {
     }
   });
   assertEqual(explicitStatus.body.canvasId, canvasIdForThread("thread-from-flag"), "explicit --thread-id should override thread environment variables");
+
+  const generatedImagesRoot = path.join(projectDir, "test-generated-images");
+  const collectThreadId = "thread-cli-collector";
+  const collectThreadDir = path.join(generatedImagesRoot, collectThreadId);
+  const collectTargetPath = path.join(collectThreadDir, "target.png");
+  await writeDistinctPng(collectTargetPath, "cli-thread-target");
+  await writeDistinctPng(path.join(generatedImagesRoot, "global.png"), "cli-global-output");
+  await writeDistinctPng(path.join(projectDir, "project-root.png"), "cli-project-output");
+  const collected = await runCliJson([
+    "collect",
+    "--project", projectDir,
+    "--thread-id", collectThreadId,
+    "--since-minutes", "120"
+  ], {
+    env: {
+      ...baseEnv,
+      CODEX_CANVAS_GENERATED_IMAGES_ROOT: generatedImagesRoot,
+      CODEX_CANVAS_CODEX_THREAD_ID: "",
+      CODEX_THREAD_ID: ""
+    }
+  });
+  assertEqual(collected.body.scannedRoots?.length, 1, "CLI default collection should scan one bound-thread directory");
+  assertEqual(collected.body.scannedRoots?.[0], collectThreadDir, "CLI default collection should derive generated_images/<threadId>");
+  assertEqual(collected.body.imported?.length, 1, "CLI default collection should import only the bound thread output");
+  assertEqual(path.resolve(collected.body.imported?.[0]?.sourcePath || ""), path.resolve(collectTargetPath), "CLI collection should exclude project and global roots");
+
+  const unbound = await runCliJson([
+    "collect",
+    "--project", projectDir,
+    "--canvas-id", "cli-unbound-collector",
+    "--since-minutes", "120"
+  ], {
+    env: {
+      ...baseEnv,
+      CODEX_CANVAS_GENERATED_IMAGES_ROOT: generatedImagesRoot,
+      CODEX_CANVAS_CODEX_THREAD_ID: "",
+      CODEX_THREAD_ID: ""
+    }
+  });
+  assertEqual(unbound.body.scannedRoots?.length, 0, "CLI unbound default collection should be a safe no-op");
+  assertEqual(unbound.body.imported?.length, 0, "CLI unbound collection should not import unrelated images");
+
+  const recoveryDir = path.join(projectDir, "manual-recovery");
+  const recoveryPath = path.join(recoveryDir, "recovered.png");
+  await writeDistinctPng(recoveryPath, "cli-explicit-recovery");
+  const recovered = await runCliJson([
+    "collect",
+    "--project", projectDir,
+    "--canvas-id", "cli-explicit-recovery",
+    "--from", recoveryDir,
+    "--since-minutes", "120"
+  ], {
+    env: {
+      ...baseEnv,
+      CODEX_CANVAS_GENERATED_IMAGES_ROOT: generatedImagesRoot,
+      CODEX_CANVAS_CODEX_THREAD_ID: "",
+      CODEX_THREAD_ID: ""
+    }
+  });
+  assertEqual(recovered.body.imported?.length, 1, "CLI explicit --from roots should remain available for manual recovery");
+  assertEqual(path.resolve(recovered.body.imported?.[0]?.sourcePath || ""), path.resolve(recoveryPath), "CLI recovery should import the explicit root image");
 }
 
 async function testDoctorOptionalDepsWithoutPython() {
@@ -2176,6 +2458,139 @@ async function testStoreConcurrency() {
   assertEqual(state.objects.length, 0, "deleteObjects should delete objects when ids include surrounding whitespace");
 }
 
+async function testCrossProcessStoreLocking() {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-process-lock-"));
+  const projectDir = path.join(root, "shared-project");
+  const startPath = path.join(root, "start-state-writers");
+  await fs.mkdir(projectDir, { recursive: true });
+
+  const writers = [
+    startStoreProcessWorker(["add", projectDir, startPath, "left", "20"]),
+    startStoreProcessWorker(["add", projectDir, startPath, "right", "20"])
+  ];
+  await fs.writeFile(startPath, "go\n");
+  await Promise.all(writers);
+
+  const state = await readState(projectDir);
+  assertEqual(state.objects.length, 40, "cross-process state writes should not lose objects");
+  assertEqual(new Set(state.objects.map((object) => object.text)).size, 40, "cross-process state writes should preserve every unique object");
+
+  for (let round = 0; round < 4; round += 1) {
+    const migrationProjectDir = path.join(root, `migration-project-${round}`);
+    const migrationStartPath = path.join(root, `start-migration-${round}`);
+    await fs.mkdir(migrationProjectDir, { recursive: true });
+    await addObject(migrationProjectDir, { type: "text", text: `legacy-${round}` });
+
+    const migrations = [
+      startStoreProcessWorker(["migrate", migrationProjectDir, migrationStartPath, `thread-a-${round}`]),
+      startStoreProcessWorker(["migrate", migrationProjectDir, migrationStartPath, `thread-b-${round}`])
+    ];
+    await fs.writeFile(migrationStartPath, "go\n");
+    const migratedObjectCounts = (await Promise.all(migrations))
+      .map((result) => result.objects)
+      .sort((a, b) => a - b);
+    assertEqual(migratedObjectCounts.join(","), "0,1", "only one concurrently opened thread canvas should inherit legacy objects");
+  }
+
+  const lockedMigrationProject = path.join(root, "locked-migration-project");
+  const holderStartPath = path.join(root, "start-legacy-holder");
+  const holderAcquiredPath = path.join(root, "legacy-holder-acquired");
+  const holderReleasePath = path.join(root, "release-legacy-holder");
+  const migrationStartPath = path.join(root, "start-locked-migration");
+  await fs.mkdir(lockedMigrationProject, { recursive: true });
+  await addObject(lockedMigrationProject, { type: "text", text: "legacy-seed" });
+
+  const holder = startStoreProcessWorker([
+    "hold-mutate",
+    lockedMigrationProject,
+    holderStartPath,
+    holderAcquiredPath,
+    holderReleasePath
+  ]);
+  await fs.writeFile(holderStartPath, "go\n");
+  await waitForPath(holderAcquiredPath, "legacy mutation should acquire the default canvas state lock");
+
+  const migration = startStoreProcessWorker([
+    "migrate",
+    lockedMigrationProject,
+    migrationStartPath,
+    "locked-thread"
+  ]);
+  await fs.writeFile(migrationStartPath, "go\n");
+  const migrationLockPath = path.join(
+    path.dirname(statePathFor(lockedMigrationProject)),
+    ".legacy-thread-migration.json.lock"
+  );
+  await waitForPath(migrationLockPath, "thread migration should wait behind the active default canvas mutation");
+  await fs.writeFile(holderReleasePath, "go\n");
+
+  const [, migrated] = await Promise.all([holder, migration]);
+  assertEqual(migrated.objects, 2, "thread migration should include a default-canvas mutation that already held the shared state lock");
+  await addObject(lockedMigrationProject, { type: "text", text: "too-late" }).then(
+    () => { throw new Error("claimed legacy default canvas should reject later writes"); },
+    (error) => assertEqual(error.statusCode, 409, "claimed legacy default canvas should reject later writes instead of silently losing them")
+  );
+
+  const unclaimedDefaultProject = path.join(root, "unclaimed-default-project");
+  await fs.mkdir(unclaimedDefaultProject, { recursive: true });
+  const emptyThreadState = await readState(unclaimedDefaultProject, { canvasId: "empty-thread-first" });
+  assertEqual(emptyThreadState.objects.length, 0, "an empty project thread should begin without legacy objects");
+  const unboundObject = await addObject(unclaimedDefaultProject, { type: "text", text: "independent-unbound" });
+  assertEqual(unboundObject.text, "independent-unbound", "a no-legacy migration marker should not freeze the independent unbound default canvas");
+  const laterThreadState = await readState(unclaimedDefaultProject, { canvasId: "empty-thread-second" });
+  assertEqual(laterThreadState.objects.length, 0, "an unbound default object created after the marker must not leak into a later thread canvas");
+}
+
+function startStoreProcessWorker(args) {
+  return new Promise((resolve, reject) => {
+    const workerPath = path.join(process.cwd(), "scripts", "store-process-worker.mjs");
+    const child = spawn(process.execPath, [workerPath, ...args], {
+      cwd: process.cwd(),
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    const timeout = setTimeout(() => {
+      child.kill();
+      reject(new Error(`Store process worker timed out: ${stderr || stdout}`));
+    }, 20_000);
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timeout);
+      if (code !== 0) {
+        reject(new Error(`Store process worker exited with ${code}: ${stderr || stdout}`));
+        return;
+      }
+      try {
+        const line = stdout.trim().split(/\r?\n/).at(-1);
+        resolve(JSON.parse(line));
+      } catch (error) {
+        reject(new Error(`Store process worker returned invalid JSON: ${stdout || stderr}`, { cause: error }));
+      }
+    });
+  });
+}
+
+async function waitForPath(filePath, message, timeoutMs = 5_000) {
+  const startedAt = Date.now();
+  for (;;) {
+    try {
+      await fs.access(filePath);
+      return;
+    } catch {
+      if (Date.now() - startedAt >= timeoutMs) throw new Error(message);
+      await new Promise((resolve) => setTimeout(resolve, 8));
+    }
+  }
+}
+
 async function testDeleteUndoRestore() {
   const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-undo-"));
   const first = await addObject(projectDir, { type: "text", text: "first", x: 1, y: 1 });
@@ -2197,6 +2612,40 @@ async function testDeleteUndoRestore() {
   state = await readState(projectDir);
   assertEqual(state.objects.map((object) => object.id).join(","), `${first.id},${second.id},${third.id}`, "restoreObjects should reinsert objects at their original z-order");
   assertEqual(state.selection, third.id, "restoreObjects should restore requested selection when it belongs to restored objects");
+}
+
+async function testBatchObjectUpdateAtomicity() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-batch-update-"));
+  const first = await addObject(projectDir, { type: "text", text: "first", x: 1, y: 2 });
+  const second = await addObject(projectDir, { type: "text", text: "second", x: 3, y: 4 });
+  const updated = await updateObjects(projectDir, [
+    { id: first.id, patch: { x: 21, y: 22 } },
+    { id: second.id, patch: { x: 23, y: 24 } }
+  ], { selection: second.id });
+  assertEqual(updated.objects.map((object) => object.x).join(","), "21,23", "batch update should return every updated object in request order");
+  let state = await readState(projectDir);
+  assertEqual(state.objects.map((object) => `${object.x}:${object.y}`).join(","), "21:22,23:24", "batch update should persist all patches together");
+  assertEqual(state.selection, second.id, "batch update should persist its requested selection");
+
+  await updateObjects(projectDir, [
+    { id: first.id, patch: { x: 88 } },
+    { id: "", patch: null }
+  ]).then(
+    () => { throw new Error("batch update should reject malformed members"); },
+    (error) => assertEqual(error.statusCode, 400, "batch update should reject the whole malformed batch")
+  );
+  state = await readState(projectDir);
+  assertEqual(state.objects.find((object) => object.id === first.id)?.x, 21, "malformed batch update should not commit its valid-looking members");
+
+  await updateObjects(projectDir, [
+    { id: first.id, patch: { x: 99 } },
+    { id: "missing-object", patch: { x: 100 } }
+  ]).then(
+    () => { throw new Error("batch update should reject a missing member"); },
+    (error) => assertEqual(error.statusCode, 404, "batch update should report a missing member before writing")
+  );
+  state = await readState(projectDir);
+  assertEqual(state.objects.find((object) => object.id === first.id)?.x, 21, "failed batch update should not partially update earlier members");
 }
 
 async function testChatBindingAlias() {
@@ -3057,6 +3506,14 @@ async function createCollectFixtureProject(label, count) {
   return { projectDir, imagesDir };
 }
 
+async function writeDistinctPng(filePath, label) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, Buffer.concat([
+    Buffer.from(pngOne, "base64"),
+    Buffer.from(`codex-canvas-${label}`)
+  ]));
+}
+
 function withoutPathEnv(env) {
   return Object.fromEntries(Object.entries(env).filter(([key]) => key.toLowerCase() !== "path"));
 }
@@ -3113,9 +3570,10 @@ function isInsidePath(root, candidate) {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-function startMcpServer() {
+function startMcpServer(options = {}) {
   const child = spawn(process.execPath, [path.join(process.cwd(), "src", "mcp-server.mjs")], {
     cwd: process.cwd(),
+    env: options.env || process.env,
     stdio: ["pipe", "pipe", "pipe"]
   });
   let nextId = 1;

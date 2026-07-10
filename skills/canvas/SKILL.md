@@ -28,12 +28,12 @@ Use this skill to open the local Codex-Canvas board and keep generated images co
    - If the Browser plugin / in-app browser control surface is unavailable in the current Codex surface, return a Markdown link and state that Codex-Canvas is running but the in-app browser could not be opened from this surface. Do not launch an external browser.
 4. When the user asks for image generation or image editing while this skill is active:
    - Use Codex `imagegen` for the image work.
-   - Save or identify the generated image file path. Prefer saving generated images under the active workspace so Codex-Canvas auto-collection can find them.
+   - Save or identify the generated image file path and keep the current Codex thread id attached to the canvas operation.
    - Immediately add the result to the canvas with `codex-canvas.add_image`, or by running:
-     `node <plugin-root>/bin/codex-canvas.mjs import <image-path> --project <workspace>`.
+     `node <plugin-root>/bin/codex-canvas.mjs import <image-path> --project <workspace> --thread-id <thread-id>`.
    - If the exact output path is unclear, call `codex-canvas.collect_recent_images` with the active workspace, or run:
-     `node <plugin-root>/bin/codex-canvas.mjs collect --project <workspace> --since-minutes 30 --limit 5`.
-   - The collector scans both the active workspace and Codex's default generated image directory at `~/.codex/generated_images`.
+     `node <plugin-root>/bin/codex-canvas.mjs collect --project <workspace> --thread-id <thread-id> --since-minutes 30 --limit 5`.
+   - Default collection scans only `~/.codex/generated_images/<thread-id>`. Without a bound thread it is a safe no-op. Use explicit `roots` / `--from` only for a user-requested manual recovery scan.
    - Session-generated images are placed in a vertical column by generation batch. Multiple images from the same generation batch are aligned in one horizontal row.
    - Canvas-derived images, when collected with a `sourceObjectId`, are placed in a horizontal row to the right of the source image.
 5. `Quick Edit`, `Remove BG`, `Expand`, `Edit Text`, and `Edit Elements` are implemented as background Codex-Canvas jobs. They create a canvas placeholder immediately, run Codex/ImageGen through the matching Codex-Canvas operation skill and bundled Codex App CLI, then replace the placeholder with the collected output.

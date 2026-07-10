@@ -1,15 +1,14 @@
 import http from "node:http";
 import fs from "node:fs/promises";
 import { watch } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
-import { collectRecentImages } from "./collector.mjs";
+import { collectRecentImages, defaultGeneratedImagesRoot, generatedImagesDirForThread } from "./collector.mjs";
 import { sendImageToBoundChat, sendMentionToBoundChat } from "./codex-chat.mjs";
 import { createImageJob, createTextRecognitionJob, getActivePlaceholderIds, getIgnoredGeneratedImagePaths, getImageJob, getTextRecognitionJob, hasRunningImageJobs, submitTextRecognitionEdit } from "./jobs.mjs";
 import { assetsDirFor, projectRegistryPath, publicDir, runtimePathFor } from "./paths.mjs";
 import { exportLayerGroupPsd } from "./psd-export.mjs";
-import { addImage, addObject, deleteObject, deleteObjects, ensureProjectStore, markStaleJobPlaceholders, promptHistory, readState, reorderLayerGroupLayer, restoreObjects, searchObjects, updateObject, updateProjectMeta, updateSelection, updateViewport, versionGroups } from "./store.mjs";
+import { addImage, addObject, deleteObject, deleteObjects, ensureProjectStore, markStaleJobPlaceholders, promptHistory, readState, reorderLayerGroupLayer, restoreObjects, searchObjects, setLayerGroupOrder, updateObject, updateObjects, updateProjectMeta, updateSelection, updateViewport, versionGroups } from "./store.mjs";
 import { canvasIdForThread, normalizeThreadId } from "./runtime.mjs";
 import { appUpdateStatus, updateApp } from "./updater.mjs";
 
@@ -29,8 +28,8 @@ const contentTypes = {
 const defaultMaxJsonBodyBytes = 32 * 1024 * 1024;
 const maxQueryLimit = 100;
 
-export async function createServer({ projectDir, host = "127.0.0.1", port = 43217, autoCollect = true, chatThreadId = null, autoCollectIntervalMs = 5000, autoCollectWatchDebounceMs = 250, maxJsonBodyBytes = defaultMaxJsonBodyBytes, persistentRegistryPath = projectRegistryPath() } = {}) {
-  const registry = createProjectRegistry({ host, port, autoCollect, autoCollectIntervalMs, autoCollectWatchDebounceMs, maxJsonBodyBytes, persistentRegistryPath });
+export async function createServer({ projectDir, host = "127.0.0.1", port = 43217, autoCollect = true, chatThreadId = null, autoCollectIntervalMs = 5000, autoCollectWatchDebounceMs = 250, maxJsonBodyBytes = defaultMaxJsonBodyBytes, persistentRegistryPath = projectRegistryPath(), generatedImagesRoot = defaultGeneratedImagesRoot() } = {}) {
+  const registry = createProjectRegistry({ host, port, autoCollect, autoCollectIntervalMs, autoCollectWatchDebounceMs, maxJsonBodyBytes, persistentRegistryPath, generatedImagesRoot });
   const initialProject = await registerProject(registry, projectDir, { autoCollect, chatThreadId });
   await restorePersistedProjects(registry);
 
@@ -105,10 +104,18 @@ async function handleRequest(request, response, context) {
   const projectDir = project.projectDir;
 
   if (request.method === "GET" && pathname === "/api/state") {
-    return sendJson(response, 200, await markStaleJobPlaceholders(projectDir, {
+    const state = await markStaleJobPlaceholders(projectDir, {
       activePlaceholderIds: getActivePlaceholderIds(jobScopeFor(project)),
       canvasId: project.canvasId
-    }));
+    });
+    return sendJson(response, 200, {
+      ...state,
+      canvasScope: {
+        projectId: project.id,
+        canvasId: project.canvasId || null,
+        threadId: project.chatThreadId || null
+      }
+    });
   }
 
   if (request.method === "GET" && pathname === "/api/search") {
@@ -148,22 +155,35 @@ async function handleRequest(request, response, context) {
 
   if (request.method === "POST" && pathname === "/api/images") {
     const body = await readJson(request, context.registry);
+    assertExpectedCanvasScope(project, body);
     requireSingleImageInput(body);
     return sendJson(response, 201, await addImage(projectDir, body, storeOptionsFor(project)));
   }
 
   if (request.method === "POST" && pathname === "/api/objects") {
     const body = await readJson(request, context.registry);
+    assertExpectedCanvasScope(project, body);
     return sendJson(response, 201, await addObject(projectDir, body, storeOptionsFor(project)));
+  }
+
+  if (request.method === "PATCH" && pathname === "/api/objects") {
+    const body = await readJson(request, context.registry);
+    assertExpectedCanvasScope(project, body);
+    return sendJson(response, 200, await updateObjects(projectDir, body.updates || [], {
+      ...storeOptionsFor(project),
+      selection: body.selection || null
+    }));
   }
 
   if (request.method === "DELETE" && pathname === "/api/objects") {
     const body = await readJson(request, context.registry);
+    assertExpectedCanvasScope(project, body);
     return sendJson(response, 200, await deleteObjects(projectDir, body.ids || [], storeOptionsFor(project)));
   }
 
   if (request.method === "POST" && pathname === "/api/objects/restore") {
     const body = await readJson(request, context.registry);
+    assertExpectedCanvasScope(project, body);
     return sendJson(response, 201, await restoreObjects(projectDir, body.objects || [], {
       ...storeOptionsFor(project),
       selection: body.selection || null
@@ -178,12 +198,28 @@ async function handleRequest(request, response, context) {
   const layerGroupReorderMatch = /^\/api\/layer-groups\/([^/]+)\/reorder$/.exec(pathname);
   if (request.method === "POST" && layerGroupReorderMatch) {
     const body = await readJson(request, context.registry);
+    assertExpectedCanvasScope(project, body);
     return sendJson(response, 200, await reorderLayerGroupLayer(
       projectDir,
       layerGroupReorderMatch[1],
       body.objectId,
       body.direction,
       storeOptionsFor(project)
+    ));
+  }
+
+  const layerGroupOrderMatch = /^\/api\/layer-groups\/([^/]+)\/order$/.exec(pathname);
+  if (request.method === "POST" && layerGroupOrderMatch) {
+    const body = await readJson(request, context.registry);
+    assertExpectedCanvasScope(project, body);
+    return sendJson(response, 200, await setLayerGroupOrder(
+      projectDir,
+      layerGroupOrderMatch[1],
+      body.objectIds,
+      {
+        ...storeOptionsFor(project),
+        selection: body.selection || null
+      }
     ));
   }
 
@@ -349,7 +385,7 @@ function parsePositiveIntegerQueryParam(searchParams, name, defaultValue, fallba
   return Math.min(maxQueryLimit, Math.max(1, Math.round(parsed)));
 }
 
-function createProjectRegistry({ host, port, autoCollect, autoCollectIntervalMs, autoCollectWatchDebounceMs, maxJsonBodyBytes, persistentRegistryPath }) {
+function createProjectRegistry({ host, port, autoCollect, autoCollectIntervalMs, autoCollectWatchDebounceMs, maxJsonBodyBytes, persistentRegistryPath, generatedImagesRoot }) {
   return {
     host,
     port,
@@ -358,6 +394,7 @@ function createProjectRegistry({ host, port, autoCollect, autoCollectIntervalMs,
     autoCollectWatchDebounceMs,
     maxJsonBodyBytes,
     persistentRegistryPath,
+    generatedImagesRoot: path.resolve(generatedImagesRoot),
     baseUrl: `http://${host}:${port}/`,
     pid: process.pid,
     defaultProjectId: null,
@@ -399,6 +436,21 @@ function requireSingleImageInput(body = {}) {
   if (present.length === 1) return;
   const error = new Error("POST /api/images requires exactly one image input: path, url, or dataUrl.");
   error.statusCode = 400;
+  throw error;
+}
+
+function assertExpectedCanvasScope(project, body = {}) {
+  const expectedProjectId = Object.hasOwn(body, "expectedProjectId")
+    ? (typeof body.expectedProjectId === "string" ? body.expectedProjectId : null)
+    : undefined;
+  const expectedCanvasId = Object.hasOwn(body, "expectedCanvasId")
+    ? normalizeThreadId(body.expectedCanvasId)
+    : undefined;
+  const projectChanged = expectedProjectId !== undefined && expectedProjectId !== project.id;
+  const canvasChanged = expectedCanvasId !== undefined && expectedCanvasId !== (project.canvasId || null);
+  if (!projectChanged && !canvasChanged) return;
+  const error = new Error("Canvas scope changed. Reload the canvas before editing.");
+  error.statusCode = 409;
   throw error;
 }
 
@@ -520,10 +572,11 @@ async function directoryExists(directoryPath) {
 }
 
 function startAutoCollector(project, registry) {
+  if (!project.autoCollect || !project.chatThreadId) return;
   if (project.collectorTimer) return;
   const intervalMs = registry.autoCollectIntervalMs || 5000;
   project.collectorTimer = setInterval(() => {
-    runAutoCollectorPass(project).catch((error) => {
+    runAutoCollectorPass(project, registry).catch((error) => {
       console.error(`Codex-Canvas auto-collect failed for ${project.projectDir}: ${error.message}`);
     });
   }, intervalMs);
@@ -533,10 +586,10 @@ function startAutoCollector(project, registry) {
 
 function startAutoCollectorWatchers(project, registry) {
   stopAutoCollectorWatchers(project);
-  for (const root of autoCollectorWatchRoots(project.projectDir)) {
+  for (const root of autoCollectorWatchRoots(project, registry)) {
     let watcher;
     try {
-      watcher = watch(root, { persistent: false }, () => scheduleAutoCollectorPass(project, registry.autoCollectWatchDebounceMs));
+      watcher = watch(root, { persistent: false }, () => scheduleAutoCollectorPass(project, registry, registry.autoCollectWatchDebounceMs));
     } catch {
       continue;
     }
@@ -549,19 +602,17 @@ function startAutoCollectorWatchers(project, registry) {
   }
 }
 
-function autoCollectorWatchRoots(projectDir) {
-  return [...new Set([
-    path.resolve(projectDir),
-    path.join(os.homedir(), ".codex", "generated_images")
-  ])];
+function autoCollectorWatchRoots(project, registry) {
+  const threadRoot = generatedImagesDirForThread(project.chatThreadId, registry.generatedImagesRoot);
+  return threadRoot ? [threadRoot] : [];
 }
 
-function scheduleAutoCollectorPass(project, debounceMs = 250) {
+function scheduleAutoCollectorPass(project, registry, debounceMs = 250) {
   if (!project.autoCollect) return;
   if (project.collectorWatchDebounceTimer) clearTimeout(project.collectorWatchDebounceTimer);
   project.collectorWatchDebounceTimer = setTimeout(() => {
     project.collectorWatchDebounceTimer = null;
-    runAutoCollectorPass(project).catch((error) => {
+    runAutoCollectorPass(project, registry).catch((error) => {
       console.error(`Codex-Canvas auto-collect watcher failed for ${project.projectDir}: ${error.message}`);
     });
   }, Math.max(25, debounceMs));
@@ -587,7 +638,8 @@ function stopAutoCollectorWatchers(project) {
   project.collectorWatchers = [];
 }
 
-async function runAutoCollectorPass(project) {
+async function runAutoCollectorPass(project, registry) {
+  if (!project.autoCollect || !project.chatThreadId) return;
   if (project.collectorRunning) return;
   if (hasRunningImageJobs(jobScopeFor(project))) return;
   project.collectorRunning = true;
@@ -598,7 +650,9 @@ async function runAutoCollectorPass(project) {
       limit: 10,
       prompt: "Auto-collected while Codex-Canvas was open",
       excludePaths: getIgnoredGeneratedImagePaths(jobScopeFor(project)),
-      canvasId: project.canvasId
+      canvasId: project.canvasId,
+      threadId: project.chatThreadId,
+      generatedImagesRoot: registry.generatedImagesRoot
     });
     project.collectSinceMs = Math.max(project.collectSinceMs, scanStartedAt);
   } finally {
@@ -725,10 +779,12 @@ async function bindProjectToThread(registry, project, threadId) {
       stopAutoCollector(project);
       if (registry.defaultProjectId === project.id) registry.defaultProjectId = nextId;
     }
+    if (existing.autoCollect) startAutoCollector(existing, registry);
     return existing;
   }
 
   const previousId = project.id;
+  stopAutoCollector(project);
   project.id = nextId;
   project.chatThreadId = normalizedThreadId;
   project.canvasId = canvasId;
@@ -737,6 +793,7 @@ async function bindProjectToThread(registry, project, threadId) {
   registry.projects.set(nextId, project);
   aliasProjectId(registry, previousId, nextId);
   if (registry.defaultProjectId === previousId) registry.defaultProjectId = nextId;
+  if (project.autoCollect) startAutoCollector(project, registry);
   return project;
 }
 

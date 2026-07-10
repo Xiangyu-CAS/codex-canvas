@@ -18,6 +18,7 @@ const viewports = [
   { name: "mobile", width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 2 }
 ];
 const screenshotCases = ["discovery", "selected", "expand", "crop", "compare", "overlay", "text-edit"];
+const caseFilter = String(process.env.CODEX_CANVAS_VISUAL_CASE || "").trim();
 let visualProjectRegistryPath = null;
 
 async function main() {
@@ -36,6 +37,7 @@ async function main() {
     for (const viewport of viewports) {
       for (const screenshotCase of screenshotCases) {
         const name = `${viewport.name}-${screenshotCase}`;
+        if (caseFilter && caseFilter !== name) continue;
         const screenshot = await captureReferenceViewport(browser, viewport, screenshotCase);
         const baselinePath = path.join(baselineDir, `${name}.png`);
         if (updateBaselines) {
@@ -48,6 +50,11 @@ async function main() {
         const baseline = await readBaseline(baselinePath, name);
         const diff = await comparePngBuffers(browser, baseline, screenshot);
         if (diff.changedRatio > pixelThreshold) {
+          const debugDir = process.env.CODEX_CANVAS_VISUAL_DEBUG_DIR;
+          if (debugDir) {
+            await fsp.mkdir(debugDir, { recursive: true });
+            await fsp.writeFile(path.join(debugDir, `${name}-actual.png`), screenshot);
+          }
           const percent = (diff.changedRatio * 100).toFixed(2);
           throw new Error(`${name} visual regression exceeded ${(pixelThreshold * 100).toFixed(2)}% threshold: ${percent}% pixels changed`);
         }
@@ -112,9 +119,11 @@ async function captureReferenceViewport(browser, viewport, screenshotCase) {
     await waitForImageDecoded(page, ".canvas-object img");
 
     if (screenshotCase === "selected") {
+      await activateSelectTool(page);
       await page.locator(`.canvas-object[data-id="${source.id}"]`).click();
       await waitForVisible(page, "#selectionToolbar", "selection toolbar should be visible");
     } else if (screenshotCase === "expand") {
+      await activateSelectTool(page);
       await page.locator(`.canvas-object[data-id="${source.id}"]`).click();
       await waitForVisible(page, "#selectionToolbar", "selection toolbar should be visible");
       await page.locator('[data-action="expand"]').click();
@@ -123,6 +132,7 @@ async function captureReferenceViewport(browser, viewport, screenshotCase) {
       await page.locator("#expandPanel").evaluate((element) => element.querySelector("input, button, select")?.blur?.());
       await page.waitForTimeout(50);
     } else if (screenshotCase === "crop") {
+      await activateSelectTool(page);
       await page.locator(`.canvas-object[data-id="${source.id}"]`).click();
       await waitForVisible(page, "#selectionToolbar", "selection toolbar should be visible");
       await page.locator('[data-action="crop"]').click();
@@ -131,6 +141,7 @@ async function captureReferenceViewport(browser, viewport, screenshotCase) {
       await page.mouse.move(12, 12);
       await page.waitForTimeout(50);
     } else if (screenshotCase === "text-edit") {
+      await activateSelectTool(page);
       await page.locator(`.canvas-object[data-id="${source.id}"]`).click();
       await waitForVisible(page, "#selectionToolbar", "selection toolbar should be visible");
       await page.locator('[data-action="edit-text"]').click();
@@ -164,11 +175,18 @@ async function captureReferenceViewport(browser, viewport, screenshotCase) {
       await waitForText(page, ".version-group-title", "Reference product variant", "version group title should be deterministic");
       await waitForImageDecoded(page, ".version-group-thumb");
     }
+    await waitForImageDecoded(page, ".canvas-object img");
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     return await page.screenshot({ fullPage: false, animations: "disabled" });
   } finally {
     await context.close();
     await new Promise((resolve) => server.close(resolve));
   }
+}
+
+async function activateSelectTool(page) {
+  await page.locator('[data-tool="select"]').click();
+  await page.waitForFunction(() => document.querySelector('[data-tool="select"]')?.classList.contains("active"));
 }
 
 async function installTextEditFixtureRoutes(page) {
@@ -375,8 +393,8 @@ async function waitForVisible(page, selector, message) {
 
 async function waitForImageDecoded(page, selector) {
   await page.waitForFunction((target) => {
-    const image = document.querySelector(target);
-    return Boolean(image?.complete && image.naturalWidth > 0 && image.naturalHeight > 0);
+    const images = [...document.querySelectorAll(target)];
+    return images.length > 0 && images.every((image) => image.complete && image.naturalWidth > 0 && image.naturalHeight > 0);
   }, selector, { timeout: 5000 });
 }
 

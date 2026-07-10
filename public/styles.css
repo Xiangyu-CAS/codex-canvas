@@ -815,10 +815,6 @@ button {
   touch-action: none;
 }
 
-.board.dragging {
-  cursor: grabbing;
-}
-
 .board.tool-pencil {
   cursor: crosshair;
 }
@@ -829,6 +825,23 @@ button {
 
 .board.drawing {
   cursor: crosshair;
+}
+
+.board.tool-hand,
+.board.space-pan {
+  cursor: grab;
+}
+
+.board.tool-hand .canvas-object,
+.board.space-pan .canvas-object,
+.board.space-pan .layer-group-label {
+  cursor: grab;
+}
+
+.board.dragging,
+.board.dragging .canvas-object,
+.board.dragging .layer-group-label {
+  cursor: grabbing;
 }
 
 .world {
@@ -2243,6 +2256,11 @@ button {
   border-radius: 9px;
   background: #272b31;
   color: #fff;
+}
+
+.tool-dock button:disabled {
+  cursor: not-allowed;
+  opacity: 0.32;
 }
 
 .dock-separator {
