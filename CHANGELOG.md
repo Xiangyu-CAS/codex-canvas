@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0](https://github.com/Xiangyu-CAS/codex-canvas/compare/v0.2.1...v0.3.0) (2026-07-10)
+
+
+### Features
+
+* add arrow-note quick edit workflow ([770657a](https://github.com/Xiangyu-CAS/codex-canvas/commit/770657aa22045a39dd69df5f3142015312b62bcd))
+* refine quick edit annotations and layer browser ([28d5b79](https://github.com/Xiangyu-CAS/codex-canvas/commit/28d5b799b0bb276f8c10a35792aba6e1e0973be0))
+
 ## [0.2.1](https://github.com/Xiangyu-CAS/codex-canvas/compare/v0.2.0...v0.2.1) (2026-07-10)
 
 
