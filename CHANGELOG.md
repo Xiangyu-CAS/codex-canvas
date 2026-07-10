@@ -16,8 +16,6 @@
 * refine chat handoff and canvas editing flows ([7cfde09](https://github.com/Xiangyu-CAS/codex-canvas/commit/7cfde09e36e9ae300015eb7991e6f6503dc62b79))
 * retry Windows lock sharing violations ([5ec3bf9](https://github.com/Xiangyu-CAS/codex-canvas/commit/5ec3bf9dda4d277ac837967fbae02860e45cf4d3))
 
-## Changelog
-
 Notable changes to Codex-Canvas are recorded here. This file is maintained by
 [Release Please](https://github.com/googleapis/release-please); do not edit a
 pending release section by hand.
