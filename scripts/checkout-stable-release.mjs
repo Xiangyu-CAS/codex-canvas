@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { fetchTextResponse } from "../src/http-text-response.mjs";
 
 const execFileAsync = promisify(execFile);
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -92,8 +93,8 @@ async function defaultRemoteBranch(remote) {
 async function fetchPublishedRelease(repository) {
   const slug = githubRepositorySlug(repository);
   if (!slug) throw new Error("Stable checkout requires a github.com repository remote.");
-  return withAbortTimeout(8_000, async (signal) => {
-    const response = await fetch(`https://api.github.com/repos/${slug}/releases/latest`, {
+  return withAbortTimeout(15_000, async (signal) => {
+    const response = await fetchTextResponse(`https://api.github.com/repos/${slug}/releases/latest`, {
       signal,
       headers: {
         accept: "application/vnd.github+json",
@@ -119,8 +120,8 @@ async function fetchPublishedRelease(repository) {
     }
 
     const [manifestResponse, checksumsResponse] = await Promise.all([
-      fetch(manifestAsset.browser_download_url, { signal, headers: { "user-agent": "codex-canvas-stable-checkout" } }),
-      fetch(checksumsAsset.browser_download_url, { signal, headers: { "user-agent": "codex-canvas-stable-checkout" } })
+      fetchTextResponse(manifestAsset.browser_download_url, { signal, headers: { "user-agent": "codex-canvas-stable-checkout" } }),
+      fetchTextResponse(checksumsAsset.browser_download_url, { signal, headers: { "user-agent": "codex-canvas-stable-checkout" } })
     ]);
     if (!manifestResponse.ok || !checksumsResponse.ok) throw new Error(`Could not download release metadata for ${release.tag_name}.`);
     const manifestText = await manifestResponse.text();

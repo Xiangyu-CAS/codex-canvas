@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { resolveCodexExecutable, spawnCodexProcess, stopCodexProcess } from "./codex-runner.mjs";
+import { fetchTextResponse } from "./http-text-response.mjs";
 import { activeOperationLeases, removeStaleUpdateLock, updateLockPath } from "./operation-leases.mjs";
 import { pluginRoot } from "./paths.mjs";
 
@@ -12,7 +13,7 @@ const stableReleaseTag = /^v(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A
 const publishedReleaseCache = new Map();
 const publishedReleaseCacheMs = 5 * 60_000;
 const pendingReleaseCacheMs = 30_000;
-const githubReleaseTimeoutMs = 8_000;
+const githubReleaseTimeoutMs = 15_000;
 const gitFetchTimeoutMs = 10_000;
 let activeUpdate = null;
 
@@ -402,7 +403,7 @@ async function githubReleaseProvider({ repository, checkRemote, timeoutMs = gith
   if (cached && Date.now() - cached.checkedAt < cached.ttlMs) return cached.release;
 
   return withAbortTimeout(timeoutMs, async (signal) => {
-    const response = await fetch(`https://api.github.com/repos/${slug}/releases/latest`, {
+    const response = await fetchTextResponse(`https://api.github.com/repos/${slug}/releases/latest`, {
       signal,
       headers: {
         accept: "application/vnd.github+json",
@@ -437,14 +438,14 @@ async function githubReleaseProvider({ repository, checkRemote, timeoutMs = gith
     }
 
     const [manifestResponse, checksumsResponse] = await Promise.all([
-      fetch(manifestAsset.browser_download_url, {
+      fetchTextResponse(manifestAsset.browser_download_url, {
         signal,
         headers: {
           accept: "application/json",
           "user-agent": "codex-canvas-updater"
         }
       }),
-      fetch(checksumsAsset.browser_download_url, {
+      fetchTextResponse(checksumsAsset.browser_download_url, {
         signal,
         headers: {
           accept: "text/plain",
