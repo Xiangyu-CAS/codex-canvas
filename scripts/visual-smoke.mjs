@@ -208,6 +208,7 @@ async function runViewportSmoke(browser, viewport) {
     await assertCanvasIsNotBlank(page, viewport);
     if (viewport.name === "desktop") {
       await assertCanvasInputInteractions(page, image.id);
+      await assertDockAnnotationTool(page, image.id);
     }
     await activateCanvasTool(page, "select");
 
@@ -233,14 +234,20 @@ async function runViewportSmoke(browser, viewport) {
 }
 
 async function assertCanvasInputInteractions(page, imageId) {
-  const initialTool = await page.evaluate(() => ({
+  const initialTool = await page.evaluate((imageId) => ({
     handActive: document.querySelector('[data-tool="hand"]')?.classList.contains("active") || false,
     selectActive: document.querySelector('[data-tool="select"]')?.classList.contains("active") || false,
-    handCursor: document.querySelector("#board")?.classList.contains("tool-hand") || false
-  }));
-  assert(initialTool.handActive, "Hand should be the default canvas tool");
-  assert(!initialTool.selectActive, "Select should remain available without being the default tool");
-  assert(initialTool.handCursor, "default Hand tool should set the board hand cursor state");
+    handCursor: document.querySelector("#board")?.classList.contains("tool-hand") || false,
+    objectCursor: getComputedStyle(document.querySelector(`.canvas-object[data-id="${imageId}"]`)).cursor
+  }), imageId);
+  assert(!initialTool.handActive, "Hand should remain available without being the default tool");
+  assert(initialTool.selectActive, "Select should be the default canvas tool");
+  assert(!initialTool.handCursor, "default Select should not set the board hand cursor state");
+  assertEqual(initialTool.objectCursor, "default", "default Select should expose the normal object cursor");
+
+  await activateCanvasTool(page, "hand");
+  const handObjectCursor = await page.locator(`.canvas-object[data-id="${imageId}"]`).evaluate((element) => getComputedStyle(element).cursor);
+  assertEqual(handObjectCursor, "pointer", "Hand should advertise that canvas objects remain clickable");
 
   const blank = await canvasBlankPoint(page);
   let before = await canvasInputSnapshot(page, imageId);
@@ -263,6 +270,23 @@ async function assertCanvasInputInteractions(page, imageId) {
   assertNear(after.viewportY - before.viewportY, 24, 0.5, "Hand drag over an object should pan vertically");
   assertNear(after.objectX, before.objectX, 0.01, "Hand drag over an object should not move the object x");
   assertNear(after.objectY, before.objectY, 0.01, "Hand drag over an object should not move the object y");
+
+  await resetCanvasViewport(page);
+  const clickableObjectRect = await page.locator(`.canvas-object[data-id="${imageId}"]`).boundingBox();
+  assertRectVisible(clickableObjectRect, "image before smart Hand selection");
+  await page.mouse.click(
+    clickableObjectRect.x + clickableObjectRect.width / 2,
+    clickableObjectRect.y + clickableObjectRect.height / 2
+  );
+  await waitForVisible(page, "#selectionToolbar", "Hand click should reveal the selected image toolbar");
+  const smartHandSelection = await page.evaluate((imageId) => ({
+    handActive: document.querySelector('[data-tool="hand"]')?.classList.contains("active") || false,
+    selected: document.querySelector(`.canvas-object[data-id="${imageId}"]`)?.classList.contains("selected") || false
+  }), imageId);
+  assert(smartHandSelection.handActive, "click-selecting an object should keep Hand as the active navigation tool");
+  assert(smartHandSelection.selected, "clicking an object with Hand should select it");
+  await page.mouse.click(blank.x, blank.y);
+  await waitForHidden(page, "#selectionToolbar", "Hand click on blank canvas should clear the selection");
 
   await resetCanvasViewport(page);
   await activateCanvasTool(page, "select");
@@ -400,6 +424,88 @@ async function assertCanvasInputInteractions(page, imageId) {
 
   await resetCanvasViewport(page);
   await activateCanvasTool(page, "select");
+
+  for (const tool of ["annotation", "pencil", "text"]) {
+    await activateCanvasTool(page, tool);
+    await waitForVisible(page, "#colorPalette", `${tool} should show the dock color palette`);
+    const button = page.locator(`[data-tool="${tool}"]`);
+    await button.hover();
+    const tooltip = await button.evaluate((element) => {
+      const style = getComputedStyle(element, "::after");
+      return {
+        display: style.display,
+        bottom: Number.parseFloat(style.bottom),
+        paletteRaised: element.closest(".tool-dock")?.classList.contains("has-visible-color-palette") || false
+      };
+    });
+    assert(tooltip.paletteRaised, `${tool} should raise dock tooltips while its color palette is visible`);
+    assertEqual(tooltip.display, "block", `${tool} hover tooltip should remain visible with the color palette open`);
+    assert(tooltip.bottom >= 80, `${tool} hover tooltip should render above the color palette instead of behind it`);
+  }
+  await activateCanvasTool(page, "select");
+  await waitForHidden(page, "#colorPalette", "leaving drawing tools should hide the dock color palette");
+}
+
+async function assertDockAnnotationTool(page, imageId) {
+  await activateCanvasTool(page, "select");
+  await page.locator(`.canvas-object[data-id="${imageId}"]`).click();
+  const imageRect = await page.locator(`.canvas-object[data-id="${imageId}"]`).boundingBox();
+  const boardRect = await page.locator("#board").boundingBox();
+  assertRectVisible(imageRect, "image before standalone Arrow Note");
+  assertRectVisible(boardRect, "board before standalone Arrow Note");
+  const start = imageRect.x - boardRect.x > 58
+    ? { x: imageRect.x - 42, y: imageRect.y + imageRect.height * 0.42 }
+    : { x: imageRect.x + imageRect.width + 42, y: imageRect.y + imageRect.height * 0.42 };
+  const end = { x: imageRect.x + imageRect.width * 0.56, y: imageRect.y + imageRect.height * 0.48 };
+
+  await activateCanvasTool(page, "annotation");
+  await waitForVisible(page, "#colorPalette", "standalone Arrow Note should expose the dock color palette");
+  await dragMouse(page, start, { x: end.x - start.x, y: end.y - start.y });
+  const label = page.locator('.annotation-object .annotation-label[contenteditable="true"]').last();
+  await label.waitFor({ state: "visible" });
+  await label.fill("底部箭头");
+  await label.press("Enter");
+
+  const createdHandle = await page.waitForFunction(({ imageId }) => fetch(`/api/state${window.location.search}`)
+    .then((response) => response.json())
+    .then((state) => state.objects.find((object) => object.type === "annotation"
+      && object.annotationTargetId === imageId
+      && object.label === "底部箭头") || null), { imageId }, { timeout: 5000 });
+  const created = await createdHandle.jsonValue();
+  assert(created?.id, "standalone Arrow Note should create a persisted annotation");
+  assertEqual(created.annotationTargetId, imageId, "standalone Arrow Note should associate with the selected image");
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await waitForVisible(page, `.canvas-object[data-id="${created.id}"] .annotation-label`, "persisted Arrow Note label should remain visible after reload");
+  await activateCanvasTool(page, "select");
+  const persistedLabel = page.locator(`.canvas-object[data-id="${created.id}"] .annotation-label`);
+  await persistedLabel.dblclick();
+  await page.waitForFunction((id) => document.querySelector(`.canvas-object[data-id="${id}"] .annotation-label`)?.contentEditable === "true", created.id);
+  await persistedLabel.fill("底部箭头已修改");
+  await persistedLabel.press("Enter");
+  const editedHandle = await page.waitForFunction(({ id }) => fetch(`/api/state${window.location.search}`)
+    .then((response) => response.json())
+    .then((state) => state.objects.find((object) => object.id === id && object.label === "底部箭头已修改") || null), { id: created.id }, { timeout: 5000 });
+  const edited = await editedHandle.jsonValue();
+  assertEqual(edited?.label, "底部箭头已修改", "persisted Arrow Note text should remain editable after reload");
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await activateCanvasTool(page, "select");
+  const selectedLabel = page.locator(`.canvas-object[data-id="${created.id}"] .annotation-label`);
+  await selectedLabel.click();
+  await page.keyboard.press("Enter");
+  await page.waitForFunction((id) => document.querySelector(`.canvas-object[data-id="${id}"] .annotation-label`)?.contentEditable === "true", created.id);
+  await page.keyboard.press("Escape");
+
+  await page.evaluate(async (id) => {
+    await fetch(`/api/objects${window.location.search}`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ids: [id] })
+    });
+  }, created.id);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await waitForVisible(page, `.canvas-object[data-id="${imageId}"]`, "source image should remain after standalone Arrow Note cleanup");
 }
 
 async function activateCanvasTool(page, tool) {
@@ -1041,24 +1147,28 @@ async function assertQuickEditAnnotationWorkflow(page, imageId, viewport) {
     annotationToolActive: document.querySelector('[data-quick-edit-tool="annotation"]')?.classList.contains("active") || false,
     annotationPressed: document.querySelector('[data-quick-edit-tool="annotation"]')?.getAttribute("aria-pressed"),
     runDisabled: document.querySelector("#quickEditRun")?.disabled ?? false,
-    hint: document.querySelector("#quickEditHint")?.textContent?.trim() || ""
+    hint: document.querySelector("#quickEditHint")?.textContent?.trim() || "",
+    swatchColors: [...document.querySelectorAll("#quickEditColorPalette .color-swatch")]
+      .map((swatch) => getComputedStyle(swatch).backgroundColor)
   }));
   assert(initial.annotationToolActive, "Quick Edit should default to the arrow-note tool");
   assertEqual(initial.annotationPressed, "true", "Quick Edit arrow-note tool should expose pressed state");
   assert(initial.runDisabled, "Quick Edit should require a prompt or annotation before running");
   assert(Boolean(initial.hint), "Quick Edit should explain the arrow-note gesture");
+  assert(/tail|箭尾/i.test(initial.hint), "Quick Edit should explain that text stays at the arrow tail");
+  assertEqual(new Set(initial.swatchColors).size, 7, "Quick Edit should render every markup color without requiring composer focus");
 
   const imageRect = await page.locator(`.canvas-object[data-id="${imageId}"]`).boundingBox();
   const boardRect = await page.locator("#board").boundingBox();
   assertRectVisible(imageRect, "Quick Edit source image");
   assertRectVisible(boardRect, "Quick Edit board");
-  const canStartLeft = imageRect.x - boardRect.x > 58;
+  const canEndLeft = imageRect.x - boardRect.x > 58;
   const start = {
-    x: canStartLeft ? imageRect.x - 42 : imageRect.x + imageRect.width + 42,
+    x: imageRect.x + imageRect.width * 0.42,
     y: imageRect.y + imageRect.height * 0.45
   };
   const end = {
-    x: imageRect.x + imageRect.width * 0.62,
+    x: canEndLeft ? imageRect.x - 42 : imageRect.x + imageRect.width + 42,
     y: imageRect.y + imageRect.height * 0.48
   };
   await dragMouse(page, start, { x: end.x - start.x, y: end.y - start.y });
@@ -1076,10 +1186,30 @@ async function assertQuickEditAnnotationWorkflow(page, imageId, viewport) {
     const response = await fetch("/api/state");
     const payload = await response.json();
     const annotation = payload.objects.find((object) => object.type === "annotation" && object.annotationTargetId === imageId);
+    const arrow = document.querySelector(".annotation-object .annotation-arrow > path");
+    const arrowhead = document.querySelector(".annotation-object .annotation-arrow marker path");
+    const marker = document.querySelector(".annotation-object .annotation-arrow marker");
+    const labelElement = document.querySelector(".annotation-object .annotation-label");
+    const labelRect = labelElement?.getBoundingClientRect();
+    const renderedStartPoint = arrow?.getPointAtLength(0);
+    const renderedStart = renderedStartPoint && arrow?.getScreenCTM()
+      ? renderedStartPoint.matrixTransform(arrow.getScreenCTM())
+      : null;
+    const renderedTipPoint = arrow?.getPointAtLength(arrow.getTotalLength());
+    const renderedTip = renderedTipPoint && arrow?.getScreenCTM()
+      ? renderedTipPoint.matrixTransform(arrow.getScreenCTM())
+      : null;
     return {
       sourceExists: payload.objects.some((object) => object.id === imageId),
       annotation,
-      composerRect: document.querySelector("#quickEditComposer")?.getBoundingClientRect().toJSON?.() || null
+      composerRect: document.querySelector("#quickEditComposer")?.getBoundingClientRect().toJSON?.() || null,
+      arrowPath: arrow?.getAttribute("d") || "",
+      arrowheadFill: arrowhead?.getAttribute("fill") || "",
+      markerUnits: marker?.getAttribute("markerUnits") || "",
+      renderedStart: renderedStart ? { x: renderedStart.x, y: renderedStart.y } : null,
+      renderedTip: renderedTip ? { x: renderedTip.x, y: renderedTip.y } : null,
+      labelRect: labelRect ? { left: labelRect.left, right: labelRect.right, bottom: labelRect.bottom, width: labelRect.width } : null,
+      labelMinWidth: labelElement ? getComputedStyle(labelElement).minWidth : ""
     };
   }, imageId);
   assert(state.sourceExists, "creating a Quick Edit annotation should preserve the source image");
@@ -1088,6 +1218,16 @@ async function assertQuickEditAnnotationWorkflow(page, imageId, viewport) {
   assertEqual(state.annotation.annotationTargetId, imageId, "Quick Edit annotation should explicitly target the selected image");
   assert(state.annotation.targetAnchorX >= 0 && state.annotation.targetAnchorX <= 1, "Quick Edit annotation x anchor should be normalized");
   assert(state.annotation.targetAnchorY >= 0 && state.annotation.targetAnchorY <= 1, "Quick Edit annotation y anchor should be normalized");
+  assert(state.arrowPath.includes(" C "), "Quick Edit annotation should use a gentle cubic leader curve");
+  assertEqual(state.arrowheadFill, "none", "Quick Edit annotation should use an open arrowhead instead of a rigid filled wedge");
+  assertEqual(state.markerUnits, "userSpaceOnUse", "Quick Edit arrowhead size should stay independent from stroke width");
+  assertNear(state.renderedStart?.x, end.x, 1.5, "Quick Edit arrow tail should stay at the outside endpoint horizontally");
+  assertNear(state.renderedStart?.y, end.y, 1.5, "Quick Edit arrow tail should stay at the outside endpoint vertically");
+  assertNear(state.renderedTip?.x, start.x, 1.5, "Quick Edit arrowhead should point to the horizontal image target");
+  assertNear(state.renderedTip?.y, start.y, 1.5, "Quick Edit arrowhead should point to the vertical image target");
+  assertNear((state.labelRect?.left + state.labelRect?.right) / 2, end.x, 1.5, "Quick Edit label should stay beside the outside arrow tail");
+  assert(state.labelRect?.bottom < end.y, "Quick Edit label should sit just above the arrow tail without covering it");
+  assertEqual(state.labelMinWidth, "72px", "Quick Edit labels should retain the original text bubble sizing");
   if (state.composerRect) assertRectInsideViewport(state.composerRect, viewport, "Quick Edit composer");
 
   await page.locator("#quickEditCancel").click();

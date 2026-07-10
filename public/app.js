@@ -36,7 +36,7 @@ const redoButton = document.querySelector('[data-history-action="redo"]');
 const imageUploadInput = document.querySelector("#imageUploadInput");
 const colorPalette = document.querySelector("#colorPalette");
 const canvasSearch = createCanvasSearchUi();
-const defaultCanvasTool = "hand";
+const defaultCanvasTool = "select";
 const zoomWheelSensitivity = 0.0024;
 const maxWheelZoomDelta = 160;
 const wheelLinePixelSize = 16;
@@ -91,6 +91,15 @@ const translations = {
     promptHistoryCopied: "Prompt copied.",
     promptHistoryTab: "Prompts",
     versionBrowserTab: "Versions",
+    layerBrowser: "Layers",
+    layerBrowserImages: "images",
+    layerBrowserLayers: "layers",
+    layerBrowserFit: "Fit",
+    layerBrowserEmpty: "No images or layers on this canvas.",
+    layerBrowserImage: "Image",
+    layerBrowserLayer: "Layer",
+    layerBrowserBackground: "Background",
+    layerBrowserGrouped: "grouped",
     versionBrowserSearch: "Filter versions",
     versionBrowserLoading: "Loading versions...",
     versionBrowserEmpty: "No matching version groups.",
@@ -106,8 +115,10 @@ const translations = {
     versionDiffLabel: "Pixel diff",
     textPlaceholder: "Text",
     quickEditPlaceholder: "Describe your edit here",
-    quickEditHint: "Drag from a note position to the part of the image you want to change, then type the instruction.",
+    quickEditHint: "Drag between the image target and an outside note position. The arrow points to the image and the text stays at the tail.",
     annotationPlaceholder: "Type an edit instruction",
+    annotationEditHint: "Double-click, or select and press Enter, to edit",
+    annotationTargetMissing: "Select an image first, or drag the arrow to or from an image.",
     applyAnnotations: "Apply edit",
     expandPlaceholder: "Describe what should extend beyond the image edges",
     quickEditEmpty: "Add an instruction or an annotation first.",
@@ -235,6 +246,15 @@ const translations = {
     promptHistoryCopied: "已复制提示词。",
     promptHistoryTab: "提示词",
     versionBrowserTab: "版本",
+    layerBrowser: "图层",
+    layerBrowserImages: "张图片",
+    layerBrowserLayers: "个图层",
+    layerBrowserFit: "适应",
+    layerBrowserEmpty: "画布中还没有图片或图层。",
+    layerBrowserImage: "图片",
+    layerBrowserLayer: "图层",
+    layerBrowserBackground: "背景",
+    layerBrowserGrouped: "已成组",
     versionBrowserSearch: "筛选版本",
     versionBrowserLoading: "正在加载版本...",
     versionBrowserEmpty: "没有匹配的版本分组。",
@@ -250,8 +270,10 @@ const translations = {
     versionDiffLabel: "像素差异",
     textPlaceholder: "文字",
     quickEditPlaceholder: "描述你想怎么改这张图",
-    quickEditHint: "从说明位置拖向要修改的区域，松手后直接输入修改要求。",
+    quickEditHint: "在图片目标与外侧批注位置之间拖拽；箭头指向图片，文字留在箭尾。",
     annotationPlaceholder: "输入修改要求",
+    annotationEditHint: "双击编辑，或选中后按 Enter",
+    annotationTargetMissing: "请先选择图片，或让箭头的一端落在图片上。",
     applyAnnotations: "按标注修改",
     expandPlaceholder: "描述要向画面边缘外扩展什么内容",
     quickEditEmpty: "请先填写修改要求或添加标注。",
@@ -361,6 +383,7 @@ let resize = null;
 let drawing = null;
 let annotationDraft = null;
 let editingAnnotationId = null;
+let lastAnnotationPointerDown = null;
 let marquee = null;
 let cropSession = null;
 let cropDrag = null;
@@ -378,6 +401,8 @@ let searchTimer = null;
 let searchRequestId = 0;
 let searchResults = [];
 let promptHistoryUi = null;
+let layerBrowserUi = null;
+const collapsedLayerGroupIds = new Set();
 let promptHistoryFetchToken = 0;
 let versionBrowserFetchToken = 0;
 let promptHistorySearchTimer = null;
@@ -405,6 +430,7 @@ const singleSelectionActions = new Set([
   "copy-file-mention"
 ]);
 
+initLayerBrowserUi();
 initPromptHistoryUi();
 applyLanguage();
 setActiveTool(defaultCanvasTool);
@@ -437,6 +463,7 @@ settingsButton.addEventListener("click", (event) => {
   event.stopPropagation();
   closeCanvasSearch({ keepQuery: true });
   closePromptHistoryPanel();
+  closeLayerBrowserPanel();
   settingsMenu.hidden = !settingsMenu.hidden;
   if (settingsMenu.hidden) {
     settingsMenu.classList.remove("language-open");
@@ -516,6 +543,7 @@ canvasSearch.input.addEventListener("focus", () => {
   settingsMenu.hidden = true;
   projectMenu.hidden = true;
   closePromptHistoryPanel();
+  closeLayerBrowserPanel();
   canvasSearch.panel.classList.add("active");
   if (canvasSearch.input.value.trim() || searchResults.length) {
     renderCanvasSearchResults(searchResults);
@@ -601,6 +629,11 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && layerBrowserUi && !layerBrowserUi.panel.hidden) {
+    event.preventDefault();
+    closeLayerBrowserPanel();
+    return;
+  }
   const historyDirection = canvasHistoryShortcut(event);
   if (historyDirection) {
     if (isNativeUndoTarget(event.target)) return;
@@ -624,7 +657,15 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     if (selectedIds.size > 1) return;
     const object = state.objects.find((item) => item.id === selectedId);
-    if (!object || (object.type || "image") !== "image") return;
+    if (!object) return;
+    if (object.type === "annotation") {
+      event.preventDefault();
+      editingAnnotationId = object.id;
+      render();
+      focusAnnotationLabel(object.id);
+      return;
+    }
+    if ((object.type || "image") !== "image") return;
     event.preventDefault();
     frameSelectedImageForViewing(object);
   }
@@ -663,6 +704,7 @@ board.addEventListener("pointerdown", (event) => {
 document.addEventListener("pointerdown", (event) => {
   const isSettingsEvent = event.target.closest("#settingsMenu, #settingsButton");
   const isPromptHistoryEvent = event.target.closest(".prompt-history-panel, .prompt-history-button");
+  const isLayerBrowserEvent = event.target.closest(".layer-browser-panel, .layer-browser-button");
   const isCanvasSearchEvent = event.target.closest(".canvas-search");
   if (!isSettingsEvent) {
     settingsMenu.hidden = true;
@@ -672,15 +714,18 @@ document.addEventListener("pointerdown", (event) => {
   if (!isPromptHistoryEvent) {
     closePromptHistoryPanel();
   }
+  if (!isLayerBrowserEvent) {
+    closeLayerBrowserPanel();
+  }
   if (!isCanvasSearchEvent) {
     closeCanvasSearch({ keepQuery: true });
   }
   if (!event.target.closest("#projectMenu, .project-header button")) {
     projectMenu.hidden = true;
   }
-  if (isSettingsEvent || isPromptHistoryEvent || isCanvasSearchEvent) return;
+  if (isSettingsEvent || isPromptHistoryEvent || isLayerBrowserEvent || isCanvasSearchEvent) return;
   if (!quickEditObjectId && !selectedId && selectedIds.size === 0) return;
-  if (event.target.closest(".canvas-object, .selection-toolbar, .quick-edit-composer, .color-palette, .tool-dock, .prompt-history-panel, .prompt-history-button, .canvas-search")) return;
+  if (event.target.closest(".canvas-object, .selection-toolbar, .quick-edit-composer, .color-palette, .tool-dock, .prompt-history-panel, .prompt-history-button, .layer-browser-panel, .layer-browser-button, .canvas-search")) return;
   closeQuickEdit({ keepPrompt: true });
   selectObject(null);
 });
@@ -744,6 +789,288 @@ board.addEventListener("wheel", (event) => {
   updateSelectionUi();
   scheduleViewportSave();
 }, { passive: false });
+
+function createLayerStackIcon(className) {
+  return createSvgIcon(className, [
+    "M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z",
+    "M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12",
+    "M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"
+  ]);
+}
+
+function initLayerBrowserUi() {
+  if (!boardShell) return;
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "layer-browser-button";
+  button.append(createLayerStackIcon("layer-browser-button-icon"));
+  button.setAttribute("aria-expanded", "false");
+
+  const panel = document.createElement("section");
+  panel.className = "layer-browser-panel";
+  panel.hidden = true;
+  panel.innerHTML = `
+    <div class="layer-browser-header">
+      <div class="layer-browser-heading">
+        <div class="layer-browser-title"></div>
+        <div class="layer-browser-summary"></div>
+      </div>
+      <button class="layer-browser-fit" type="button"></button>
+    </div>
+    <div class="layer-browser-list"></div>
+  `;
+
+  layerBrowserUi = {
+    button,
+    panel,
+    title: panel.querySelector(".layer-browser-title"),
+    summary: panel.querySelector(".layer-browser-summary"),
+    fit: panel.querySelector(".layer-browser-fit"),
+    list: panel.querySelector(".layer-browser-list")
+  };
+
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleLayerBrowserPanel();
+  });
+
+  layerBrowserUi.fit.addEventListener("click", (event) => {
+    event.preventDefault();
+    fitLayerBrowserObjects();
+  });
+
+  panel.addEventListener("click", (event) => {
+    const groupToggle = event.target.closest("[data-layer-group-toggle]");
+    if (groupToggle) {
+      event.preventDefault();
+      toggleLayerBrowserGroup(groupToggle.dataset.layerGroupToggle);
+      return;
+    }
+
+    const objectButton = event.target.closest("[data-layer-object-id]");
+    if (!objectButton) return;
+    event.preventDefault();
+    focusLayerBrowserObject(objectButton.dataset.layerObjectId);
+  });
+
+  boardShell.append(button, panel);
+  updateLayerBrowserLabels();
+}
+
+function toggleLayerBrowserPanel() {
+  if (!layerBrowserUi) return;
+  const nextOpen = layerBrowserUi.panel.hidden;
+  if (!nextOpen) {
+    closeLayerBrowserPanel();
+    return;
+  }
+  settingsMenu.hidden = true;
+  projectMenu.hidden = true;
+  closeCanvasSearch({ keepQuery: true });
+  closePromptHistoryPanel();
+  layerBrowserUi.panel.hidden = false;
+  layerBrowserUi.button.classList.add("active");
+  layerBrowserUi.button.setAttribute("aria-expanded", "true");
+  renderLayerBrowserPanel();
+}
+
+function closeLayerBrowserPanel() {
+  if (!layerBrowserUi || layerBrowserUi.panel.hidden) return;
+  layerBrowserUi.panel.hidden = true;
+  layerBrowserUi.button.classList.remove("active");
+  layerBrowserUi.button.setAttribute("aria-expanded", "false");
+}
+
+function renderLayerBrowserPanel() {
+  if (!layerBrowserUi || !state) return;
+  const images = state.objects.filter((object) => (object.type || "image") === "image");
+  const standaloneCount = images.filter((object) => !object.layerGroupId).length;
+  const layerCount = images.length - standaloneCount;
+  layerBrowserUi.summary.textContent = `${standaloneCount} ${t("layerBrowserImages")} · ${layerCount} ${t("layerBrowserLayers")}`;
+  layerBrowserUi.fit.disabled = images.length === 0;
+  if (layerBrowserUi.panel.hidden) return;
+
+  const scrollTop = layerBrowserUi.list.scrollTop;
+  layerBrowserUi.list.replaceChildren();
+  if (!images.length) {
+    const empty = document.createElement("div");
+    empty.className = "layer-browser-empty";
+    empty.textContent = t("layerBrowserEmpty");
+    layerBrowserUi.list.append(empty);
+    return;
+  }
+
+  const entries = layerBrowserEntries(images);
+  const visibleGroupIds = new Set(entries.filter((entry) => entry.type === "group").map((entry) => entry.groupId));
+  for (const groupId of [...collapsedLayerGroupIds]) {
+    if (!visibleGroupIds.has(groupId)) collapsedLayerGroupIds.delete(groupId);
+  }
+
+  for (const entry of entries.filter((item) => item.type === "group")) {
+    layerBrowserUi.list.append(renderLayerBrowserGroup(entry));
+  }
+  const standaloneImages = entries
+    .filter((entry) => entry.type === "image")
+    .map((entry) => entry.object);
+  for (const image of standaloneImages) {
+    layerBrowserUi.list.append(renderLayerBrowserObjectRow(image));
+  }
+  layerBrowserUi.list.scrollTop = scrollTop;
+  updateLayerBrowserSelection();
+}
+
+function layerBrowserEntries(images) {
+  const entries = [];
+  const seenGroups = new Set();
+  for (const object of [...images].reverse()) {
+    if (!object.layerGroupId) {
+      entries.push({ type: "image", object });
+      continue;
+    }
+    if (seenGroups.has(object.layerGroupId)) continue;
+    seenGroups.add(object.layerGroupId);
+    entries.push({
+      type: "group",
+      groupId: object.layerGroupId,
+      members: [...layerGroupMembers(object.layerGroupId)].reverse()
+    });
+  }
+  return entries;
+}
+
+function renderLayerBrowserGroup(entry) {
+  const collapsed = collapsedLayerGroupIds.has(entry.groupId);
+  const section = document.createElement("section");
+  section.className = "layer-browser-group";
+  section.dataset.layerGroupId = entry.groupId;
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "layer-browser-group-toggle";
+  toggle.dataset.layerGroupToggle = entry.groupId;
+  toggle.setAttribute("aria-expanded", String(!collapsed));
+
+  const chevron = createSvgIcon("layer-browser-chevron", ["M9 6l6 6l-6 6"]);
+  toggle.append(chevron, createLayerStackIcon("layer-browser-group-icon"));
+
+  const body = document.createElement("span");
+  body.className = "layer-browser-group-body";
+  const title = document.createElement("span");
+  title.className = "layer-browser-group-title";
+  title.textContent = layerGroupLabel(entry.groupId);
+  const meta = document.createElement("span");
+  meta.className = "layer-browser-group-meta";
+  meta.textContent = `${entry.members.length} ${t("layerBrowserLayers")}${isLayerGroupLocked(entry.groupId) ? ` · ${t("layerBrowserGrouped")}` : ""}`;
+  body.append(title, meta);
+
+  const count = document.createElement("span");
+  count.className = "layer-browser-group-count";
+  count.textContent = String(entry.members.length);
+  toggle.append(body, count);
+  section.append(toggle);
+
+  if (!collapsed) {
+    const children = document.createElement("div");
+    children.className = "layer-browser-group-children";
+    for (const member of entry.members) {
+      children.append(renderLayerBrowserObjectRow(member, { nested: true, compact: true }));
+    }
+    section.append(children);
+  }
+  return section;
+}
+
+function renderLayerBrowserObjectRow(object, { nested = false, compact = false } = {}) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `layer-browser-object${nested ? " nested" : ""}${compact ? " compact" : ""}`;
+  button.dataset.layerObjectId = object.id;
+
+  const thumbnail = document.createElement("span");
+  thumbnail.className = "layer-browser-thumbnail";
+  if (object.src) {
+    const image = document.createElement("img");
+    image.src = assetUrl(object.src, object);
+    image.alt = "";
+    image.loading = "lazy";
+    image.draggable = false;
+    thumbnail.append(image);
+  }
+
+  const body = document.createElement("span");
+  body.className = "layer-browser-object-body";
+  const title = document.createElement("span");
+  title.className = "layer-browser-object-title";
+  title.textContent = object.name || t(nested ? "layerBrowserLayer" : "layerBrowserImage");
+  const meta = document.createElement("span");
+  meta.className = "layer-browser-object-meta";
+  const kind = nested
+    ? t(object.layerGroupKind === "background" ? "layerBrowserBackground" : "layerBrowserLayer")
+    : t("layerBrowserImage");
+  meta.textContent = `${kind} · ${imageSizeLabel(object)}`;
+  body.append(title, meta);
+
+  const accessibleLabel = `${title.textContent} — ${meta.textContent}`;
+  button.title = accessibleLabel;
+  button.setAttribute("aria-label", accessibleLabel);
+
+  button.append(thumbnail, body);
+  return button;
+}
+
+function toggleLayerBrowserGroup(groupId) {
+  if (!groupId) return;
+  if (collapsedLayerGroupIds.has(groupId)) collapsedLayerGroupIds.delete(groupId);
+  else collapsedLayerGroupIds.add(groupId);
+  renderLayerBrowserPanel();
+}
+
+async function focusLayerBrowserObject(id) {
+  const object = state?.objects.find((item) => item.id === id && (item.type || "image") === "image");
+  if (!object) return;
+  closeQuickEdit({ keepPrompt: true });
+  await selectObject(id, { fromUser: true }).catch(() => {});
+  frameCanvasObject(object);
+  updateLayerBrowserSelection();
+}
+
+function fitLayerBrowserObjects() {
+  const images = state?.objects.filter((object) => (object.type || "image") === "image") || [];
+  if (!images.length) return;
+  frameWorldBounds(boundsForObjects(images), {
+    paddingX: 96,
+    paddingTop: 88,
+    paddingBottom: 104,
+    minZoom: 0.12,
+    maxZoom: 0.95
+  });
+}
+
+function updateLayerBrowserSelection() {
+  if (!layerBrowserUi || layerBrowserUi.panel.hidden) return;
+  const ids = selectedObjectIds();
+  const selectedGroupId = selectedObjectLayerGroupId();
+  layerBrowserUi.list.querySelectorAll("[data-layer-object-id]").forEach((button) => {
+    button.classList.toggle("selected", ids.has(button.dataset.layerObjectId));
+  });
+  layerBrowserUi.list.querySelectorAll("[data-layer-group-id]").forEach((section) => {
+    section.classList.toggle("selected", section.dataset.layerGroupId === selectedGroupId);
+  });
+}
+
+function updateLayerBrowserLabels() {
+  if (!layerBrowserUi) return;
+  const label = t("layerBrowser");
+  layerBrowserUi.button.title = label;
+  layerBrowserUi.button.dataset.tooltip = label;
+  layerBrowserUi.button.setAttribute("aria-label", label);
+  layerBrowserUi.panel.setAttribute("aria-label", label);
+  layerBrowserUi.title.textContent = label;
+  layerBrowserUi.fit.textContent = t("layerBrowserFit");
+  renderLayerBrowserPanel();
+}
 
 function initPromptHistoryUi() {
   if (!boardShell) return;
@@ -869,6 +1196,7 @@ function togglePromptHistoryPanel() {
   if (nextOpen) {
     settingsMenu.hidden = true;
     projectMenu.hidden = true;
+    closeLayerBrowserPanel();
     promptHistoryUi.panel.hidden = false;
     promptHistoryUi.button.classList.add("active");
     fetchDiscoveryPanel();
@@ -1240,6 +1568,9 @@ async function loadProjects() {
 async function toggleProjectMenu() {
   if (!projectMenu) return;
   if (projectMenu.hidden) {
+    closeLayerBrowserPanel();
+    closePromptHistoryPanel();
+    settingsMenu.hidden = true;
     await loadProjects().catch(() => {});
     projectMenu.hidden = false;
   } else {
@@ -1632,6 +1963,7 @@ function render() {
     updateAnnotationPreview();
   }
 
+  renderLayerBrowserPanel();
   updateSelectionUi();
   updateQuickEditRunState();
 }
@@ -1921,39 +2253,45 @@ function renderAnnotationObject(object) {
   svg.setAttribute("viewBox", `0 0 ${Math.max(1, object.width)} ${Math.max(1, object.height)}`);
   svg.setAttribute("width", "100%");
   svg.setAttribute("height", "100%");
+  svg.setAttribute("preserveAspectRatio", "none");
   svg.setAttribute("aria-hidden", "true");
 
   const markerId = `annotation-arrowhead-${String(object.id).replace(/[^a-zA-Z0-9_-]/g, "-")}`;
   const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
   const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
   marker.setAttribute("id", markerId);
-  marker.setAttribute("viewBox", "0 0 10 10");
-  marker.setAttribute("refX", "9");
-  marker.setAttribute("refY", "5");
-  marker.setAttribute("markerWidth", "8");
-  marker.setAttribute("markerHeight", "8");
+  marker.setAttribute("viewBox", "0 0 12 12");
+  marker.setAttribute("refX", "10");
+  marker.setAttribute("refY", "6");
+  marker.setAttribute("markerWidth", "12");
+  marker.setAttribute("markerHeight", "12");
+  marker.setAttribute("markerUnits", "userSpaceOnUse");
   marker.setAttribute("orient", "auto-start-reverse");
   const arrowhead = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  arrowhead.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
-  arrowhead.setAttribute("fill", object.color || defaultQuickEditMarkColor);
+  arrowhead.setAttribute("d", "M 2 2 L 10 6 L 2 10");
+  arrowhead.setAttribute("fill", "none");
+  arrowhead.setAttribute("stroke", object.color || defaultQuickEditMarkColor);
+  arrowhead.setAttribute("stroke-width", "2.2");
+  arrowhead.setAttribute("stroke-linecap", "round");
+  arrowhead.setAttribute("stroke-linejoin", "round");
   marker.append(arrowhead);
   defs.append(marker);
   svg.append(defs);
 
+  const geometry = annotationDisplayGeometry(object);
   const start = {
-    x: Number.isFinite(object.labelX) ? object.labelX : 0,
-    y: Number.isFinite(object.labelY) ? object.labelY : 0
+    x: geometry.labelPoint.x - object.x,
+    y: geometry.labelPoint.y - object.y
   };
-  const target = annotationTargetPoint(object);
   const end = {
-    x: target.x - object.x,
-    y: target.y - object.y
+    x: geometry.targetPoint.x - object.x,
+    y: geometry.targetPoint.y - object.y
   };
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
   path.setAttribute("d", annotationCurvePath(start, end));
   path.setAttribute("fill", "none");
   path.setAttribute("stroke", object.color || defaultQuickEditMarkColor);
-  path.setAttribute("stroke-width", object.strokeWidth || 4);
+  path.setAttribute("stroke-width", Math.max(2.25, Math.min(3.25, object.strokeWidth || 3)));
   path.setAttribute("stroke-linecap", "round");
   path.setAttribute("stroke-linejoin", "round");
   path.setAttribute("marker-end", `url(#${markerId})`);
@@ -1966,15 +2304,23 @@ function renderAnnotationObject(object) {
   label.contentEditable = String(editingAnnotationId === object.id);
   label.spellcheck = true;
   label.dataset.placeholder = t("annotationPlaceholder");
+  label.title = t("annotationEditHint");
   label.style.left = `${start.x}px`;
   label.style.top = `${start.y}px`;
   label.style.setProperty("--annotation-color", object.color || defaultQuickEditMarkColor);
   label.addEventListener("pointerdown", (event) => {
     event.stopPropagation();
     if (editingAnnotationId === object.id) return;
-    if (event.detail >= 2) {
+    const now = performance.now();
+    const repeatedPointerDown = lastAnnotationPointerDown?.id === object.id
+      && now - lastAnnotationPointerDown.at <= 450;
+    lastAnnotationPointerDown = { id: object.id, at: now };
+    if (event.detail >= 2 || repeatedPointerDown) {
+      event.preventDefault();
       setLocalSelection([object.id], { fromUser: true });
-      updateSelectionClasses();
+      editingAnnotationId = object.id;
+      render();
+      focusAnnotationLabel(object.id);
       return;
     }
     startDrag(event, object, { element: label.closest(".canvas-object") });
@@ -2008,31 +2354,65 @@ function renderAnnotationObject(object) {
   return shell;
 }
 
-function annotationTargetPoint(object) {
-  const target = state?.objects?.find((item) => item.id === object.annotationTargetId && (item.type || "image") === "image");
-  if (target) {
-    const anchorX = Number.isFinite(object.targetAnchorX) ? object.targetAnchorX : 0.5;
-    const anchorY = Number.isFinite(object.targetAnchorY) ? object.targetAnchorY : 0.5;
+function annotationStoredGeometry(object) {
+  const labelPoint = {
+    x: object.x + (Number.isFinite(object.labelX) ? object.labelX : 0),
+    y: object.y + (Number.isFinite(object.labelY) ? object.labelY : 0)
+  };
+  if (Number.isFinite(object.tipX) && Number.isFinite(object.tipY)) {
     return {
-      x: target.x + clamp(anchorX, 0, 1) * target.width,
-      y: target.y + clamp(anchorY, 0, 1) * target.height
+      labelPoint,
+      targetPoint: { x: object.x + object.tipX, y: object.y + object.tipY }
     };
   }
+  const labelX = Number.isFinite(object.labelX) ? object.labelX : 0;
+  const labelY = Number.isFinite(object.labelY) ? object.labelY : 0;
   return {
-    x: object.x + (Number.isFinite(object.labelX) && object.labelX > object.width / 2 ? 0 : object.width),
-    y: object.y + (Number.isFinite(object.labelY) && object.labelY > object.height / 2 ? 0 : object.height)
+    labelPoint,
+    targetPoint: {
+      x: object.x + (labelX > object.width / 2 ? 0 : object.width),
+      y: object.y + (labelY > object.height / 2 ? 0 : object.height)
+    }
   };
+}
+
+function annotationDisplayGeometry(object) {
+  const stored = annotationStoredGeometry(object);
+  const target = state?.objects?.find((item) => item.id === object.annotationTargetId && (item.type || "image") === "image");
+  return target ? orientAnnotationGeometry(stored.labelPoint, stored.targetPoint, target) : stored;
+}
+
+function orientAnnotationGeometry(firstPoint, secondPoint, target) {
+  const firstDistance = pointDistanceToRect(firstPoint, target);
+  const secondDistance = pointDistanceToRect(secondPoint, target);
+  return firstDistance < secondDistance
+    ? { labelPoint: secondPoint, targetPoint: firstPoint }
+    : { labelPoint: firstPoint, targetPoint: secondPoint };
+}
+
+function pointDistanceToRect(point, rect) {
+  const dx = Math.max(rect.x - point.x, 0, point.x - (rect.x + rect.width));
+  const dy = Math.max(rect.y - point.y, 0, point.y - (rect.y + rect.height));
+  return Math.hypot(dx, dy);
 }
 
 function annotationCurvePath(start, end) {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
   const length = Math.max(1, Math.hypot(dx, dy));
-  const bend = Math.min(48, Math.max(12, length * 0.1));
+  const bend = Math.min(42, Math.max(8, length * 0.08));
   const direction = Math.abs(dx) >= Math.abs(dy) ? (dx >= 0 ? -1 : 1) : 1;
-  const controlX = (start.x + end.x) / 2 - (dy / length) * bend * direction;
-  const controlY = (start.y + end.y) / 2 + (dx / length) * bend * direction;
-  return `M ${start.x} ${start.y} Q ${controlX} ${controlY} ${end.x} ${end.y}`;
+  const normalX = -(dy / length) * bend * direction;
+  const normalY = (dx / length) * bend * direction;
+  const control1 = {
+    x: start.x + dx * 0.3 + normalX,
+    y: start.y + dy * 0.3 + normalY
+  };
+  const control2 = {
+    x: end.x - dx * 0.2 + normalX * 0.48,
+    y: end.y - dy * 0.2 + normalY * 0.48
+  };
+  return `M ${start.x} ${start.y} C ${control1.x} ${control1.y} ${control2.x} ${control2.y} ${end.x} ${end.y}`;
 }
 
 function renderJobObject(object) {
@@ -2384,6 +2764,10 @@ function endDrag(event) {
   if (event?.type === "pointercancel") {
     applyObjectPatchesLocally(before);
     render();
+    return;
+  }
+  if (!objectUpdatesChanged(before, after)) {
+    updateSelectionUi();
     return;
   }
   if (activeDrag.expandPreview) {
@@ -2885,6 +3269,7 @@ function updateSelectionClasses() {
   objectLayer.querySelectorAll(".canvas-object").forEach((element) => {
     element.classList.toggle("selected", ids.has(element.dataset.id));
   });
+  updateLayerBrowserSelection();
 }
 
 function normalizedRect(a, b) {
@@ -2974,7 +3359,7 @@ function shouldStartPan(event) {
 
 function isCanvasPanBlockedTarget(target) {
   if (!(target instanceof Element)) return false;
-  return Boolean(target.closest("button, input, textarea, select, [contenteditable='true'], .selection-toolbar, .quick-edit-composer"));
+  return Boolean(target.closest("button, input, textarea, select, [contenteditable='true'], .selection-toolbar, .quick-edit-composer, .layer-browser-panel"));
 }
 
 function startPan(event) {
@@ -2982,12 +3367,16 @@ function startPan(event) {
   event.preventDefault();
   event.stopImmediatePropagation();
   board.classList.add("dragging");
+  const clickedObject = event.target instanceof Element ? event.target.closest(".canvas-object") : null;
   pan = {
     pointerId: event.pointerId,
     startX: event.clientX,
     startY: event.clientY,
     viewportX: viewport.x,
-    viewportY: viewport.y
+    viewportY: viewport.y,
+    moved: false,
+    selectOnClick: event.button === 0 && activeTool === "hand" && !spacePanPressed,
+    clickedObjectId: clickedObject?.dataset.id || null
   };
   window.addEventListener("pointermove", movePan);
   window.addEventListener("pointerup", endPan);
@@ -3001,9 +3390,13 @@ function startPan(event) {
 }
 
 function startAnnotation(event) {
-  if (quickEditAction !== "quick-edit" || !quickEditObjectId) return;
-  const target = state.objects.find((item) => item.id === quickEditObjectId && (item.type || "image") === "image");
-  if (!target) return;
+  const start = pointerToWorld(event);
+  const targets = annotationImageTargets();
+  if (!targets.length) {
+    showToast(t("annotationTargetMissing"));
+    return;
+  }
+  const target = annotationTargetForGesture(start, start);
 
   event.preventDefault();
   event.stopPropagation();
@@ -3011,7 +3404,6 @@ function startAnnotation(event) {
   setLocalSelection([]);
   updateSelectionClasses();
   board.classList.add("annotating");
-  const start = pointerToWorld(event);
   const preview = createAnnotationPreview();
   objectLayer.append(preview.element);
   annotationDraft = {
@@ -3019,7 +3411,7 @@ function startAnnotation(event) {
     start,
     end: start,
     preview,
-    targetId: target.id
+    targetId: target?.id || null
   };
   try {
     board.setPointerCapture(event.pointerId);
@@ -3038,26 +3430,32 @@ function createAnnotationPreview() {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("width", "100%");
   svg.setAttribute("height", "100%");
+  svg.setAttribute("preserveAspectRatio", "none");
   svg.setAttribute("aria-hidden", "true");
   const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
   const marker = document.createElementNS("http://www.w3.org/2000/svg", "marker");
   marker.setAttribute("id", "annotation-draft-arrowhead");
-  marker.setAttribute("viewBox", "0 0 10 10");
-  marker.setAttribute("refX", "9");
-  marker.setAttribute("refY", "5");
-  marker.setAttribute("markerWidth", "8");
-  marker.setAttribute("markerHeight", "8");
+  marker.setAttribute("viewBox", "0 0 12 12");
+  marker.setAttribute("refX", "10");
+  marker.setAttribute("refY", "6");
+  marker.setAttribute("markerWidth", "12");
+  marker.setAttribute("markerHeight", "12");
+  marker.setAttribute("markerUnits", "userSpaceOnUse");
   marker.setAttribute("orient", "auto-start-reverse");
   const arrowhead = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  arrowhead.setAttribute("d", "M 0 0 L 10 5 L 0 10 z");
-  arrowhead.setAttribute("fill", activeColor);
+  arrowhead.setAttribute("d", "M 2 2 L 10 6 L 2 10");
+  arrowhead.setAttribute("fill", "none");
+  arrowhead.setAttribute("stroke", activeColor);
+  arrowhead.setAttribute("stroke-width", "2.2");
+  arrowhead.setAttribute("stroke-linecap", "round");
+  arrowhead.setAttribute("stroke-linejoin", "round");
   marker.append(arrowhead);
   defs.append(marker);
   svg.append(defs);
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
   path.setAttribute("fill", "none");
   path.setAttribute("stroke", activeColor);
-  path.setAttribute("stroke-width", "4");
+  path.setAttribute("stroke-width", "3");
   path.setAttribute("stroke-linecap", "round");
   path.setAttribute("marker-end", "url(#annotation-draft-arrowhead)");
   svg.append(path);
@@ -3083,9 +3481,14 @@ function updateAnnotationPreview() {
   preview.element.style.width = `${width}px`;
   preview.element.style.height = `${height}px`;
   preview.svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  const target = state.objects.find((item) => item.id === annotationDraft.targetId && (item.type || "image") === "image")
+    || annotationTargetForGesture(start, end);
+  const geometry = target
+    ? orientAnnotationGeometry(start, end, target)
+    : { labelPoint: start, targetPoint: end };
   preview.path.setAttribute("d", annotationCurvePath(
-    { x: start.x - x, y: start.y - y },
-    { x: end.x - x, y: end.y - y }
+    { x: geometry.labelPoint.x - x, y: geometry.labelPoint.y - y },
+    { x: geometry.targetPoint.x - x, y: geometry.targetPoint.y - y }
   ));
 }
 
@@ -3096,14 +3499,19 @@ async function endAnnotation(event) {
   const lengthPx = Math.hypot(active.end.x - active.start.x, active.end.y - active.start.y) * viewport.zoom;
   if (lengthPx < annotationMinimumLengthPx) return;
 
-  const target = state.objects.find((item) => item.id === active.targetId && (item.type || "image") === "image");
-  if (!target) return;
+  const target = state.objects.find((item) => item.id === active.targetId && (item.type || "image") === "image")
+    || annotationTargetForGesture(active.start, active.end);
+  if (!target) {
+    showToast(t("annotationTargetMissing"));
+    return;
+  }
   const x = Math.min(active.start.x, active.end.x);
   const y = Math.min(active.start.y, active.end.y);
   const width = Math.max(1, Math.abs(active.end.x - active.start.x));
   const height = Math.max(1, Math.abs(active.end.y - active.start.y));
-  const targetAnchorX = clamp((active.end.x - target.x) / Math.max(1, target.width), 0, 1);
-  const targetAnchorY = clamp((active.end.y - target.y) / Math.max(1, target.height), 0, 1);
+  const geometry = orientAnnotationGeometry(active.start, active.end, target);
+  const targetAnchorX = clamp((geometry.targetPoint.x - target.x) / Math.max(1, target.width), 0, 1);
+  const targetAnchorY = clamp((geometry.targetPoint.y - target.y) / Math.max(1, target.height), 0, 1);
 
   try {
     const object = await createObject({
@@ -3114,13 +3522,15 @@ async function endAnnotation(event) {
       annotationRole: "note",
       label: "",
       color: activeColor,
-      strokeWidth: 4,
+      strokeWidth: 3,
       x: Math.round(x),
       y: Math.round(y),
       width: Math.round(width),
       height: Math.round(height),
-      labelX: Math.round(active.start.x - x),
-      labelY: Math.round(active.start.y - y),
+      labelX: Math.round(geometry.labelPoint.x - x),
+      labelY: Math.round(geometry.labelPoint.y - y),
+      tipX: Math.round(geometry.targetPoint.x - x),
+      tipY: Math.round(geometry.targetPoint.y - y),
       targetAnchorX,
       targetAnchorY
     });
@@ -3136,6 +3546,29 @@ async function endAnnotation(event) {
 
 function cancelAnnotation() {
   takeAnnotationDraft();
+}
+
+function annotationImageTargets() {
+  return state?.objects?.filter((item) => (item.type || "image") === "image") || [];
+}
+
+function annotationTargetForGesture(start, end) {
+  const targets = annotationImageTargets();
+  const preferredId = quickEditAction === "quick-edit" && quickEditObjectId
+    ? quickEditObjectId
+    : selectedIds.size <= 1
+      ? selectedId
+      : null;
+  const preferred = targets.find((item) => item.id === preferredId);
+  if (preferred) return preferred;
+
+  return targets
+    .map((item) => ({
+      item,
+      distance: Math.min(pointDistanceToRect(start, item), pointDistanceToRect(end, item))
+    }))
+    .filter((candidate) => candidate.distance === 0)
+    .sort((left, right) => left.distance - right.distance)[0]?.item || null;
 }
 
 function takeAnnotationDraft() {
@@ -4382,7 +4815,7 @@ function frameSelectedImageForViewing(object) {
 
 function isShortcutEditingTarget(target) {
   if (isEditableTarget(target)) return true;
-  return Boolean(target.closest("button, [role='button'], .selection-toolbar, .quick-edit-composer, .settings-menu, .color-palette, .prompt-history-panel, .canvas-search"));
+  return Boolean(target.closest("button, [role='button'], .selection-toolbar, .quick-edit-composer, .settings-menu, .color-palette, .prompt-history-panel, .layer-browser-panel, .canvas-search"));
 }
 
 function canvasHistoryShortcut(event) {
@@ -4396,11 +4829,11 @@ function canvasHistoryShortcut(event) {
 }
 
 function isNativeUndoTarget(target) {
-  return isEditableTarget(target) || Boolean(target.closest(".quick-edit-composer, .prompt-history-panel, .canvas-search"));
+  return isEditableTarget(target) || Boolean(target.closest(".quick-edit-composer, .prompt-history-panel, .layer-browser-panel, .canvas-search"));
 }
 
 function isDeleteEditingTarget(target) {
-  if (target.closest("input, textarea")) return true;
+  if (target.closest("input, textarea, .layer-browser-panel")) return true;
   const editableText = target.closest(".text-content[contenteditable='true']");
   const editableAnnotation = target.closest(".annotation-label[contenteditable='true']");
   return Boolean((editableText && editingTextId === selectedId)
@@ -4454,7 +4887,9 @@ function renderColorPaletteInto(container) {
 }
 
 function updateColorPalette() {
-  colorPalette.hidden = Boolean(quickEditObjectId) || !(activeTool === "pencil" || activeTool === "text");
+  const showDockPalette = !quickEditObjectId && ["annotation", "pencil", "text"].includes(activeTool);
+  colorPalette.hidden = !showDockPalette;
+  toolDock.classList.toggle("has-visible-color-palette", showDockPalette);
   for (const palette of [colorPalette, quickEditColorPalette].filter(Boolean)) {
     palette.querySelectorAll("[data-color]").forEach((button) => {
       button.classList.toggle("active", button.dataset.color === activeColor);
@@ -4658,6 +5093,7 @@ function applyLanguage() {
   if (currentLanguage) currentLanguage.textContent = language === "zh" ? "简体中文" : "English";
   renderAppUpdateStatus();
   renderProjectMenu();
+  updateLayerBrowserLabels();
   updatePromptHistoryLabels();
 
   settingsMenu.querySelectorAll("[data-language]").forEach((button) => {
@@ -4772,7 +5208,7 @@ function pointerToWorld(event) {
 
 function shouldUseNativeWheel(target) {
   if (!(target instanceof Element)) return false;
-  return Boolean(target.closest("input, textarea, select, [contenteditable='true'], .quick-edit-composer, .canvas-search, .prompt-history-panel"));
+  return Boolean(target.closest("input, textarea, select, [contenteditable='true'], .quick-edit-composer, .canvas-search, .prompt-history-panel, .layer-browser-panel"));
 }
 
 function normalizedWheelDelta(event) {
@@ -4829,6 +5265,8 @@ function isEditableTarget(target) {
 
 function movePan(event) {
   if (!pan || event.pointerId !== pan.pointerId) return;
+  pan.moved ||= Math.hypot(event.clientX - pan.startX, event.clientY - pan.startY) > 4;
+  if (!pan.moved) return;
   viewport.x = pan.viewportX + event.clientX - pan.startX;
   viewport.y = pan.viewportY + event.clientY - pan.startY;
   applyViewport();
@@ -4837,7 +5275,8 @@ function movePan(event) {
 
 function endPan(event) {
   if (!pan || event.pointerId !== pan.pointerId) return;
-  const pointerId = pan.pointerId;
+  const activePan = pan;
+  const pointerId = activePan.pointerId;
   pan = null;
   board.classList.remove("dragging");
   window.removeEventListener("pointermove", movePan);
@@ -4845,6 +5284,13 @@ function endPan(event) {
   window.removeEventListener("pointercancel", endPan);
   board.removeEventListener("lostpointercapture", endPan);
   releaseBoardPointer(pointerId);
+  if (event.type === "pointerup" && activePan.selectOnClick && !activePan.moved) {
+    const objectId = state?.objects?.some((object) => object.id === activePan.clickedObjectId)
+      ? activePan.clickedObjectId
+      : null;
+    selectObject(objectId, { fromUser: Boolean(objectId) }).catch(() => {});
+    return;
+  }
   saveViewport();
 }
 

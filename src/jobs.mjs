@@ -843,7 +843,7 @@ function quickEditAnnotationItemSummary(item) {
   if (item?.type === "annotation") {
     const color = colorDescription(item.color);
     const label = truncatePromptLine(item.label || "Change the pointed region", 240);
-    const target = item.targetPoint;
+    const target = item.modelTargetPoint || item.targetPoint;
     const targetText = Number.isFinite(target?.x) && Number.isFinite(target?.y)
       ? ` pointing to source pixel (${Math.round(target.x)}, ${Math.round(target.y)})`
       : "";
@@ -1014,12 +1014,11 @@ function normalizeTextAnnotation(object, imageObject, sourceSize) {
 }
 
 function normalizeArrowAnnotation(object, imageObject, sourceSize) {
-  const labelPoint = canvasPointToSourcePoint({
-    x: object.x + (Number.isFinite(object.labelX) ? object.labelX : 0),
-    y: object.y + (Number.isFinite(object.labelY) ? object.labelY : 0)
-  }, imageObject, sourceSize);
-  const targetAnchorX = clampUnitNumber(object.targetAnchorX);
-  const targetAnchorY = clampUnitNumber(object.targetAnchorY);
+  const geometry = annotationCanvasGeometry(object, imageObject);
+  const labelPoint = canvasPointToSourcePoint(geometry.labelPoint, imageObject, sourceSize);
+  const targetPoint = canvasPointToSourcePoint(geometry.targetPoint, imageObject, sourceSize);
+  const targetAnchorX = clampUnitNumber((geometry.targetPoint.x - imageObject.x) / Math.max(1, imageObject.width));
+  const targetAnchorY = clampUnitNumber((geometry.targetPoint.y - imageObject.y) / Math.max(1, imageObject.height));
   const scale = annotationScale(imageObject, sourceSize);
   return {
     id: object.id,
@@ -1031,12 +1030,43 @@ function normalizeArrowAnnotation(object, imageObject, sourceSize) {
     color: object.color || "#d93025",
     strokeWidth: Math.max(1, Math.round((Number.isFinite(object.strokeWidth) ? object.strokeWidth : 4) * scale)),
     fontSize: Math.max(12, Math.round(annotationLabelFontSizeForScale(scale))),
+    startPoint: labelPoint,
     labelPoint,
-    targetPoint: {
+    targetPoint,
+    modelTargetPoint: {
       x: Math.round(targetAnchorX * sourceSize.width),
       y: Math.round(targetAnchorY * sourceSize.height)
     }
   };
+}
+
+function annotationCanvasGeometry(object, imageObject) {
+  const labelPoint = {
+    x: object.x + (Number.isFinite(object.labelX) ? object.labelX : 0),
+    y: object.y + (Number.isFinite(object.labelY) ? object.labelY : 0)
+  };
+  let targetPoint;
+  if (Number.isFinite(object.tipX) && Number.isFinite(object.tipY)) {
+    targetPoint = { x: object.x + object.tipX, y: object.y + object.tipY };
+  } else {
+    const labelX = Number.isFinite(object.labelX) ? object.labelX : 0;
+    const labelY = Number.isFinite(object.labelY) ? object.labelY : 0;
+    targetPoint = {
+      x: object.x + (labelX > object.width / 2 ? 0 : object.width),
+      y: object.y + (labelY > object.height / 2 ? 0 : object.height)
+    };
+  }
+  const labelDistance = annotationPointDistanceToRect(labelPoint, imageObject);
+  const targetDistance = annotationPointDistanceToRect(targetPoint, imageObject);
+  return labelDistance < targetDistance
+    ? { labelPoint: targetPoint, targetPoint: labelPoint }
+    : { labelPoint, targetPoint };
+}
+
+function annotationPointDistanceToRect(point, rect) {
+  const dx = Math.max(rect.x - point.x, 0, point.x - (rect.x + rect.width));
+  const dy = Math.max(rect.y - point.y, 0, point.y - (rect.y + rect.height));
+  return Math.hypot(dx, dy);
 }
 
 function annotationLabelFontSizeForScale(scale) {

@@ -137,16 +137,17 @@ def item_bounds(item: dict) -> tuple[float, float, float, float] | None:
         return x, y, x + width, y + height
     if item_type == "annotation":
         label_point = point_from(item.get("labelPoint"))
+        start_point = point_from(item.get("startPoint"), label_point)
         target_point = point_from(item.get("targetPoint"))
         font_size = max(12.0, finite(item.get("fontSize"), 18.0))
         label = str(item.get("label") or "").strip()
         lines = wrap_text(label) if label else []
         label_width = max(72.0, min(420.0, max((len(line) for line in lines), default=0) * font_size * 0.65 + 24.0))
         label_height = max(32.0, len(lines) * font_size * 1.35 + 16.0) if lines else 0.0
-        left = min(label_point[0] - label_width / 2, target_point[0])
-        top = min(label_point[1] - label_height - 12.0, target_point[1])
-        right = max(label_point[0] + label_width / 2, target_point[0])
-        bottom = max(label_point[1], target_point[1])
+        left = min(label_point[0] - label_width / 2, start_point[0], target_point[0])
+        top = min(label_point[1] - label_height - 12.0, start_point[1], target_point[1])
+        right = max(label_point[0] + label_width / 2, start_point[0], target_point[0])
+        bottom = max(label_point[1], start_point[1], target_point[1])
         return left, top, right, bottom
     return None
 
@@ -202,47 +203,59 @@ def draw_text_note(draw, item: dict, transform, scale: float) -> None:
     draw.multiline_text((x + padding, y + padding), "\n".join(wrap_text(text, 32)), fill=color, font=font, spacing=max(2, font_size // 5))
 
 
-def quadratic_points(start, control, end, steps: int = 40):
+def cubic_points(start, control1, control2, end, steps: int = 40):
     for index in range(steps + 1):
         t = index / steps
         inverse = 1.0 - t
         yield (
-            inverse * inverse * start[0] + 2 * inverse * t * control[0] + t * t * end[0],
-            inverse * inverse * start[1] + 2 * inverse * t * control[1] + t * t * end[1],
+            inverse ** 3 * start[0]
+            + 3 * inverse * inverse * t * control1[0]
+            + 3 * inverse * t * t * control2[0]
+            + t ** 3 * end[0],
+            inverse ** 3 * start[1]
+            + 3 * inverse * inverse * t * control1[1]
+            + 3 * inverse * t * t * control2[1]
+            + t ** 3 * end[1],
         )
 
 
 def draw_arrow_note(draw, item: dict, transform, scale: float) -> None:
-    start = transform(point_from(item.get("labelPoint")))
+    label_point = point_from(item.get("labelPoint"))
+    start = transform(point_from(item.get("startPoint"), label_point))
     end = transform(point_from(item.get("targetPoint")))
+    label_anchor = transform(label_point)
     color = parse_color(item.get("color"), 255)
-    stroke_width = max(2, round(finite(item.get("strokeWidth"), 4.0) * scale))
+    stroke_width = max(2, round(min(3.25, finite(item.get("strokeWidth"), 3.0)) * scale))
     dx = end[0] - start[0]
     dy = end[1] - start[1]
     length = max(1.0, math.hypot(dx, dy))
-    bend = min(48.0 * scale, max(12.0 * scale, length * 0.1))
+    bend = min(42.0 * scale, max(8.0 * scale, length * 0.08))
     direction = -1.0 if abs(dx) >= abs(dy) and dx >= 0 else 1.0
-    control = (
-        (start[0] + end[0]) / 2 - (dy / length) * bend * direction,
-        (start[1] + end[1]) / 2 + (dx / length) * bend * direction,
+    normal_x = -(dy / length) * bend * direction
+    normal_y = (dx / length) * bend * direction
+    control1 = (
+        start[0] + dx * 0.3 + normal_x,
+        start[1] + dy * 0.3 + normal_y,
     )
-    curve = list(quadratic_points(start, control, end))
+    control2 = (
+        end[0] - dx * 0.2 + normal_x * 0.48,
+        end[1] - dy * 0.2 + normal_y * 0.48,
+    )
+    curve = list(cubic_points(start, control1, control2, end))
     draw.line(curve, fill=color, width=stroke_width, joint="curve")
 
-    tangent_x = end[0] - control[0]
-    tangent_y = end[1] - control[1]
+    tangent_x = end[0] - control2[0]
+    tangent_y = end[1] - control2[1]
     tangent_length = max(1.0, math.hypot(tangent_x, tangent_y))
     unit_x, unit_y = tangent_x / tangent_length, tangent_y / tangent_length
-    head_length = max(10.0, stroke_width * 3.0)
-    head_width = head_length * 0.55
+    head_length = max(8.0 * scale, stroke_width * 2.4)
+    head_width = head_length * 0.5
     base_x = end[0] - unit_x * head_length
     base_y = end[1] - unit_y * head_length
     perpendicular_x, perpendicular_y = -unit_y, unit_x
-    draw.polygon([
-        end,
-        (base_x + perpendicular_x * head_width, base_y + perpendicular_y * head_width),
-        (base_x - perpendicular_x * head_width, base_y - perpendicular_y * head_width),
-    ], fill=color)
+    upper = (base_x + perpendicular_x * head_width, base_y + perpendicular_y * head_width)
+    lower = (base_x - perpendicular_x * head_width, base_y - perpendicular_y * head_width)
+    draw.line([upper, end, lower], fill=color, width=max(2, round(stroke_width * 0.78)), joint="curve")
 
     label = str(item.get("label") or "").strip()
     if not label:
@@ -257,8 +270,8 @@ def draw_arrow_note(draw, item: dict, transform, scale: float) -> None:
     padding_y = max(6, round(font_size * 0.35))
     width = text_box[2] - text_box[0] + padding_x * 2
     height = text_box[3] - text_box[1] + padding_y * 2
-    left = start[0] - width / 2
-    top = start[1] - height - max(8, round(8 * scale))
+    left = label_anchor[0] - width / 2
+    top = label_anchor[1] - height - max(8, round(8 * scale))
     rect = (round(left), round(top), round(left + width), round(top + height))
     draw.rounded_rectangle(rect, radius=max(6, round(8 * scale)), fill=(255, 255, 255, 244), outline=color, width=max(1, round(2 * scale)))
     draw.multiline_text((left + padding_x, top + padding_y - text_box[1]), text, fill=color, font=font, spacing=line_spacing)

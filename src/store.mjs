@@ -990,6 +990,10 @@ function normalizePersistedObject(object, context = {}) {
     normalized.strokeWidth = sanitizeStrokeWidth(object.strokeWidth);
     normalized.labelX = sanitizeCoordinate(object.labelX);
     normalized.labelY = sanitizeCoordinate(object.labelY);
+    if (Number.isFinite(object.tipX)) normalized.tipX = sanitizeCoordinate(object.tipX);
+    else delete normalized.tipX;
+    if (Number.isFinite(object.tipY)) normalized.tipY = sanitizeCoordinate(object.tipY);
+    else delete normalized.tipY;
     normalized.targetAnchorX = sanitizeUnitNumber(object.targetAnchorX);
     normalized.targetAnchorY = sanitizeUnitNumber(object.targetAnchorY);
   }
@@ -1346,7 +1350,7 @@ function sanitizeObjectPatch(patch = {}) {
   if (Number.isFinite(patch.fontSize)) next.fontSize = sanitizeFontSize(patch.fontSize);
   if (Number.isFinite(patch.strokeWidth)) next.strokeWidth = sanitizeStrokeWidth(patch.strokeWidth);
   if (Number.isFinite(patch.durationMs)) next.durationMs = sanitizeDurationMs(patch.durationMs);
-  for (const key of ["labelX", "labelY"]) {
+  for (const key of ["labelX", "labelY", "tipX", "tipY"]) {
     if (Number.isFinite(patch[key])) next[key] = sanitizeCoordinate(patch[key]);
   }
   for (const key of ["targetAnchorX", "targetAnchorY"]) {
@@ -1614,6 +1618,8 @@ function normalizeObject(input) {
       strokeWidth: Number.isFinite(input.strokeWidth) ? sanitizeStrokeWidth(input.strokeWidth) : 4,
       labelX: Number.isFinite(input.labelX) ? sanitizeCoordinate(input.labelX) : 0,
       labelY: Number.isFinite(input.labelY) ? sanitizeCoordinate(input.labelY) : 0,
+      ...(Number.isFinite(input.tipX) ? { tipX: sanitizeCoordinate(input.tipX) } : {}),
+      ...(Number.isFinite(input.tipY) ? { tipY: sanitizeCoordinate(input.tipY) } : {}),
       targetAnchorX: sanitizeUnitNumber(input.targetAnchorX),
       targetAnchorY: sanitizeUnitNumber(input.targetAnchorY)
     };

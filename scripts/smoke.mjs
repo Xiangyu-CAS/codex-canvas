@@ -217,6 +217,8 @@ async function testObjectInputSanitization() {
     label: "a".repeat(2500),
     labelX: Number.MAX_VALUE,
     labelY: -Number.MAX_VALUE,
+    tipX: -Number.MAX_VALUE,
+    tipY: Number.MAX_VALUE,
     targetAnchorX: -3,
     targetAnchorY: 7,
     strokeWidth: 0
@@ -224,16 +226,22 @@ async function testObjectInputSanitization() {
   assertEqual(annotation.label.length, 2000, "addObject should cap annotation label length");
   assertEqual(annotation.labelX, 1000000, "addObject should cap annotation label x coordinates");
   assertEqual(annotation.labelY, -1000000, "addObject should cap annotation label y coordinates");
+  assertEqual(annotation.tipX, -1000000, "addObject should cap annotation visual tip x coordinates");
+  assertEqual(annotation.tipY, 1000000, "addObject should cap annotation visual tip y coordinates");
   assertEqual(annotation.targetAnchorX, 0, "addObject should clamp annotation target x anchors");
   assertEqual(annotation.targetAnchorY, 1, "addObject should clamp annotation target y anchors");
   assertEqual(annotation.strokeWidth, 1, "addObject should clamp annotation stroke width");
   const patchedAnnotation = await updateObject(projectDir, annotation.id, {
     targetAnchorX: 4,
     targetAnchorY: -2,
+    tipX: 88,
+    tipY: 44,
     label: "patched"
   });
   assertEqual(patchedAnnotation.targetAnchorX, 1, "updateObject should clamp annotation target x anchors");
   assertEqual(patchedAnnotation.targetAnchorY, 0, "updateObject should clamp annotation target y anchors");
+  assertEqual(patchedAnnotation.tipX, 88, "updateObject should preserve a patched annotation visual tip x coordinate");
+  assertEqual(patchedAnnotation.tipY, 44, "updateObject should preserve a patched annotation visual tip y coordinate");
   assertEqual(patchedAnnotation.label, "patched", "updateObject should update annotation labels");
 
   const corruptProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-object-state-"));
@@ -1299,10 +1307,28 @@ async function testFrontendActionContract() {
     throw new Error("Quick Edit should default temporary markup to red without changing the global tool color default.");
   }
   if (!html.includes('data-tool="hand"') || !html.includes('data-history-action="undo"') || !html.includes('data-history-action="redo"')) {
-    throw new Error("frontend should expose the default Hand tool plus Undo and Redo controls.");
+    throw new Error("frontend should expose the Hand tool plus Undo and Redo controls.");
   }
-  if (!app.includes('const defaultCanvasTool = "hand"') || !app.includes('import { CanvasHistory } from "./canvas-history.js"')) {
-    throw new Error("frontend should initialize the scoped canvas history with Hand as the default tool.");
+  if (!app.includes('const defaultCanvasTool = "select"') || !app.includes('import { CanvasHistory } from "./canvas-history.js"')) {
+    throw new Error("frontend should initialize the scoped canvas history with Select as the default tool.");
+  }
+  if (!/data-view-action="upload"[\s\S]*?data-tool="annotation"[\s\S]*?data-tool="pencil"/.test(html)) {
+    throw new Error("frontend should place the standalone Arrow Note tool immediately before Pencil in the dock.");
+  }
+  if (!/@media\s*\(max-width:\s*480px\)[\s\S]*?\.selection-toolbar button span\s*\{\s*display:\s*none;\s*\}/.test(styles)) {
+    throw new Error("selection toolbar labels should only collapse at phone-sized viewport widths.");
+  }
+  if (
+    !app.includes("initLayerBrowserUi();")
+    || !app.includes('createLayerStackIcon("layer-browser-button-icon")')
+    || !app.includes("data-layer-group-toggle")
+    || !app.includes("data-layer-object-id")
+    || !app.includes("{ nested: true, compact: true }")
+    || !app.includes("layerBrowserUi.list.append(renderLayerBrowserObjectRow(image))")
+    || !styles.includes(".layer-browser-panel")
+    || !styles.includes("grid-template-columns: repeat(4, minmax(0, 1fr))")
+  ) {
+    throw new Error("frontend should expose a compact Layers browser with grouped layer thumbnails and standalone image rows.");
   }
 
   const frontendImageJobActions = [...domActions].filter((action) => stableFrontendImageActions.includes(action));
@@ -3317,8 +3343,8 @@ async function testQuickEditAnnotations() {
       y: 30,
       width: 130,
       height: 24,
-      labelX: 0,
-      labelY: 0,
+      labelX: 130,
+      labelY: 24,
       targetAnchorX: 0.5,
       targetAnchorY: 0.5
     });
@@ -3401,8 +3427,16 @@ async function testQuickEditAnnotations() {
     }
     const annotation = manifest.items.find((item) => item.type === "annotation" && item.id === arrowNote.id);
     if (!annotation || annotation.label !== "去掉内框" || annotation.labelPoint.x >= 0) {
-      throw new Error("Quick Edit should retain an external arrow label and its normalized target point.");
+      throw new Error("Quick Edit should orient a legacy arrow toward the image and keep its label at the outside tail.");
     }
+    assertEqual(annotation.startPoint.x, -50, "Quick Edit annotation board should place the arrow tail outside x");
+    assertEqual(annotation.startPoint.y, 0, "Quick Edit annotation board should place the arrow tail outside y");
+    assertEqual(annotation.targetPoint.x, 15, "Quick Edit annotation board should point the arrowhead toward the image x");
+    assertEqual(annotation.targetPoint.y, 12, "Quick Edit annotation board should point the arrowhead toward the image y");
+    assertEqual(annotation.labelPoint.x, -50, "Quick Edit annotation label should remain beside the outside arrow tail x");
+    assertEqual(annotation.labelPoint.y, 0, "Quick Edit annotation label should remain beside the outside arrow tail y");
+    assertEqual(annotation.modelTargetPoint.x, 15, "Quick Edit prompt should use the image target x");
+    assertEqual(annotation.modelTargetPoint.y, 12, "Quick Edit prompt should use the image target y");
     await fs.access(annotationBoardPath);
     assertEqual(completedJob.annotationSessionId, "qe-smoke", "Quick Edit jobs should expose the originating annotation session");
     const completedState = await readState(annotatedProjectDir);

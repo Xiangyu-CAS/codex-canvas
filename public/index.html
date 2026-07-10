@@ -228,7 +228,7 @@
               </div>
               <textarea id="quickEditPrompt" rows="2" autocomplete="off" spellcheck="true" data-i18n-placeholder="quickEditPlaceholder" placeholder="Describe your edit here"></textarea>
               <div id="quickEditHint" class="quick-edit-hint" data-i18n="quickEditHint">
-                Drag from a note position to the part of the image you want to change, then type the instruction.
+                Drag between the image target and an outside note position. The arrow points to the image and the text stays at the tail.
               </div>
               <div id="quickEditMarkupControls" class="quick-edit-markup-controls" aria-label="Markup tools">
                 <div id="quickEditColorPalette" class="quick-edit-color-palette" aria-label="Markup colors"></div>
@@ -274,7 +274,7 @@
           </div>
 
           <nav class="tool-dock" aria-label="Canvas tools">
-            <button class="active" title="Hand" aria-label="Hand" data-tooltip="Hand" data-tool="hand">
+            <button title="Hand" aria-label="Hand" data-tooltip="Hand" data-tool="hand">
               <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M8 13v-8.5a1.5 1.5 0 0 1 3 0v6.5"></path>
                 <path d="M11 5.5v-2a1.5 1.5 0 0 1 3 0v7.5"></path>
@@ -282,7 +282,7 @@
                 <path d="M17 7.5a1.5 1.5 0 0 1 3 0v6.5a6 6 0 0 1 -6 6h-2c-2.4 0 -3.4 -.6 -4.8 -2l-3.6 -4.5a1.5 1.5 0 0 1 2.3 -1.9l2.1 1.4"></path>
               </svg>
             </button>
-            <button title="Select" aria-label="Select" data-tooltip="Select" data-tool="select">
+            <button class="active" title="Select" aria-label="Select" data-tooltip="Select" data-tool="select">
               <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M7.904 17.563a1.2 1.2 0 0 0 2.228 .308l2.09 -3.093l4.907 4.907a1.067 1.067 0 0 0 1.509 0l1.047 -1.047a1.067 1.067 0 0 0 0 -1.509l-4.907 -4.907l3.113 -2.09a1.2 1.2 0 0 0 -.309 -2.228l-13.582 -3.904l3.904 13.563"></path>
               </svg>
@@ -295,6 +295,14 @@
                 <path d="M14 14l1 -1c.679 -.653 1.473 -.829 2.214 -.526"></path>
                 <path d="M19 22v-6"></path>
                 <path d="M22 19l-3 -3l-3 3"></path>
+              </svg>
+            </button>
+            <!-- Lucide message-square-plus; matches the Quick Edit Arrow Note tool. -->
+            <button title="Arrow note" aria-label="Arrow note" data-tooltip="Arrow note" data-tool="annotation">
+              <svg class="dock-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h6"></path>
+                <path d="M19 3v6"></path>
+                <path d="M16 6h6"></path>
               </svg>
             </button>
             <button title="Pencil" aria-label="Pencil" data-tooltip="Pencil" data-tool="pencil">
