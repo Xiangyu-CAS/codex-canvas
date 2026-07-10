@@ -208,6 +208,34 @@ async function testObjectInputSanitization() {
   assertEqual(drawing.points[0].x, 1000000, "addObject should cap drawing point x coordinates");
   assertEqual(drawing.points[0].y, -1000000, "addObject should cap drawing point y coordinates");
 
+  const annotation = await addObject(projectDir, {
+    type: "annotation",
+    annotationTargetId: image.id,
+    annotationSessionId: "qe-input-sanitize",
+    annotationRole: "note",
+    annotationKind: "arrow-note",
+    label: "a".repeat(2500),
+    labelX: Number.MAX_VALUE,
+    labelY: -Number.MAX_VALUE,
+    targetAnchorX: -3,
+    targetAnchorY: 7,
+    strokeWidth: 0
+  });
+  assertEqual(annotation.label.length, 2000, "addObject should cap annotation label length");
+  assertEqual(annotation.labelX, 1000000, "addObject should cap annotation label x coordinates");
+  assertEqual(annotation.labelY, -1000000, "addObject should cap annotation label y coordinates");
+  assertEqual(annotation.targetAnchorX, 0, "addObject should clamp annotation target x anchors");
+  assertEqual(annotation.targetAnchorY, 1, "addObject should clamp annotation target y anchors");
+  assertEqual(annotation.strokeWidth, 1, "addObject should clamp annotation stroke width");
+  const patchedAnnotation = await updateObject(projectDir, annotation.id, {
+    targetAnchorX: 4,
+    targetAnchorY: -2,
+    label: "patched"
+  });
+  assertEqual(patchedAnnotation.targetAnchorX, 1, "updateObject should clamp annotation target x anchors");
+  assertEqual(patchedAnnotation.targetAnchorY, 0, "updateObject should clamp annotation target y anchors");
+  assertEqual(patchedAnnotation.label, "patched", "updateObject should update annotation labels");
+
   const corruptProjectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-object-state-"));
   const corruptAssetsDir = assetsDirFor(corruptProjectDir);
   const safePersistedAssetPath = path.join(corruptAssetsDir, "safe-persisted.png");
@@ -1247,6 +1275,7 @@ async function testFrontendActionContract() {
 
   const domTools = new Set([
     ...quotedAttributeValues(html, "data-tool"),
+    ...quotedAttributeValues(html, "data-quick-edit-tool"),
     ...[...quotedAttributeValues(html, "data-view-action")]
       .filter((action) => action === "upload")
       .map(() => "upload-image")
@@ -2599,7 +2628,7 @@ async function testCliCollectHelp() {
   if (!stdout.includes("codex-canvas collect [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--from <dir,dir>] [--since-minutes 120] [--limit 20]")) {
     throw new Error("CLI help should document collect flags.");
   }
-  if (!stdout.includes("codex-canvas search [query] [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--type image|text|drawing|job] [--limit 20] [--json]")) {
+  if (!stdout.includes("codex-canvas search [query] [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--type image|text|drawing|annotation|job] [--limit 20] [--json]")) {
     throw new Error("CLI help should document search flags.");
   }
   if (!stdout.includes("codex-canvas prompts [query] [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--limit 20] [--json]")) {
@@ -3262,34 +3291,100 @@ async function testQuickEditAnnotations() {
       fontSize: 18,
       color: "#202124"
     });
+    await addObject(annotatedProjectDir, {
+      type: "text",
+      text: "move this copy outside",
+      x: 150,
+      y: 20,
+      width: 120,
+      height: 28,
+      fontSize: 18,
+      color: "#188038",
+      annotationTargetId: markedSource.id,
+      annotationSessionId: "qe-smoke",
+      annotationRole: "text-note"
+    });
+    const arrowNote = await addObject(annotatedProjectDir, {
+      type: "annotation",
+      annotationKind: "arrow-note",
+      annotationTargetId: markedSource.id,
+      annotationSessionId: "qe-smoke",
+      annotationRole: "note",
+      label: "去掉内框",
+      color: "#d93025",
+      strokeWidth: 4,
+      x: -80,
+      y: 30,
+      width: 130,
+      height: 24,
+      labelX: 0,
+      labelY: 0,
+      targetAnchorX: 0.5,
+      targetAnchorY: 0.5
+    });
+    const otherSource = await addImage(annotatedProjectDir, {
+      path: path.join(tmp, "source.png"),
+      name: "other-source.png",
+      x: 180,
+      y: 30,
+      width: 96,
+      height: 64,
+      allowDuplicate: true
+    });
+    await addObject(annotatedProjectDir, {
+      type: "annotation",
+      annotationKind: "arrow-note",
+      annotationTargetId: otherSource.id,
+      annotationSessionId: "qe-other",
+      annotationRole: "note",
+      label: "must not leak",
+      color: "#9334e6",
+      x: 40,
+      y: 45,
+      width: 30,
+      height: 18,
+      labelX: 0,
+      labelY: 0,
+      targetAnchorX: 0.4,
+      targetAnchorY: 0.4
+    });
 
     const annotatedJob = await createImageJob(annotatedProjectDir, {
       action: "quick-edit",
       objectId: markedSource.id,
-      prompt: "Follow the markup"
+      prompt: "",
+      annotationSessionId: "qe-smoke"
     });
-    await waitForImageJobDone(annotatedJob.id);
+    const completedJob = await waitForImageJobDone(annotatedJob.id);
     const capture = await readCapturedCodexJob(annotatedProjectDir, annotatedJob.id);
-    const imageArg = capture.imageArgs[0] || "";
-    if (!imageArg.endsWith(path.join("inputs", "quick-edit-annotated.png"))) {
-      throw new Error(`Quick Edit with annotations should send the composed annotated PNG, got ${imageArg}.`);
+    assertEqual(capture.imageArgs.length, 2, "Quick Edit with annotations should attach a clean source and an annotation board");
+    assertEqual(path.resolve(capture.imageArgs[0]), path.resolve(markedSource.assetPath), "Quick Edit image 1 should be the clean source image");
+    const annotationBoardPath = capture.imageArgs[1] || "";
+    if (!annotationBoardPath.endsWith(path.join("inputs", "quick-edit-annotated.png"))) {
+      throw new Error(`Quick Edit image 2 should be the composed annotation board, got ${annotationBoardPath}.`);
     }
     const prompt = capture.prompt || "";
     if (
-      !/Follow the markup/.test(prompt)
-      || !/temporary user annotations/.test(prompt)
+      !/image 1 is the clean source/i.test(prompt)
+      || !/image 2 is the annotation board/i.test(prompt)
       || !/Codex-Canvas annotation\/mask details/.test(prompt)
       || !/red \(#d93025\) drawing mask/.test(prompt)
       || !/blue \(#1a73e8\) text label: "remove this"/.test(prompt)
+      || !/green \(#188038\) text label: "move this copy outside"/.test(prompt)
+      || !/red \(#d93025\) arrow note: "去掉内框"/.test(prompt)
       || !/Treat this label as edit instruction text/.test(prompt)
       || !/Do not keep annotation/.test(prompt)
     ) {
       throw new Error("Quick Edit with annotations should append color-aware annotation and removal prompt details.");
     }
+    if (/must not leak/.test(prompt)) {
+      throw new Error("Quick Edit should not collect an annotation explicitly linked to another image.");
+    }
 
     const manifestPath = path.join(jobsDirFor(annotatedProjectDir), annotatedJob.id, "inputs", "quick-edit-annotations.json");
     const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
-    assertEqual(manifest.items.length, 2, "Quick Edit should include only drawing/text annotations that overlap the source image");
+    assertEqual(manifest.version, 2, "Quick Edit should write the structured annotation manifest version");
+    assertEqual(manifest.items.length, 4, "Quick Edit should combine legacy overlapping marks with explicitly linked external notes");
     assertEqual(manifest.sourceSize.width, 48, "Quick Edit annotation manifest should use source image width");
     assertEqual(manifest.sourceSize.height, 32, "Quick Edit annotation manifest should use source image height");
     const drawing = manifest.items.find((item) => item.type === "drawing");
@@ -3300,7 +3395,32 @@ async function testQuickEditAnnotations() {
     if (!text || text.text !== "remove this") {
       throw new Error("Quick Edit annotation manifest should include the overlapping text label.");
     }
-    await fs.access(imageArg);
+    const externalText = manifest.items.find((item) => item.type === "text" && item.text === "move this copy outside");
+    if (!externalText || externalText.x <= manifest.sourceSize.width) {
+      throw new Error("Quick Edit should retain explicitly linked text outside the source image bounds.");
+    }
+    const annotation = manifest.items.find((item) => item.type === "annotation" && item.id === arrowNote.id);
+    if (!annotation || annotation.label !== "去掉内框" || annotation.labelPoint.x >= 0) {
+      throw new Error("Quick Edit should retain an external arrow label and its normalized target point.");
+    }
+    await fs.access(annotationBoardPath);
+    assertEqual(completedJob.annotationSessionId, "qe-smoke", "Quick Edit jobs should expose the originating annotation session");
+    const completedState = await readState(annotatedProjectDir);
+    const preservedArrow = completedState.objects.find((object) => object.id === arrowNote.id);
+    assertEqual(Boolean(preservedArrow), true, "Quick Edit should preserve the original arrow annotation after generation");
+    assertEqual(preservedArrow.x, arrowNote.x, "Quick Edit should not move the original arrow annotation");
+    assertEqual(preservedArrow.y, arrowNote.y, "Quick Edit should not move the original arrow annotation");
+    assertEqual(preservedArrow.label, arrowNote.label, "Quick Edit should not rewrite the original arrow label");
+    const preservedSource = completedState.objects.find((object) => object.id === markedSource.id);
+    assertEqual(Boolean(preservedSource), true, "Quick Edit should preserve the original source image after generation");
+    assertEqual(preservedSource.x, markedSource.x, "Quick Edit should not move the original source image");
+    assertEqual(preservedSource.y, markedSource.y, "Quick Edit should not move the original source image");
+    const resultObject = completedState.objects.find((object) => object.jobId === annotatedJob.id);
+    if (!resultObject || resultObject.x <= markedSource.x || resultObject.annotationSessionId !== "qe-smoke") {
+      throw new Error("Quick Edit should replace the right-side placeholder with a traceable canvas result.");
+    }
+    assertEqual(resultObject.width, markedSource.width, "Quick Edit result should preserve the source display width");
+    assertEqual(resultObject.height, markedSource.height, "Quick Edit result should preserve the source display height");
   } finally {
     if (previousCli === undefined) delete process.env.CODEX_CANVAS_CODEX_CLI;
     else process.env.CODEX_CANVAS_CODEX_CLI = previousCli;

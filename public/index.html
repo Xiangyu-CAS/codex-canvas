@@ -227,9 +227,20 @@
                 </div>
               </div>
               <textarea id="quickEditPrompt" rows="2" autocomplete="off" spellcheck="true" data-i18n-placeholder="quickEditPlaceholder" placeholder="Describe your edit here"></textarea>
+              <div id="quickEditHint" class="quick-edit-hint" data-i18n="quickEditHint">
+                Drag from a note position to the part of the image you want to change, then type the instruction.
+              </div>
               <div id="quickEditMarkupControls" class="quick-edit-markup-controls" aria-label="Markup tools">
                 <div id="quickEditColorPalette" class="quick-edit-color-palette" aria-label="Markup colors"></div>
                 <div class="quick-edit-markup-tools">
+                  <!-- Lucide message-square-plus; kept inline to avoid a runtime icon dependency. -->
+                  <button type="button" title="Arrow note" aria-label="Arrow note" data-tooltip="Arrow note" data-quick-edit-tool="annotation">
+                    <svg class="quick-edit-tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h6"></path>
+                      <path d="M19 3v6"></path>
+                      <path d="M16 6h6"></path>
+                    </svg>
+                  </button>
                   <button type="button" title="Pencil" aria-label="Pencil" data-tooltip="Pencil" data-quick-edit-tool="pencil">
                     <svg class="quick-edit-tool-icon" viewBox="0 0 24 24" aria-hidden="true">
                       <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4"></path>

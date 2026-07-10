@@ -62,8 +62,11 @@ function searchFieldsForObject(object) {
     prompt: object.prompt,
     imagegenPrompt: object.imagegenPrompt,
     text: object.text,
+    label: object.label,
     batchId: object.batchId,
     sourceObjectId: object.sourceObjectId,
+    annotationTargetId: object.annotationTargetId,
+    annotationSessionId: object.annotationSessionId,
     layerGroupId: object.layerGroupId,
     layerGroupName: object.layerGroupName,
     layerGroupKind: object.layerGroupKind,
@@ -84,11 +87,14 @@ function summarizeSearchObject(object, matchFields) {
     prompt: object.prompt || "",
     imagegenPrompt: object.imagegenPrompt || "",
     text: object.text || "",
+    label: object.label || "",
     src: object.src || "",
     assetPath: object.assetPath || null,
     sourcePath: object.sourcePath || null,
     batchId: object.batchId || null,
     sourceObjectId: object.sourceObjectId || null,
+    annotationTargetId: object.annotationTargetId || null,
+    annotationSessionId: object.annotationSessionId || null,
     layerGroupId: object.layerGroupId || null,
     layerGroupName: object.layerGroupName || null,
     layerGroupKind: object.layerGroupKind || null,
@@ -817,8 +823,8 @@ async function removeDuplicateAsset(asset, duplicate) {
 
 export async function addObject(projectDir, input, options = {}) {
   const type = typeof input.type === "string" ? input.type : "";
-  if (!["drawing", "text"].includes(type)) {
-    const error = new Error("add_object requires type to be drawing or text");
+  if (!["drawing", "text", "annotation"].includes(type)) {
+    const error = new Error("add_object requires type to be drawing, text, or annotation");
     error.statusCode = 400;
     throw error;
   }
@@ -937,6 +943,10 @@ function sanitizeDurationMs(value, fallback = 0) {
   return Math.round(clampNumber(value, 0, maxDurationMs, fallback));
 }
 
+function sanitizeUnitNumber(value, fallback = 0.5) {
+  return clampNumber(value, 0, 1, fallback);
+}
+
 function sanitizeString(value, fallback = "", limit = 300, trim = true) {
   if (typeof value !== "string") return fallback;
   const normalized = trim ? value.trim() : value;
@@ -952,7 +962,7 @@ function normalizePersistedObject(object, context = {}) {
     ...object,
     id,
     type,
-    name: sanitizeString(object.name, type === "text" ? "Text" : type === "drawing" ? "Drawing" : "Image"),
+    name: sanitizeString(object.name, type === "text" ? "Text" : type === "drawing" ? "Drawing" : type === "annotation" ? "Annotation" : "Image"),
     prompt: sanitizeString(object.prompt, "", 4000),
     imagegenPrompt: sanitizeString(object.imagegenPrompt, "", 20000),
     x: sanitizeCoordinate(object.x),
@@ -971,6 +981,17 @@ function normalizePersistedObject(object, context = {}) {
     normalized.points = sanitizePoints(object.points);
     normalized.stroke = sanitizeString(object.stroke, "#202124", 80);
     normalized.strokeWidth = sanitizeStrokeWidth(object.strokeWidth);
+  }
+  sanitizeAnnotationMetadata(normalized, object);
+  if (type === "annotation") {
+    normalized.annotationKind = sanitizeString(object.annotationKind, "arrow-note", 80);
+    normalized.label = sanitizeString(object.label, "", 2000, false);
+    normalized.color = sanitizeString(object.color, "#d93025", 80);
+    normalized.strokeWidth = sanitizeStrokeWidth(object.strokeWidth);
+    normalized.labelX = sanitizeCoordinate(object.labelX);
+    normalized.labelY = sanitizeCoordinate(object.labelY);
+    normalized.targetAnchorX = sanitizeUnitNumber(object.targetAnchorX);
+    normalized.targetAnchorY = sanitizeUnitNumber(object.targetAnchorY);
   }
   if (object.crop && typeof object.crop === "object") {
     const crop = sanitizeCrop(object.crop);
@@ -1325,6 +1346,12 @@ function sanitizeObjectPatch(patch = {}) {
   if (Number.isFinite(patch.fontSize)) next.fontSize = sanitizeFontSize(patch.fontSize);
   if (Number.isFinite(patch.strokeWidth)) next.strokeWidth = sanitizeStrokeWidth(patch.strokeWidth);
   if (Number.isFinite(patch.durationMs)) next.durationMs = sanitizeDurationMs(patch.durationMs);
+  for (const key of ["labelX", "labelY"]) {
+    if (Number.isFinite(patch[key])) next[key] = sanitizeCoordinate(patch[key]);
+  }
+  for (const key of ["targetAnchorX", "targetAnchorY"]) {
+    if (Number.isFinite(patch[key])) next[key] = sanitizeUnitNumber(patch[key]);
+  }
   for (const key of ["layerGroupIndex", "layerGroupOriginalX", "layerGroupOriginalY", "layerGroupRelativeX", "layerGroupRelativeY"]) {
     if (Number.isFinite(patch[key])) next[key] = sanitizeCoordinate(patch[key]);
   }
@@ -1337,9 +1364,9 @@ function sanitizeObjectPatch(patch = {}) {
   ]) {
     if (Number.isFinite(patch[key])) next[key] = sanitizeDimension(patch[key]);
   }
-  for (const key of ["name", "text", "color", "stroke", "status", "error", "layoutMode", "sourceObjectId", "layerGroupId", "layerGroupName", "layerGroupSourceObjectId", "layerGroupKind", "layerGroupBackgroundStatus", "prompt", "imagegenPrompt"]) {
+  for (const key of ["name", "text", "label", "color", "stroke", "status", "error", "layoutMode", "sourceObjectId", "jobId", "annotationTargetId", "annotationSessionId", "annotationRole", "annotationKind", "layerGroupId", "layerGroupName", "layerGroupSourceObjectId", "layerGroupKind", "layerGroupBackgroundStatus", "prompt", "imagegenPrompt"]) {
     if (typeof patch[key] === "string") {
-      const limit = key === "text" ? 2000 : key === "prompt" ? 4000 : key === "imagegenPrompt" ? 20000 : 300;
+      const limit = key === "text" || key === "label" ? 2000 : key === "prompt" ? 4000 : key === "imagegenPrompt" ? 20000 : 300;
       next[key] = patch[key].slice(0, limit);
     }
   }
@@ -1361,6 +1388,22 @@ function sanitizePoints(points) {
       .map((point) => ({ x: sanitizeCoordinate(point.x), y: sanitizeCoordinate(point.y) }))
       .slice(0, 4000)
     : [];
+}
+
+function sanitizeAnnotationMetadata(target, source = {}) {
+  for (const key of ["annotationTargetId", "annotationSessionId", "annotationRole"]) {
+    if (typeof source[key] === "string" && source[key].trim()) {
+      target[key] = sanitizeString(source[key], "", 300);
+    } else {
+      delete target[key];
+    }
+  }
+  if (typeof source.jobId === "string" && source.jobId.trim()) {
+    target.jobId = sanitizeString(source.jobId, "", 300);
+  } else {
+    delete target.jobId;
+  }
+  return target;
 }
 
 function sanitizeCrop(crop) {
@@ -1544,13 +1587,14 @@ function normalizeObject(input) {
   const base = {
     id: `${type}_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
     type,
-    name: sanitizeString(input.name, type === "text" ? "Text" : "Drawing"),
+    name: sanitizeString(input.name, type === "text" ? "Text" : type === "annotation" ? "Annotation" : "Drawing"),
     x: Number.isFinite(input.x) ? sanitizeCoordinate(input.x) : 120,
     y: Number.isFinite(input.y) ? sanitizeCoordinate(input.y) : 120,
     width: Number.isFinite(input.width) ? sanitizeDimension(input.width, 220) : 220,
     height: Number.isFinite(input.height) ? sanitizeDimension(input.height, 80) : 80,
     createdAt: new Date().toISOString()
   };
+  sanitizeAnnotationMetadata(base, input);
 
   if (type === "text") {
     return {
@@ -1558,6 +1602,20 @@ function normalizeObject(input) {
       text: sanitizeString(input.text, "Text", 2000, false),
       fontSize: Number.isFinite(input.fontSize) ? sanitizeFontSize(input.fontSize) : 28,
       color: sanitizeString(input.color, "#202124", 80)
+    };
+  }
+
+  if (type === "annotation") {
+    return {
+      ...base,
+      annotationKind: sanitizeString(input.annotationKind, "arrow-note", 80),
+      label: sanitizeString(input.label, "", 2000, false),
+      color: sanitizeString(input.color, "#d93025", 80),
+      strokeWidth: Number.isFinite(input.strokeWidth) ? sanitizeStrokeWidth(input.strokeWidth) : 4,
+      labelX: Number.isFinite(input.labelX) ? sanitizeCoordinate(input.labelX) : 0,
+      labelY: Number.isFinite(input.labelY) ? sanitizeCoordinate(input.labelY) : 0,
+      targetAnchorX: sanitizeUnitNumber(input.targetAnchorX),
+      targetAnchorY: sanitizeUnitNumber(input.targetAnchorY)
     };
   }
 

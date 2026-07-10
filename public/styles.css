@@ -815,7 +815,9 @@ button {
   touch-action: none;
 }
 
-.board.tool-pencil {
+.board.tool-pencil,
+.board.tool-annotation,
+.board.annotating {
   cursor: crosshair;
 }
 
@@ -898,6 +900,20 @@ button {
   box-shadow:
     0 0 0 1px rgba(32, 35, 41, 0.92),
     0 16px 44px rgba(28, 29, 33, 0.12);
+}
+
+.canvas-object.annotation-object {
+  overflow: visible;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  pointer-events: none;
+}
+
+.canvas-object.annotation-object.selected {
+  border-color: color-mix(in srgb, var(--annotation-color, #d93025) 48%, transparent);
+  border-style: dashed;
+  box-shadow: none;
 }
 
 .expand-preview-frame {
@@ -1237,6 +1253,67 @@ button {
 .drawing-preview {
   display: block;
   overflow: visible;
+  pointer-events: none;
+}
+
+.annotation-content,
+.annotation-arrow,
+.annotation-draft,
+.annotation-draft svg {
+  display: block;
+  overflow: visible;
+}
+
+.annotation-content {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.annotation-arrow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.annotation-label {
+  position: absolute;
+  z-index: 2;
+  width: max-content;
+  min-width: 84px;
+  max-width: 260px;
+  min-height: 28px;
+  padding: 5px 8px;
+  overflow-wrap: anywhere;
+  border: 1.5px solid var(--annotation-color, #d93025);
+  border-radius: 8px;
+  outline: none;
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--annotation-color, #d93025);
+  box-shadow: 0 4px 14px rgba(24, 26, 30, 0.12);
+  font-size: 18px;
+  font-weight: 650;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  user-select: text;
+  cursor: text;
+  pointer-events: auto;
+  transform: translate(-50%, calc(-100% - 8px));
+}
+
+.annotation-label:empty::before {
+  content: attr(data-placeholder);
+  color: color-mix(in srgb, var(--annotation-color, #d93025) 64%, #fff);
+  pointer-events: none;
+}
+
+.annotation-label[contenteditable="false"] {
+  cursor: default;
+}
+
+.annotation-draft {
+  position: absolute;
+  z-index: 8;
   pointer-events: none;
 }
 
@@ -1821,6 +1898,18 @@ button {
   color: #b0b3b8;
 }
 
+.quick-edit-hint {
+  grid-column: 1 / -1;
+  padding: 0 2px;
+  color: #737880;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.quick-edit-hint[hidden] {
+  display: none;
+}
+
 .quick-edit-markup-controls {
   grid-column: 1 / -1;
   display: flex;
@@ -1953,6 +2042,11 @@ button {
   cursor: default;
   background: #f1f2f3;
   color: #c3c6ca;
+}
+
+.quick-edit-composer #quickEditRun:not(:disabled) {
+  background: #24282f;
+  color: #fff;
 }
 
 .quick-edit-composer:focus-within button:not(.secondary-action):not(:disabled) {

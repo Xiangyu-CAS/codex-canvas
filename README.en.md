@@ -47,7 +47,7 @@ Type `@Codex-Canvas open the codex canvas` in your current Codex conversation, a
 
 ### 2. Quick Edit: mark what you want changed
 
-Quick Edit lets you annotate the selected image directly. Brush marks, colors, and text instructions are passed to the model as editing references, making it useful for local replacements, adding objects, and preserving the main layout while refining details.
+Quick Edit now defaults to an arrow-note tool: drag from a note position outside the image to the region you want changed, then type the instruction inline. Brush masks, colors, standalone text, and an optional overall prompt remain available. The source and annotations stay in place while the running placeholder and final revision remain on the canvas to the right.
 
 <p align="center">
   <img src="assets/readme/quick-edit-comparison.webp" alt="Quick Edit comparison" width="700">
@@ -90,8 +90,8 @@ Expand provides a visual expansion frame and common aspect-ratio presets such as
 - Opens a local infinite canvas in Codex's in-app browser.
 - Automatically collects Codex/ImageGen outputs into the bound thread canvas without leaking outputs from other projects or conversations.
 - Supports uploading, importing, arranging, selecting, dragging, deleting, and downloading canvas images.
-- Supports brush annotations and temporary text labels on selected images.
-- Supports Quick Edit, passing annotation colors and text labels to the model as editing references.
+- Supports explicitly linked arrow notes, brush annotations, and temporary text labels, including notes outside the image.
+- Supports Quick Edit without an overall prompt, sending a clean source, annotation board, and structured annotation details to the model.
 - Supports background removal.
 - Supports Expand/outpaint with an adjustable expansion preview frame.
 - Supports Edit Text; local OCR is used first when available, with Codex vision fallback when needed.

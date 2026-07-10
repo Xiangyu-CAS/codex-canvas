@@ -219,6 +219,7 @@ async function runViewportSmoke(browser, viewport) {
     }
 
     await assertSingleImageActionToolbar(page);
+    await assertQuickEditAnnotationWorkflow(page, image.id, viewport);
     await assertExpandComposer(page, viewport);
     const croppedImageId = await assertCropWorkflow(page, image.id);
     await assertDeleteUndoShortcut(page, croppedImageId);
@@ -1033,6 +1034,69 @@ async function assertSingleImageActionToolbar(page) {
   assertNoPairwiseOverlap(buttonRects, "toolbar action buttons");
 }
 
+async function assertQuickEditAnnotationWorkflow(page, imageId, viewport) {
+  await page.locator('[data-action="quick-edit"]').click();
+  await waitForVisible(page, ".quick-edit-composer.quick-edit-mode", "Quick Edit composer should be visible");
+  const initial = await page.evaluate(() => ({
+    annotationToolActive: document.querySelector('[data-quick-edit-tool="annotation"]')?.classList.contains("active") || false,
+    annotationPressed: document.querySelector('[data-quick-edit-tool="annotation"]')?.getAttribute("aria-pressed"),
+    runDisabled: document.querySelector("#quickEditRun")?.disabled ?? false,
+    hint: document.querySelector("#quickEditHint")?.textContent?.trim() || ""
+  }));
+  assert(initial.annotationToolActive, "Quick Edit should default to the arrow-note tool");
+  assertEqual(initial.annotationPressed, "true", "Quick Edit arrow-note tool should expose pressed state");
+  assert(initial.runDisabled, "Quick Edit should require a prompt or annotation before running");
+  assert(Boolean(initial.hint), "Quick Edit should explain the arrow-note gesture");
+
+  const imageRect = await page.locator(`.canvas-object[data-id="${imageId}"]`).boundingBox();
+  const boardRect = await page.locator("#board").boundingBox();
+  assertRectVisible(imageRect, "Quick Edit source image");
+  assertRectVisible(boardRect, "Quick Edit board");
+  const canStartLeft = imageRect.x - boardRect.x > 58;
+  const start = {
+    x: canStartLeft ? imageRect.x - 42 : imageRect.x + imageRect.width + 42,
+    y: imageRect.y + imageRect.height * 0.45
+  };
+  const end = {
+    x: imageRect.x + imageRect.width * 0.62,
+    y: imageRect.y + imageRect.height * 0.48
+  };
+  await dragMouse(page, start, { x: end.x - start.x, y: end.y - start.y });
+  const label = page.locator('.annotation-object .annotation-label[contenteditable="true"]').last();
+  await label.waitFor({ state: "visible" });
+  await label.fill("移除这个细节");
+  await label.press("Enter");
+  await page.waitForFunction(() => {
+    const run = document.querySelector("#quickEditRun");
+    const label = document.querySelector(".annotation-object .annotation-label");
+    return Boolean(run && !run.disabled && label?.textContent?.includes("移除这个细节"));
+  });
+
+  const state = await page.evaluate(async (imageId) => {
+    const response = await fetch("/api/state");
+    const payload = await response.json();
+    const annotation = payload.objects.find((object) => object.type === "annotation" && object.annotationTargetId === imageId);
+    return {
+      sourceExists: payload.objects.some((object) => object.id === imageId),
+      annotation,
+      composerRect: document.querySelector("#quickEditComposer")?.getBoundingClientRect().toJSON?.() || null
+    };
+  }, imageId);
+  assert(state.sourceExists, "creating a Quick Edit annotation should preserve the source image");
+  assert(state.annotation, "Quick Edit arrow note should persist as a structured annotation object");
+  assertEqual(state.annotation.label, "移除这个细节", "Quick Edit should persist a Chinese inline arrow label");
+  assertEqual(state.annotation.annotationTargetId, imageId, "Quick Edit annotation should explicitly target the selected image");
+  assert(state.annotation.targetAnchorX >= 0 && state.annotation.targetAnchorX <= 1, "Quick Edit annotation x anchor should be normalized");
+  assert(state.annotation.targetAnchorY >= 0 && state.annotation.targetAnchorY <= 1, "Quick Edit annotation y anchor should be normalized");
+  if (state.composerRect) assertRectInsideViewport(state.composerRect, viewport, "Quick Edit composer");
+
+  await page.locator("#quickEditCancel").click();
+  await waitForHidden(page, "#quickEditComposer", "Quick Edit composer should close after cancel");
+  await activateCanvasTool(page, "select");
+  await page.locator(`.canvas-object[data-id="${imageId}"]`).click();
+  await waitForVisible(page, "#selectionToolbar", "source toolbar should return after Quick Edit closes");
+}
+
 async function assertExpandComposer(page, viewport) {
   await page.locator('[data-action="expand"]').click();
   await waitForVisible(page, ".quick-edit-composer.expand-mode", "Expand composer should be visible");
@@ -1296,6 +1360,12 @@ function assertDeepEqual(actual, expected, message) {
   const actualJson = JSON.stringify(actual);
   const expectedJson = JSON.stringify(expected);
   assert(actualJson === expectedJson, `${message}. Expected ${expectedJson}, got ${actualJson}.`);
+}
+
+function assertEqual(actual, expected, message) {
+  if (actual !== expected) {
+    throw new Error(`${message}. Expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}.`);
+  }
 }
 
 function assert(condition, message) {

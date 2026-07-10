@@ -25,8 +25,9 @@ const chromaKeyColor = "#ff00ff";
 const transparentLayerChromaActions = new Set(["quick-edit", "edit-text"]);
 const quickEditAnnotationPromptSuffix = [
   "",
-  "The attached image may include temporary user annotations drawn or typed on top of the source image.",
-  "Use those annotations as edit guidance and region references together with the user's request.",
+  "Attached image 1 is the clean source image and is the authoritative visual base for the edit.",
+  "Attached image 2 is an annotation board containing the source image plus temporary arrows, masks, and edit notes.",
+  "Use image 2 only to understand edit intent and region references; use image 1 to preserve unmarked visual details.",
   "Treat annotation text as explicit edit instructions for the nearby marked region, not as text to preserve in the final image.",
   "Do not keep annotation strokes, boxes, or label text in the final image. Remove the temporary marks and restore the edited areas naturally."
 ].join("\n");
@@ -63,6 +64,9 @@ export async function createImageJob(projectDir, input, options = {}) {
   const quickEditAnnotations = action === "quick-edit"
     ? await collectQuickEditAnnotations(projectDir, object, storeOptions)
     : null;
+  const annotationSessionId = action === "quick-edit" && typeof input.annotationSessionId === "string"
+    ? input.annotationSessionId.trim().slice(0, 300) || null
+    : null;
   const expandOptions = action === "expand"
     ? normalizeExpandOptions(input.expand || input.options || {}, object)
     : null;
@@ -89,6 +93,7 @@ export async function createImageJob(projectDir, input, options = {}) {
     expandInputPath: null,
     transparentLayerMode,
     quickEditAnnotations,
+    annotationSessionId,
     annotatedImagePath: null,
     annotationManifestPath: null,
     prompt: typeof input.prompt === "string" ? input.prompt.trim().slice(0, 4000) : "",
@@ -684,7 +689,7 @@ async function prepareCodexInputForJob(job) {
   job.annotatedImagePath = annotatedImagePath;
   await appendJobLog(job, `Quick Edit annotations composed: ${annotatedImagePath}`);
   return {
-    imagePath: annotatedImagePath,
+    imagePath: [job.sourceImagePath || job.imagePath, annotatedImagePath],
     prompt: appendQuickEditAnnotationSuffix(job.prompt, job.quickEditAnnotations)
   };
 }
@@ -835,6 +840,16 @@ function quickEditAnnotationItemSummary(item) {
     return `${color} text label: ${JSON.stringify(text)}${boundsText}. Treat this label as edit instruction text.`;
   }
 
+  if (item?.type === "annotation") {
+    const color = colorDescription(item.color);
+    const label = truncatePromptLine(item.label || "Change the pointed region", 240);
+    const target = item.targetPoint;
+    const targetText = Number.isFinite(target?.x) && Number.isFinite(target?.y)
+      ? ` pointing to source pixel (${Math.round(target.x)}, ${Math.round(target.y)})`
+      : "";
+    return `${color} arrow note: ${JSON.stringify(label)}${targetText}. Apply this instruction to the arrow target.`;
+  }
+
   return null;
 }
 
@@ -906,11 +921,24 @@ async function collectQuickEditAnnotations(projectDir, imageObject, options = {}
   for (const object of state.objects) {
     if (!object || object.id === imageObject.id) continue;
     const type = object.type || "image";
-    if (type !== "drawing" && type !== "text") continue;
-    if (!rectsIntersect(imageRect, objectRect(object))) continue;
+    if (!["annotation", "drawing", "text"].includes(type)) continue;
+    const hasExplicitTarget = typeof object.annotationTargetId === "string" && object.annotationTargetId.trim();
+    const explicitlyTargetsImage = hasExplicitTarget && object.annotationTargetId === imageObject.id;
+    if (hasExplicitTarget && !explicitlyTargetsImage) continue;
+
+    if (type === "annotation") {
+      if (!explicitlyTargetsImage) continue;
+      const annotation = normalizeArrowAnnotation(object, imageObject, sourceSize);
+      if (annotation) items.push(annotation);
+      continue;
+    }
+
+    if (!explicitlyTargetsImage && !rectsIntersect(imageRect, objectRect(object))) continue;
 
     if (type === "drawing") {
-      const drawing = normalizeDrawingAnnotation(object, imageObject, sourceSize);
+      const drawing = normalizeDrawingAnnotation(object, imageObject, sourceSize, {
+        allowOutside: explicitlyTargetsImage
+      });
       if (drawing) items.push(drawing);
       continue;
     }
@@ -921,8 +949,10 @@ async function collectQuickEditAnnotations(projectDir, imageObject, options = {}
 
   return items.length > 0
     ? {
+      version: 2,
       sourceObjectId: imageObject.id,
       sourceSize,
+      sourceCanvasRect: imageRect,
       items
     }
     : null;
@@ -935,7 +965,7 @@ function sourceSizeForAnnotations(object) {
   };
 }
 
-function normalizeDrawingAnnotation(object, imageObject, sourceSize) {
+function normalizeDrawingAnnotation(object, imageObject, sourceSize, { allowOutside = false } = {}) {
   const points = Array.isArray(object.points)
     ? object.points
       .filter((point) => Number.isFinite(point?.x) && Number.isFinite(point?.y))
@@ -945,7 +975,7 @@ function normalizeDrawingAnnotation(object, imageObject, sourceSize) {
       }, imageObject, sourceSize))
     : [];
   const visiblePoints = points.filter((point) => point.x >= 0 && point.x <= sourceSize.width && point.y >= 0 && point.y <= sourceSize.height);
-  if (points.length < 2 || visiblePoints.length === 0) return null;
+  if (points.length < 2 || (!allowOutside && visiblePoints.length === 0)) return null;
 
   const scale = annotationScale(imageObject, sourceSize);
   return {
@@ -953,6 +983,8 @@ function normalizeDrawingAnnotation(object, imageObject, sourceSize) {
     type: "drawing",
     stroke: object.stroke || "#202124",
     strokeWidth: Math.max(1, Math.round((Number.isFinite(object.strokeWidth) ? object.strokeWidth : 4) * scale)),
+    annotationRole: object.annotationRole || "mask",
+    annotationSessionId: object.annotationSessionId || null,
     points
   };
 }
@@ -975,8 +1007,40 @@ function normalizeTextAnnotation(object, imageObject, sourceSize) {
     width,
     height,
     fontSize: Math.max(6, Math.round((Number.isFinite(object.fontSize) ? object.fontSize : 28) * scale)),
-    color: object.color || "#202124"
+    color: object.color || "#202124",
+    annotationRole: object.annotationRole || "text-note",
+    annotationSessionId: object.annotationSessionId || null
   };
+}
+
+function normalizeArrowAnnotation(object, imageObject, sourceSize) {
+  const labelPoint = canvasPointToSourcePoint({
+    x: object.x + (Number.isFinite(object.labelX) ? object.labelX : 0),
+    y: object.y + (Number.isFinite(object.labelY) ? object.labelY : 0)
+  }, imageObject, sourceSize);
+  const targetAnchorX = clampUnitNumber(object.targetAnchorX);
+  const targetAnchorY = clampUnitNumber(object.targetAnchorY);
+  const scale = annotationScale(imageObject, sourceSize);
+  return {
+    id: object.id,
+    type: "annotation",
+    annotationKind: object.annotationKind || "arrow-note",
+    annotationRole: object.annotationRole || "note",
+    annotationSessionId: object.annotationSessionId || null,
+    label: String(object.label || "").trim(),
+    color: object.color || "#d93025",
+    strokeWidth: Math.max(1, Math.round((Number.isFinite(object.strokeWidth) ? object.strokeWidth : 4) * scale)),
+    fontSize: Math.max(12, Math.round(annotationLabelFontSizeForScale(scale))),
+    labelPoint,
+    targetPoint: {
+      x: Math.round(targetAnchorX * sourceSize.width),
+      y: Math.round(targetAnchorY * sourceSize.height)
+    }
+  };
+}
+
+function annotationLabelFontSizeForScale(scale) {
+  return 18 * Math.max(0.75, Math.min(2.5, scale));
 }
 
 function canvasPointToSourcePoint(point, imageObject, sourceSize) {
@@ -1023,6 +1087,7 @@ async function collectAndPlaceResult(projectDir, job, startedAtMs, { final, dete
     prompt: jobPrompt(job),
     imagegenPrompt: job.imagegenPrompt || "",
     sourceObjectId: job.sourceObjectId,
+    annotationSessionId: job.annotationSessionId || null,
     canvasId: job.canvasId
   });
 
@@ -1490,6 +1555,7 @@ function publicJob(job) {
     status: job.status,
     objectId: job.objectId,
     sourceObjectId: job.sourceObjectId,
+    annotationSessionId: job.annotationSessionId || null,
     createdAt: job.createdAt,
     startedAt: job.startedAt,
     completedAt: job.completedAt,
@@ -1498,6 +1564,8 @@ function publicJob(job) {
     detectedOutputPath: job.detectedOutputPath,
     expandOptions: job.expandOptions || null,
     expandInputPath: job.expandInputPath || null,
+    annotatedImagePath: job.annotatedImagePath || null,
+    annotationManifestPath: job.annotationManifestPath || null,
     textInventoryPath: job.textInventoryPath,
     codexSessionId: job.codexSessionId,
     imported: job.imported,
@@ -1625,7 +1693,9 @@ async function placeImportedAtPlaceholder(projectDir, job) {
     width: job.placeholder.width,
     height: job.placeholder.height,
     layoutMode: "canvas-row",
-    sourceObjectId: job.sourceObjectId
+    sourceObjectId: job.sourceObjectId,
+    jobId: job.id,
+    ...(job.annotationSessionId ? { annotationSessionId: job.annotationSessionId } : {})
   }, storeOptions);
   job.imported = [positioned, ...job.imported.slice(1)];
   if (job.placeholderId) {

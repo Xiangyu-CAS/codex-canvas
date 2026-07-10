@@ -110,7 +110,7 @@ async function handle(method, params) {
             properties: {
               projectDir: { type: "string", description: "Absolute path to the active Codex project." },
               query: { type: "string", description: "Search text. Empty query returns the first matching objects." },
-              type: { type: "string", enum: ["image", "text", "drawing", "job"], description: "Optional canvas object type filter." },
+              type: { type: "string", enum: ["image", "text", "drawing", "annotation", "job"], description: "Optional canvas object type filter." },
               limit: { type: "number", description: "Maximum number of results. Defaults to 20, capped at 100." },
               threadId: { type: "string", description: "Codex thread id whose canvas should be searched. Pass explicitly for thread-scoped canvases; omitted means the default project canvas." },
               canvasId: { type: "string", description: "Explicit Codex-Canvas canvas id. Overrides the canvas id derived from threadId." }

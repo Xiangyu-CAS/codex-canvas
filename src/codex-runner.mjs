@@ -270,12 +270,14 @@ function promptForAction({ action, outputDir, userPrompt, transparentLayerMode =
 
   if (action === "quick-edit") {
     return [
-      "Use the canvas-quick-edit skill and the imagegen skill to edit the attached image.",
+      "Use the canvas-quick-edit skill and the imagegen skill to edit the attached source image.",
       "Optimize for latency: do not inspect unrelated repository files, do not produce variants, and do not run broad filesystem searches before generation.",
       "",
       "Task: perform this user-described image edit:",
       userPrompt || "Improve the image according to the user's selected Quick Edit request.",
       "",
+      "When two images are attached, image 1 is the clean source and image 2 is the annotation board. Use image 1 as the visual base and image 2 only to locate and interpret the requested changes.",
+      "Call imagegen exactly once to create one revised clean image.",
       "Preserve the source image's important subject identity, composition, aspect ratio, visible text, and design intent unless the edit explicitly says to change them.",
       maybeTransparentLayerChromaInstruction(transparentLayerMode),
       "Treat this as an image edit, not a new unrelated generation.",
