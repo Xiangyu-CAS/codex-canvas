@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/Xiangyu-CAS/codex-canvas/compare/v0.3.0...v0.3.1) (2026-07-10)
+
+
+### Bug Fixes
+
+* surface available updates in settings ([1208e36](https://github.com/Xiangyu-CAS/codex-canvas/commit/1208e36f053002b3a385d4d744d3374812452727))
+
 ## [0.3.0](https://github.com/Xiangyu-CAS/codex-canvas/compare/v0.2.1...v0.3.0) (2026-07-10)
 
 
