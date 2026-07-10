@@ -8,12 +8,15 @@ import { projectRegistryPath, resolveProjectDir } from "./paths.mjs";
 import { checkImageProcessingDepsAvailable, checkOptionalPythonDepsAvailable, checkRapidOcrAvailable, installImageProcessingDeps, installOptionalPythonDeps, installRapidOcr } from "./ocr-setup.mjs";
 import { canvasIdForThread, readRuntime, writeRuntime, normalizeThreadId } from "./runtime.mjs";
 import { appUpdateStatus, updateApp } from "./updater.mjs";
+import { APP_VERSION } from "./version.mjs";
 
 const defaultLimit = 20;
 const maxLimit = 100;
 const defaultSinceMinutes = 120;
 const defaultPort = 43217;
 const maxPort = 65535;
+const canvasServerName = "codex-canvas";
+const canvasServerProtocolVersion = 1;
 
 export async function main(args, context = {}) {
   const command = args[0] || "help";
@@ -44,18 +47,24 @@ export async function main(args, context = {}) {
     const host = optionValue(options, ["host"], "--host") || process.env.CODEX_CANVAS_HOST || "127.0.0.1";
     const defaultUrl = `http://${host}:${port}/`;
     const autoCollect = options["no-auto-collect"] !== true;
-    const autoUpdate = options["no-update"] !== true && process.env.CODEX_CANVAS_OPEN_AUTO_UPDATE !== "0";
     const chatThreadId = normalizeThreadId(optionValue(options, ["thread-id", "threadId"], "--thread-id") || environmentThreadId());
-    if (autoUpdate) await autoUpdateBeforeOpen();
     await ensureProjectStore(projectDir, { canvasId: canvasIdForThread(chatThreadId) });
     const runtime = await readRuntime(projectDir);
-    const existingUrl = await openExistingCanvas(runtime?.url, projectDir, { autoCollect, chatThreadId, allowLegacy: true });
+    const existingUrl = await openExistingCanvas(runtime?.url, projectDir, {
+      autoCollect,
+      chatThreadId,
+      allowLegacy: true
+    });
     if (existingUrl) {
       console.log(existingUrl);
       return;
     }
 
-    const defaultExistingUrl = await openExistingCanvas(defaultUrl, projectDir, { autoCollect, chatThreadId, allowLegacy: false });
+    const defaultExistingUrl = await openExistingCanvas(defaultUrl, projectDir, {
+      autoCollect,
+      chatThreadId,
+      allowLegacy: false
+    });
     if (defaultExistingUrl) {
       console.log(defaultExistingUrl);
       return;
@@ -202,26 +211,39 @@ export async function main(args, context = {}) {
 
   if (command === "update") {
     const checkOnly = flagEnabled(options.check);
+    const runningServer = checkOnly ? null : await findRunningCanvasServer(projectDir);
+    if (runningServer && !runningServer.compatible) {
+      if (runningServer.reason === "unresponsive") {
+        throw new Error("A recorded Codex-Canvas server may still be running but is not responding. Close it or retry before installing an update.");
+      }
+      throw new Error("A legacy or different Codex-Canvas server is still running. Close that canvas before installing an update.");
+    }
     const result = checkOnly
       ? await appUpdateStatus({ checkRemote: true })
-      : await updateApp();
+      : runningServer
+        ? await updateThroughRunningServer(runningServer)
+        : await updateApp();
     if (flagEnabled(options.json)) {
       console.log(JSON.stringify(result, null, 2));
     } else if (checkOnly) {
       console.log(`Codex-Canvas ${result.version}`);
       if (result.canUpdate) {
-        console.log(`Update strategy: ${result.strategy} from ${result.git.remote}/${result.git.remoteBranch}.`);
+        console.log(`Update strategy: published release tags from ${result.git.remote}/${result.git.remoteBranch}.`);
       } else {
         console.log(`Automatic update unavailable: ${result.blockedMessage || "manual update required"}`);
       }
       console.log(result.updateAvailable
-        ? `Update available: ${result.git.behind} commit(s) behind.`
-        : "No update available.");
+        ? `Update available: ${result.installedVersion} -> ${result.latestVersion} (${result.releaseTag}).`
+        : result.latestVersion
+          ? `No update available. Latest release: ${result.latestVersion}.`
+          : "No published release is available yet.");
       if (result.manualCommand) console.log(`Manual command: ${result.manualCommand}`);
     } else {
       console.log(result.output || "Codex-Canvas update completed.");
-      console.log(`Current version: ${result.version}`);
+      console.log(`Installed version: ${result.installedVersion || result.version}`);
+      if (result.releaseTag) console.log(`Release: ${result.releaseTag}`);
       console.log(`Current git head: ${result.git.head || "(unknown)"}`);
+      if (result.restartRequired) console.log("Close the canvas and start a new Codex task to load the updated MCP server and skills.");
     }
     return;
   }
@@ -281,20 +303,6 @@ export async function main(args, context = {}) {
   }
 
   throw usageError(`Unknown command: ${command}. Run "codex-canvas help" for usage.`);
-}
-
-async function autoUpdateBeforeOpen() {
-  try {
-    const result = await updateApp();
-    if (result.updated) {
-      console.error(`Codex-Canvas updated from ${result.previousHead || "unknown"} to ${result.git.head || "unknown"} before opening.`);
-    }
-    return result;
-  } catch (error) {
-    const message = error?.details?.blockedMessage || error?.message || String(error);
-    console.error(`Codex-Canvas auto-update skipped: ${message}`);
-    return { updated: false, error: message };
-  }
 }
 
 function parseOptions(args) {
@@ -388,7 +396,10 @@ async function waitForRuntime(projectDir, timeoutMs) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const runtime = await readRuntime(projectDir);
-    if (runtime?.url && await isAgentCanvasAlive(runtime.url)) return runtime.url;
+    if (runtime?.url) {
+      const registry = await readProjectRegistry(runtime.url);
+      if (serverInfoIsCompatible(registry?.server)) return runtime.url;
+    }
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
   throw new Error("Codex-Canvas server did not start in time");
@@ -414,31 +425,150 @@ async function resolveCanvasOptions(projectDir, options = {}, runtime = null) {
   };
 }
 
-async function isAgentCanvasAlive(url) {
-  return await supportsProjectRegistry(url)
-    || await supportsProjectState(url)
-    || await servesAgentCanvasApp(url);
-}
-
 async function openExistingCanvas(url, projectDir, { autoCollect, chatThreadId, allowLegacy }) {
   if (!url) return null;
 
-  if (await supportsProjectRegistry(url)) {
+  const registryInfo = await readProjectRegistry(url);
+  if (registryInfo) {
+    if (!serverInfoIsCompatible(registryInfo.server)) {
+      const stopped = await stopStaleCanvasServer(url, registryInfo.server);
+      if (!stopped) {
+        throw new Error("An older Codex-Canvas server is still using this port. Close its canvas or task, then open Codex-Canvas again.");
+      }
+      return null;
+    }
+    if (registryInfo.server.maintenance) {
+      throw new Error(`Codex-Canvas is preparing to ${registryInfo.server.maintenance}; wait a moment and open it again.`);
+    }
     const registered = await registerRemoteProject(url, projectDir, { autoCollect, chatThreadId });
     await writeRuntime(projectDir, registered.runtime);
     return registered.url;
   }
 
   if (allowLegacy && (await supportsProjectState(url) || await servesAgentCanvasApp(url))) {
-    return url;
+    throw new Error("A legacy Codex-Canvas server is still running. Close its canvas or task before opening this version.");
   }
 
   return null;
 }
 
-async function supportsProjectRegistry(url) {
+async function readProjectRegistry(url) {
   const response = await fetchWithTimeout(apiUrl(url, "/api/projects"));
-  return response?.ok === true;
+  if (!response?.ok) return null;
+  return response.json().catch(() => null);
+}
+
+async function stopStaleCanvasServer(url, expectedServer = null) {
+  const current = await readProjectRegistry(url);
+  const server = current?.server;
+  if (!serverInfoIsTrusted(server)) return false;
+  if (expectedServer?.instanceId && expectedServer.instanceId !== server.instanceId) return false;
+  const response = await fetchWithTimeout(apiUrl(url, "/api/shutdown"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ expectedInstanceId: server.instanceId })
+  }, 1500);
+  if (!response?.ok) {
+    const payload = await response?.json().catch(() => ({}));
+    if (payload?.error) throw new Error(payload.error);
+    return false;
+  }
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const next = await readProjectRegistry(url);
+    if (!next || next.server?.instanceId !== server.instanceId) return true;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return false;
+}
+
+async function findRunningCanvasServer(projectDir) {
+  const runtime = await readRuntime(projectDir);
+  const candidates = [
+    runtime?.url ? { url: runtime.url, explicit: true } : null,
+    { url: `http://127.0.0.1:${defaultPort}/`, explicit: false }
+  ].filter(Boolean);
+  const seenOrigins = new Set();
+  for (const candidate of candidates) {
+    const { url } = candidate;
+    let origin;
+    try {
+      origin = new URL(url).origin;
+    } catch {
+      continue;
+    }
+    if (seenOrigins.has(origin)) continue;
+    seenOrigins.add(origin);
+    const probe = await probeProjectRegistry(url);
+    if (probe.status === "timeout" || probe.status === "uncertain") {
+      return { url, server: null, compatible: false, reason: "unresponsive" };
+    }
+    if (probe.status === "absent") continue;
+    const registry = probe.payload;
+    if (registry?.server) {
+      if (serverInfoIsTrusted(registry.server)) {
+        return { url, server: registry.server, compatible: serverInfoIsCompatible(registry.server) };
+      }
+      if (candidate.explicit || await servesAgentCanvasApp(url)) {
+        return { url, server: registry.server, compatible: false, reason: "legacy" };
+      }
+      continue;
+    }
+    if (await supportsProjectState(url) || await servesAgentCanvasApp(url)) {
+      return { url, server: null, compatible: false, reason: "legacy" };
+    }
+    if (candidate.explicit) {
+      return { url, server: null, compatible: false, reason: "unrecognized" };
+    }
+  }
+  return null;
+}
+
+async function probeProjectRegistry(url, timeoutMs = 750) {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  try {
+    const response = await fetch(apiUrl(url, "/api/projects"), { signal: controller.signal });
+    const payload = response.ok ? await response.json().catch(() => null) : null;
+    return { status: response.ok ? "ok" : "http-error", response, payload };
+  } catch (error) {
+    if (timedOut) return { status: "timeout", error, payload: null };
+    const code = error?.cause?.code || error?.code;
+    if (code === "ECONNREFUSED" || code === "ERR_CONNECTION_REFUSED") {
+      return { status: "absent", error, payload: null };
+    }
+    return { status: "uncertain", error, payload: null };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function updateThroughRunningServer(runningServer) {
+  const response = await fetchWithTimeout(apiUrl(runningServer.url, "/api/app-update"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ expectedInstanceId: runningServer.server.instanceId })
+  }, 300_000);
+  if (!response) throw new Error("The running Codex-Canvas server did not respond to the update request.");
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || "The running Codex-Canvas server rejected the update request.");
+  return payload;
+}
+
+function serverInfoIsTrusted(server) {
+  return Boolean(
+    server?.name === canvasServerName
+    && server?.protocolVersion === canvasServerProtocolVersion
+    && typeof server?.instanceId === "string"
+    && server.instanceId.length > 0
+  );
+}
+
+function serverInfoIsCompatible(server) {
+  return serverInfoIsTrusted(server) && server.version === APP_VERSION;
 }
 
 async function supportsProjectState(url) {
@@ -497,7 +627,11 @@ async function registerRemoteProject(baseUrl, projectDir, { autoCollect = true, 
     url: payload.url,
     runtime: {
       url: payload.url,
-      pid: null,
+      pid: Number.isInteger(payload.server?.pid) ? payload.server.pid : null,
+      serverName: payload.server?.name || null,
+      serverProtocolVersion: payload.server?.protocolVersion || null,
+      serverVersion: payload.server?.version || null,
+      serverInstanceId: payload.server?.instanceId || null,
       projectDir,
       projectId: project.id || null,
       canvasId: project.canvasId || null,
@@ -518,7 +652,7 @@ function printHelp() {
 Codex-Canvas
 
 Usage:
-  codex-canvas open [--project <dir>] [--host 127.0.0.1] [--port 43217] [--thread-id <codex-thread-id>] [--no-update]
+  codex-canvas open [--project <dir>] [--host 127.0.0.1] [--port 43217] [--thread-id <codex-thread-id>]
   codex-canvas start [--project <dir>] [--host 127.0.0.1] [--port 43217] [--thread-id <codex-thread-id>] [--no-auto-collect]
   codex-canvas import <image-path> [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--prompt <text>] [--name <name>]
   codex-canvas collect [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--from <dir,dir>] [--since-minutes 120] [--limit 20]
@@ -535,7 +669,7 @@ Usage:
   codex-canvas doctor-deps [--json]
 
 Commands:
-  open      Best-effort fast-forward update, then start or reuse the local server and print the canvas URL.
+  open      Start or reuse the local server and print the canvas URL; the loaded UI checks for releases in the background.
   start     Run the local canvas server in the foreground with auto-collection enabled.
   import    Copy an image into the project canvas and place it on the board.
   collect   Import recent images from the bound thread directory, or explicit --from recovery roots.
@@ -543,7 +677,7 @@ Commands:
   prompts   List recent unique prompts from canvas objects.
   versions  Group canvas object version history by sourceObjectId, batchId, layoutMode, or prompt.
   status    Print current canvas runtime and object count.
-  update    Check for or apply a git fast-forward update for this Codex-Canvas install.
+  update    Check for or install the latest published Codex-Canvas release.
   setup-ocr Explicitly install RapidOCR for local Edit Text recognition.
   setup-image-deps Explicitly install Pillow and numpy for Edit Elements local layer processing.
   setup-deps Explicitly install optional Python dependencies for OCR and Edit Elements.

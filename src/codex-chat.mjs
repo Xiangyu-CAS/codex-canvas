@@ -2,11 +2,14 @@ import crypto from "node:crypto";
 import path from "node:path";
 import net from "node:net";
 import { resolveCodexExecutable, spawnCodexProcess } from "./codex-runner.mjs";
+import { APP_VERSION } from "./version.mjs";
+import { createOperationLease } from "./operation-leases.mjs";
 
 const appServerStartupTimeoutMs = 5000;
 const chatTurnTimeoutMs = 120000;
 const chatBackgroundCompletionTimeoutMs = 30 * 60_000;
 const maxBufferedNotifications = 50;
+const activeChatOperations = new Set();
 
 export async function sendImageToBoundChat({ projectDir, threadId, imagePath, prompt, waitForCompletion = false }) {
   if (!threadId) {
@@ -75,13 +78,22 @@ export async function sendMentionToBoundChat({ projectDir, threadId, filePath, p
 }
 
 async function sendInputsToBoundChat({ projectDir, threadId, input, waitForCompletion = true, completionTimeoutMs = chatTurnTimeoutMs }) {
-  const server = await startAppServer();
+  const operationLease = await createOperationLease("chat-turn", { projectDir, threadId });
+  let server;
+  try {
+    server = await startAppServer();
+  } catch (error) {
+    await operationLease.release();
+    throw error;
+  }
   const client = new JsonRpcWebSocketClient(`ws://127.0.0.1:${server.port}`);
+  const operation = { client, server, operationLease, closing: null };
+  activeChatOperations.add(operation);
   let cleanupInFinally = true;
   try {
     await client.open();
     await client.request("initialize", {
-      clientInfo: { name: "codex-canvas", version: "0.1.1" },
+      clientInfo: { name: "codex-canvas", version: APP_VERSION },
       capabilities: null
     });
     await client.request("thread/resume", {
@@ -102,7 +114,7 @@ async function sendInputsToBoundChat({ projectDir, threadId, input, waitForCompl
 
     if (!waitForCompletion) {
       cleanupInFinally = false;
-      monitorChatTurnCompletion({ client, server, predicate: isTargetCompletion, timeoutMs: completionTimeoutMs });
+      monitorChatTurnCompletion({ operation, predicate: isTargetCompletion, timeoutMs: completionTimeoutMs });
       return {
         threadId,
         turnId,
@@ -122,19 +134,37 @@ async function sendInputsToBoundChat({ projectDir, threadId, input, waitForCompl
     };
   } finally {
     if (cleanupInFinally) {
-      client.close();
-      await server.stop();
+      await closeActiveChatOperation(operation);
     }
   }
 }
 
-function monitorChatTurnCompletion({ client, server, predicate, timeoutMs }) {
-  client.waitForNotification(predicate, timeoutMs)
+function monitorChatTurnCompletion({ operation, predicate, timeoutMs }) {
+  operation.client.waitForNotification(predicate, timeoutMs)
     .catch(() => {})
-    .finally(() => {
-      client.close();
-      server.stop().catch(() => {});
-    });
+    .finally(() => closeActiveChatOperation(operation).catch(() => {}));
+}
+
+export async function stopActiveChatOperations() {
+  await Promise.allSettled([...activeChatOperations].map((operation) => closeActiveChatOperation(operation)));
+}
+
+export function hasActiveChatOperations() {
+  return activeChatOperations.size > 0;
+}
+
+async function closeActiveChatOperation(operation) {
+  if (operation.closing) return operation.closing;
+  operation.closing = (async () => {
+    activeChatOperations.delete(operation);
+    operation.client.close();
+    try {
+      await operation.server.stop();
+    } finally {
+      await operation.operationLease.release();
+    }
+  })();
+  return operation.closing;
 }
 
 async function startAppServer() {

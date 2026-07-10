@@ -4,13 +4,14 @@ import { watch } from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { collectRecentImages, defaultGeneratedImagesRoot, generatedImagesDirForThread } from "./collector.mjs";
-import { sendImageToBoundChat, sendMentionToBoundChat } from "./codex-chat.mjs";
-import { createImageJob, createTextRecognitionJob, getActivePlaceholderIds, getIgnoredGeneratedImagePaths, getImageJob, getTextRecognitionJob, hasRunningImageJobs, submitTextRecognitionEdit } from "./jobs.mjs";
+import { hasActiveChatOperations, sendImageToBoundChat, sendMentionToBoundChat, stopActiveChatOperations } from "./codex-chat.mjs";
+import { createImageJob, createTextRecognitionJob, getActivePlaceholderIds, getIgnoredGeneratedImagePaths, getImageJob, getTextRecognitionJob, hasActiveCanvasJobs, hasRunningImageJobs, submitTextRecognitionEdit } from "./jobs.mjs";
 import { assetsDirFor, projectRegistryPath, publicDir, runtimePathFor } from "./paths.mjs";
 import { exportLayerGroupPsd } from "./psd-export.mjs";
 import { addImage, addObject, deleteObject, deleteObjects, ensureProjectStore, markStaleJobPlaceholders, promptHistory, readState, reorderLayerGroupLayer, restoreObjects, searchObjects, setLayerGroupOrder, updateObject, updateObjects, updateProjectMeta, updateSelection, updateViewport, versionGroups } from "./store.mjs";
 import { canvasIdForThread, normalizeThreadId } from "./runtime.mjs";
 import { appUpdateStatus, updateApp } from "./updater.mjs";
+import { APP_VERSION } from "./version.mjs";
 
 const contentTypes = {
   ".html": "text/html; charset=utf-8",
@@ -28,14 +29,14 @@ const contentTypes = {
 const defaultMaxJsonBodyBytes = 32 * 1024 * 1024;
 const maxQueryLimit = 100;
 
-export async function createServer({ projectDir, host = "127.0.0.1", port = 43217, autoCollect = true, chatThreadId = null, autoCollectIntervalMs = 5000, autoCollectWatchDebounceMs = 250, maxJsonBodyBytes = defaultMaxJsonBodyBytes, persistentRegistryPath = projectRegistryPath(), generatedImagesRoot = defaultGeneratedImagesRoot() } = {}) {
-  const registry = createProjectRegistry({ host, port, autoCollect, autoCollectIntervalMs, autoCollectWatchDebounceMs, maxJsonBodyBytes, persistentRegistryPath, generatedImagesRoot });
+export async function createServer({ projectDir, host = "127.0.0.1", port = 43217, autoCollect = true, chatThreadId = null, autoCollectIntervalMs = 5000, autoCollectWatchDebounceMs = 250, maxJsonBodyBytes = defaultMaxJsonBodyBytes, persistentRegistryPath = projectRegistryPath(), generatedImagesRoot = defaultGeneratedImagesRoot(), hasActiveJobs = hasActiveCanvasJobs } = {}) {
+  const registry = createProjectRegistry({ host, port, autoCollect, autoCollectIntervalMs, autoCollectWatchDebounceMs, maxJsonBodyBytes, persistentRegistryPath, generatedImagesRoot, hasActiveJobs });
   const initialProject = await registerProject(registry, projectDir, { autoCollect, chatThreadId });
   await restorePersistedProjects(registry);
 
   const server = http.createServer(async (request, response) => {
     try {
-      await handleRequest(request, response, { registry });
+      await handleRequest(request, response, { registry, server });
     } catch (error) {
       const status = error.statusCode || 500;
       sendJson(response, status, {
@@ -62,6 +63,7 @@ export async function createServer({ projectDir, host = "127.0.0.1", port = 4321
     for (const project of registry.projects.values()) {
       stopAutoCollector(project);
     }
+    stopActiveChatOperations().catch(() => {});
   });
 
   return { server, url: projectUrl(registry, initialProject.id) };
@@ -72,17 +74,48 @@ async function handleRequest(request, response, context) {
   const pathname = decodePathname(requestUrl.pathname);
 
   if (request.method === "GET" && pathname === "/api/projects") {
-    return sendJson(response, 200, { projects: await listProjects(context.registry) });
+    return sendJson(response, 200, {
+      projects: await listProjects(context.registry),
+      server: serverInfoFor(context.registry)
+    });
   }
 
   if (request.method === "GET" && pathname === "/api/app-update") {
-    return sendJson(response, 200, await appUpdateStatus({
-      checkRemote: requestUrl.searchParams.get("check") === "1"
-    }));
+    return sendJson(response, 200, await appUpdateStatus({ checkRemote: false }));
+  }
+
+  if (request.method === "POST" && pathname === "/api/app-update/check") {
+    requireLocalUpdateRequest(request, context.registry);
+    await readJson(request, context.registry);
+    return sendJson(response, 200, await appUpdateStatus({ checkRemote: true }));
   }
 
   if (request.method === "POST" && pathname === "/api/app-update") {
-    return sendJson(response, 200, await updateApp());
+    requireLocalUpdateRequest(request, context.registry);
+    const body = await readJson(request, context.registry);
+    if (body?.expectedInstanceId !== undefined) requireExpectedServerInstance(body, context.registry);
+    await beginServerMaintenance(context.registry, "update");
+    let result;
+    try {
+      result = await updateApp();
+    } catch (error) {
+      endServerMaintenance(context.registry);
+      throw error;
+    }
+    sendJson(response, 200, result);
+    if (result.restartRequired) scheduleServerShutdown(context.server);
+    else endServerMaintenance(context.registry);
+    return;
+  }
+
+  if (request.method === "POST" && pathname === "/api/shutdown") {
+    requireLocalUpdateRequest(request, context.registry);
+    const body = await readJson(request, context.registry);
+    requireExpectedServerInstance(body, context.registry);
+    await beginServerMaintenance(context.registry, "shutdown");
+    sendJson(response, 200, { ok: true, pid: context.registry.pid });
+    scheduleServerShutdown(context.server);
+    return;
   }
 
   if (request.method === "POST" && pathname === "/api/projects") {
@@ -96,7 +129,8 @@ async function handleRequest(request, response, context) {
     await persistProjectRegistrySafely(context.registry);
     return sendJson(response, 201, {
       project: await publicProject(project),
-      url: projectUrl(context.registry, project.id)
+      url: projectUrl(context.registry, project.id),
+      server: serverInfoFor(context.registry)
     });
   }
 
@@ -262,17 +296,26 @@ async function handleRequest(request, response, context) {
 
   if (request.method === "POST" && pathname === "/api/chat-turn") {
     const body = await readJson(request, context.registry);
-    return sendJson(response, 200, await sendObjectToBoundChat(projectDir, project, body));
+    return sendJson(response, 200, await runMaintenanceSensitiveOperation(
+      context.registry,
+      () => sendObjectToBoundChat(projectDir, project, body)
+    ));
   }
 
   if (request.method === "POST" && pathname === "/api/jobs") {
     const body = await readJson(request, context.registry);
-    return sendJson(response, 202, await createImageJob(projectDir, body, storeOptionsFor(project)));
+    return sendJson(response, 202, await runMaintenanceSensitiveOperation(
+      context.registry,
+      () => createImageJob(projectDir, body, storeOptionsFor(project))
+    ));
   }
 
   if (request.method === "POST" && pathname === "/api/text-recognition") {
     const body = await readJson(request, context.registry);
-    return sendJson(response, 202, await createTextRecognitionJob(projectDir, body, storeOptionsFor(project)));
+    return sendJson(response, 202, await runMaintenanceSensitiveOperation(
+      context.registry,
+      () => createTextRecognitionJob(projectDir, body, storeOptionsFor(project))
+    ));
   }
 
   const jobMatch = /^\/api\/jobs\/([^/]+)$/.exec(pathname);
@@ -288,12 +331,16 @@ async function handleRequest(request, response, context) {
   const textRecognitionRunMatch = /^\/api\/text-recognition\/([^/]+)\/run$/.exec(pathname);
   if (request.method === "POST" && textRecognitionRunMatch) {
     const body = await readJson(request, context.registry);
-    return sendJson(response, 202, await submitTextRecognitionEdit(projectDir, textRecognitionRunMatch[1], body, storeOptionsFor(project)));
+    return sendJson(response, 202, await runMaintenanceSensitiveOperation(
+      context.registry,
+      () => submitTextRecognitionEdit(projectDir, textRecognitionRunMatch[1], body, storeOptionsFor(project))
+    ));
   }
 
   const objectMatch = /^\/api\/objects\/([^/]+)$/.exec(pathname);
   if (request.method === "PATCH" && objectMatch) {
     const body = await readJson(request, context.registry);
+    assertExpectedCanvasScope(project, body);
     return sendJson(response, 200, await updateObject(projectDir, objectMatch[1], body, storeOptionsFor(project)));
   }
 
@@ -368,6 +415,111 @@ function sendJson(response, status, body) {
   response.end(JSON.stringify(body));
 }
 
+function requireLocalUpdateRequest(request, registry) {
+  if (!isLoopbackHost(registry.host)) {
+    const error = new Error("Plugin updates are only available from a loopback Codex-Canvas server.");
+    error.statusCode = 403;
+    throw error;
+  }
+
+  const contentType = String(request.headers["content-type"] || "").toLowerCase();
+  if (!contentType.startsWith("application/json")) {
+    const error = new Error("Plugin updates require an application/json request.");
+    error.statusCode = 415;
+    throw error;
+  }
+
+  const fetchSite = String(request.headers["sec-fetch-site"] || "").toLowerCase();
+  if (fetchSite && fetchSite !== "same-origin" && fetchSite !== "none") {
+    const error = new Error("Cross-origin plugin update requests are not allowed.");
+    error.statusCode = 403;
+    throw error;
+  }
+
+  const origin = request.headers.origin;
+  if (origin && origin !== new URL(registry.baseUrl).origin) {
+    const error = new Error("Plugin update request origin does not match the canvas server.");
+    error.statusCode = 403;
+    throw error;
+  }
+}
+
+function serverInfoFor(registry) {
+  return {
+    name: "codex-canvas",
+    protocolVersion: 1,
+    version: APP_VERSION,
+    pid: registry.pid,
+    instanceId: registry.instanceId,
+    maintenance: registry.maintenanceReason
+  };
+}
+
+function requireExpectedServerInstance(body, registry) {
+  if (typeof body?.expectedInstanceId === "string" && body.expectedInstanceId === registry.instanceId) return;
+  const error = new Error("The canvas server instance changed; reload its status before requesting shutdown.");
+  error.statusCode = 409;
+  throw error;
+}
+
+async function runMaintenanceSensitiveOperation(registry, operation) {
+  if (registry.maintenanceReason) {
+    const error = new Error("Codex-Canvas is preparing to restart; no new background operation can start.");
+    error.statusCode = 409;
+    throw error;
+  }
+  registry.maintenanceOperations += 1;
+  try {
+    return await operation();
+  } finally {
+    registry.maintenanceOperations -= 1;
+    if (registry.maintenanceOperations === 0) {
+      for (const resolve of registry.maintenanceWaiters) resolve();
+      registry.maintenanceWaiters.clear();
+    }
+  }
+}
+
+async function beginServerMaintenance(registry, reason) {
+  if (registry.maintenanceReason) {
+    const error = new Error(`Codex-Canvas is already preparing to ${registry.maintenanceReason}.`);
+    error.statusCode = 409;
+    throw error;
+  }
+
+  // Setting the flag and incrementing operation counters are synchronous, so
+  // requests that are still reading their body cannot slip into the gap.
+  registry.maintenanceReason = reason;
+  if (registry.maintenanceOperations > 0) {
+    await new Promise((resolve) => registry.maintenanceWaiters.add(resolve));
+  }
+  if (registry.hasActiveJobs() || hasActiveChatOperations()) {
+    endServerMaintenance(registry);
+    const error = new Error("Wait for running Codex-Canvas image, text, and chat operations to finish before updating or closing the server.");
+    error.statusCode = 409;
+    throw error;
+  }
+}
+
+function endServerMaintenance(registry) {
+  registry.maintenanceReason = null;
+}
+
+function isLoopbackHost(host) {
+  const normalized = String(host || "").trim().toLowerCase().replace(/^\[|\]$/g, "");
+  return normalized === "localhost" || normalized === "::1" || normalized.startsWith("127.");
+}
+
+function scheduleServerShutdown(server) {
+  const timer = setTimeout(async () => {
+    server.close();
+    server.closeIdleConnections?.();
+    server.closeAllConnections?.();
+    await stopActiveChatOperations().catch(() => {});
+  }, 250);
+  timer.unref?.();
+}
+
 function sendBinary(response, status, buffer, headers = {}) {
   response.writeHead(status, headers);
   response.end(buffer);
@@ -385,7 +537,7 @@ function parsePositiveIntegerQueryParam(searchParams, name, defaultValue, fallba
   return Math.min(maxQueryLimit, Math.max(1, Math.round(parsed)));
 }
 
-function createProjectRegistry({ host, port, autoCollect, autoCollectIntervalMs, autoCollectWatchDebounceMs, maxJsonBodyBytes, persistentRegistryPath, generatedImagesRoot }) {
+function createProjectRegistry({ host, port, autoCollect, autoCollectIntervalMs, autoCollectWatchDebounceMs, maxJsonBodyBytes, persistentRegistryPath, generatedImagesRoot, hasActiveJobs }) {
   return {
     host,
     port,
@@ -397,6 +549,11 @@ function createProjectRegistry({ host, port, autoCollect, autoCollectIntervalMs,
     generatedImagesRoot: path.resolve(generatedImagesRoot),
     baseUrl: `http://${host}:${port}/`,
     pid: process.pid,
+    instanceId: crypto.randomUUID(),
+    maintenanceReason: null,
+    maintenanceOperations: 0,
+    maintenanceWaiters: new Set(),
+    hasActiveJobs,
     defaultProjectId: null,
     projects: new Map(),
     projectAliases: new Map()
@@ -822,6 +979,10 @@ async function writeProjectRuntime(registry, project) {
     `${JSON.stringify({
       url: projectUrl(registry, project.id),
       pid: registry.pid,
+      serverName: "codex-canvas",
+      serverProtocolVersion: 1,
+      serverVersion: APP_VERSION,
+      serverInstanceId: registry.instanceId,
       projectDir: project.projectDir,
       projectId: project.id,
       canvasId: project.canvasId || null,

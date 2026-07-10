@@ -10,6 +10,7 @@ import { jobsDirFor, pluginRoot } from "./paths.mjs";
 import { addJobPlaceholder, deleteObject, readState, transformState, updateObject } from "./store.mjs";
 import { startCodexImageJob } from "./codex-runner.mjs";
 import { recognizeTextLocal } from "./local-ocr.mjs";
+import { createOperationLease } from "./operation-leases.mjs";
 
 const execFileAsync = promisify(execFile);
 const jobs = new Map();
@@ -106,24 +107,35 @@ export async function createImageJob(projectDir, input, options = {}) {
     placeholder: null,
     placeholderId: null,
     backgroundCompletionRunning: false,
+    backgroundCompletionPromise: null,
     error: null
   };
-  const placeholder = await addJobPlaceholder(projectDir, {
-    id: `${id}_placeholder`,
-    action,
-    status: "running",
-    name: actionLabel(action),
-    sourceObjectId: object.id,
-    width: expandOptions?.targetWidth || object.width,
-    height: expandOptions?.targetHeight || object.height
-  }, storeOptions);
+  const operationLease = await createOperationLease("image-job", { action, projectDir, canvasId });
+  let placeholder;
+  try {
+    placeholder = await addJobPlaceholder(projectDir, {
+      id: `${id}_placeholder`,
+      action,
+      status: "running",
+      name: actionLabel(action),
+      sourceObjectId: object.id,
+      width: expandOptions?.targetWidth || object.width,
+      height: expandOptions?.targetHeight || object.height
+    }, storeOptions);
+  } catch (error) {
+    await operationLease.release();
+    throw error;
+  }
   job.placeholder = placeholder;
   job.placeholderId = placeholder.id;
   jobs.set(id, job);
 
-  runJob(projectDir, job, startedAtMs).catch((error) => {
-    markFailed(projectDir, job, error).catch(() => {});
-  });
+  runJob(projectDir, job, startedAtMs)
+    .catch((error) => markFailed(projectDir, job, error).catch(() => {}))
+    .finally(async () => {
+      await job.backgroundCompletionPromise?.catch(() => {});
+      await operationLease.release();
+    });
 
   return publicJob(job);
 }
@@ -174,11 +186,16 @@ export async function createTextRecognitionJob(projectDir, input, options = {}) 
     items: [],
     error: null
   };
+  const operationLease = await createOperationLease("text-recognition", {
+    action: "edit-text",
+    projectDir,
+    canvasId
+  });
   textRecognitionJobs.set(id, job);
 
-  runTextRecognitionJob(projectDir, job, Date.now()).catch((error) => {
-    markTextRecognitionFailed(job, error).catch(() => {});
-  });
+  runTextRecognitionJob(projectDir, job, Date.now())
+    .catch((error) => markTextRecognitionFailed(job, error).catch(() => {}))
+    .finally(() => operationLease.release());
 
   return publicTextRecognitionJob(job);
 }
@@ -274,6 +291,19 @@ export async function submitTextRecognitionEdit(projectDir, id, input = {}, opti
 export function hasRunningImageJobs(options = {}) {
   return Array.from(jobs.values()).some((job) => jobMatchesScope(job, options) && (job.status === "queued" || job.status === "running" || job.backgroundCompletionRunning))
     || Array.from(textRecognitionJobs.values()).some((job) => jobMatchesScope(job, options) && job.status === "running" && job.stage === "generating");
+}
+
+// Server maintenance must also account for recognition sessions that have not
+// reached the generation stage yet. Stopping the server while one of these is
+// queued or recognizing would strand the frontend session and its child work.
+export function hasActiveCanvasJobs(options = {}) {
+  return Array.from(jobs.values()).some((job) => (
+    jobMatchesScope(job, options)
+    && (job.status === "queued" || job.status === "running" || job.backgroundCompletionRunning)
+  )) || Array.from(textRecognitionJobs.values()).some((job) => (
+    jobMatchesScope(job, options)
+    && (job.status === "queued" || job.status === "running")
+  ));
 }
 
 export function getActivePlaceholderIds(options = {}) {
@@ -1693,7 +1723,7 @@ function layerGroupIndexFor(layer, importedOrder) {
 
 function startElementBackgroundCompletion(projectDir, job, manifest, backgroundObject) {
   const layersDir = path.join(job.outputDir, "elements");
-  completeElementBackground(job, manifest, layersDir, backgroundObject).catch(async (error) => {
+  job.backgroundCompletionPromise = completeElementBackground(job, manifest, layersDir, backgroundObject).catch(async (error) => {
     await appendJobLog(job, `Edit Elements background completion failed after layers were placed: ${error?.message || String(error)}`);
     await updateObject(projectDir, backgroundObject.id, {
       layerGroupBackgroundStatus: "failed"

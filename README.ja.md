@@ -16,12 +16,14 @@ Codex に Lovart に近い作業スタイルを追加します。片側でチャ
 
 ```text
 https://github.com/Xiangyu-CAS/codex-canvas.git とその INSTALL.md に従って Codex-Canvas をインストールしてください。
-インストール後、現在の Codex 会話で `@Codex-Canvas codex canvas を開いて` と入力して起動するようユーザーに伝えてください。
+インストール後、新しい Codex タスクを開始し、`@Codex-Canvas codex canvas を開いて` と入力するようユーザーに伝えてください。
 ```
 
 完全なインストール手順は [`INSTALL.md`](INSTALL.md) を参照してください。
 
-インストール後、現在の Codex 会話でキャンバスを開きます。
+安定版は GitHub Release で公開されます。**Settings → Version** は配布物が揃い、manifest と tag が一致する `vX.Y.Z` だけをインストールし、`main` の未公開コミットには追従しません。更新後は旧 server が終了するため、キャンバスを開き直して新しい Codex タスクを開始してください。
+
+インストール後、新しい Codex タスクでキャンバスを開きます。
 
 ```text
 @Codex-Canvas codex canvas を開いて
@@ -119,6 +121,7 @@ node ./bin/codex-canvas.mjs open --project .
 関連ドキュメント:
 
 - [`INSTALL.md`](INSTALL.md): インストール手順と任意のローカル依存関係。
+- [`docs/RELEASING.md`](docs/RELEASING.md): バージョン、Release PR、tag、配布物の公開手順。
 - [`docs/CANVAS_TO_CHAT.md`](docs/CANVAS_TO_CHAT.md): 現在の canvas-to-chat の検証結果と制限。
 
 ## 謝辞

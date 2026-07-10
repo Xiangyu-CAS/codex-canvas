@@ -1,4 +1,5 @@
 import { execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,9 +12,10 @@ import { checkImageProcessingDepsAvailable } from "../src/ocr-setup.mjs";
 import { assetsDirFor, jobsDirFor, legacyCanvasDataDirFor, statePathFor } from "../src/paths.mjs";
 import { exportLayerGroupPsd } from "../src/psd-export.mjs";
 import { canvasIdForThread } from "../src/runtime.mjs";
+import { createOperationLease } from "../src/operation-leases.mjs";
 import { createServer as createAgentCanvasServer } from "../src/server.mjs";
 import { addImage, addObject, deleteObjects, markStaleJobPlaceholders, promptHistory, readState, reorderLayerGroupLayer, restoreObjects, searchObjects, setLayerGroupOrder, transformState, updateObject, updateObjects, updateSelection, updateViewport, versionGroups } from "../src/store.mjs";
-import { appUpdateStatus } from "../src/updater.mjs";
+import { appUpdateStatus, clearPublishedReleaseCacheForTest, updateApp } from "../src/updater.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -51,6 +53,8 @@ async function main() {
     ["http json boundaries", testHttpJsonBoundaries],
     ["http file response boundaries", testHttpFileResponseBoundaries],
     ["http project registration boundaries", testHttpProjectRegistrationBoundaries],
+    ["app update request security", testAppUpdateRequestSecurity],
+    ["app update maintenance gate", testAppUpdateMaintenanceGate],
     ["frontend action contract", testFrontendActionContract],
     ["canvas history queue", testCanvasHistoryQueue],
     ["http canvas mutation scope", testHttpCanvasMutationScope],
@@ -59,6 +63,7 @@ async function main() {
     ["persistent project registry", testPersistentProjectRegistry],
     ["persistent project registry restored auto collector", testPersistentProjectRegistryRestoredAutoCollector],
     ["mcp canvas status", testMcpCanvasStatus],
+    ["mcp thread scoped collector", testMcpThreadScopedCollector],
     ["mcp numeric boundaries", testMcpNumericBoundaries],
     ["thread scoped auto collector", testAutoCollectorWatermark],
     ["package optional dependency scripts", testPackageOptionalDependencyScripts],
@@ -66,6 +71,7 @@ async function main() {
     ["personal plugin installer", testPersonalPluginInstaller],
     ["dev plugin cache linker", testDevPluginCacheLinker],
     ["app update strategy", testAppUpdateStrategy],
+    ["app update cache reinstall", testAppUpdateCacheReinstall],
     ["cli collect help", testCliCollectHelp],
     ["cli argument parsing and errors", testCliArgumentParsingAndErrors],
     ["cli codex thread environment", testCliCodexThreadEnvironment],
@@ -85,10 +91,18 @@ async function main() {
 }
 
 async function createServer(options = {}) {
-  return createAgentCanvasServer({
+  const result = await createAgentCanvasServer({
     persistentRegistryPath: await persistentRegistryPathForSmoke(),
     ...options
   });
+  const close = result.server.close.bind(result.server);
+  result.server.close = (callback) => {
+    const closing = close(callback);
+    result.server.closeIdleConnections?.();
+    result.server.closeAllConnections?.();
+    return closing;
+  };
+  return result;
 }
 
 async function persistentRegistryPathForSmoke() {
@@ -1035,6 +1049,105 @@ async function testHttpProjectRegistrationBoundaries() {
   }
 }
 
+async function testAppUpdateRequestSecurity() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-update-security-"));
+  const { server, url } = await createServer({ projectDir, port: 0, autoCollect: false });
+  const base = url.replace(/\?.*/, "");
+  const endpoint = `${base}api/app-update`;
+  let stopped = false;
+  try {
+    const crossOrigin = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "https://example.invalid"
+      },
+      body: "{}"
+    });
+    assertEqual(crossOrigin.status, 403, "app update endpoint should reject cross-origin mutation requests");
+
+    const crossOriginCheck = await fetch(`${endpoint}/check`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "https://example.invalid"
+      },
+      body: "{}"
+    });
+    assertEqual(crossOriginCheck.status, 403, "remote release checks should reject cross-origin requests");
+
+    const simpleRequest = await fetch(endpoint, {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: "{}"
+    });
+    assertEqual(simpleRequest.status, 415, "app update endpoint should require a non-simple JSON content type");
+
+    const registryResponse = await fetch(`${base}api/projects`);
+    const registry = await registryResponse.json();
+    assertEqual(registry.server?.name, "codex-canvas", "server metadata should identify the shutdown target");
+    assertEqual(registry.server?.protocolVersion, 1, "server metadata should expose the restart handshake version");
+    if (!registry.server?.instanceId) throw new Error("server metadata should expose a per-process instance id");
+
+    const staleShutdown = await fetch(`${base}api/shutdown`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedInstanceId: "stale-instance" })
+    });
+    assertEqual(staleShutdown.status, 409, "shutdown should reject a stale server instance handshake");
+
+    const shutdown = await fetch(`${base}api/shutdown`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ expectedInstanceId: registry.server?.instanceId })
+    });
+    assertEqual(shutdown.status, 200, "loopback JSON clients should be able to stop a stale canvas server");
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const response = await fetch(`${base}api/projects`).catch(() => null);
+      if (!response) {
+        stopped = true;
+        break;
+      }
+    }
+    assertEqual(stopped, true, "shutdown endpoint should release the canvas server port");
+  } finally {
+    if (!stopped) await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+async function testAppUpdateMaintenanceGate() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-update-maintenance-"));
+  const { server, url } = await createServer({
+    projectDir,
+    port: 0,
+    autoCollect: false,
+    hasActiveJobs: () => true
+  });
+  const base = url.replace(/\?.*/, "");
+  try {
+    const registry = await fetch(`${base}api/projects`).then((response) => response.json());
+    const body = JSON.stringify({ expectedInstanceId: registry.server.instanceId });
+    const update = await fetch(`${base}api/app-update`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body
+    });
+    assertEqual(update.status, 409, "update should wait for active image and text jobs before changing plugin files");
+
+    const shutdown = await fetch(`${base}api/shutdown`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body
+    });
+    assertEqual(shutdown.status, 409, "shutdown should not strand active image and text jobs");
+    const alive = await fetch(`${base}api/projects`);
+    assertEqual(alive.status, 200, "maintenance rejection should leave the existing server available");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
 async function testHttpCanvasMutationScope() {
   const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-http-scope-"));
   const { server, url } = await createServer({
@@ -1516,9 +1629,11 @@ async function testMcpCanvasStatus() {
     prompt: "MCP prompt history sample"
   });
   const client = await startMcpServer();
+  let openedCanvasUrl = null;
   try {
     const initialized = await client.request("initialize", {});
-    assertEqual(initialized.serverInfo?.version, "0.1.1", "MCP server version should match package version");
+    const packageJson = JSON.parse(await fs.readFile(path.join(process.cwd(), "package.json"), "utf8"));
+    assertEqual(initialized.serverInfo?.version, packageJson.version, "MCP server version should match package version");
     const listed = await client.request("tools/list", {});
     if (!listed.tools?.some((tool) => tool.name === "canvas_status")) {
       throw new Error("MCP tools/list should expose canvas_status.");
@@ -1537,8 +1652,9 @@ async function testMcpCanvasStatus() {
     );
     const opened = await client.request("tools/call", {
       name: "open_canvas",
-      arguments: { projectDir, autoUpdate: false }
+      arguments: { projectDir, port: 0 }
     });
+    openedCanvasUrl = opened.structuredContent?.url || null;
     const openedText = opened.content?.find((item) => item.type === "text")?.text || "";
     if (!/Codex-Canvas is available: \[Open Codex-Canvas\]\(http:\/\/127\.0\.0\.1:\d+\/\?project=[^)]+\)/.test(openedText)) {
       throw new Error("MCP open_canvas should return a clickable Markdown link, not only a bare URL.");
@@ -1626,6 +1742,69 @@ async function testMcpCanvasStatus() {
       "MCP tool call requires an absolute projectDir.",
       "MCP canvas_status should reject relative projectDir instead of resolving against server cwd"
     );
+  } finally {
+    await shutdownTestCanvas(openedCanvasUrl);
+    await client.stop();
+  }
+}
+
+async function testMcpThreadScopedCollector() {
+  const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-mcp-thread-collector-"));
+  const projectDir = path.join(fixtureRoot, "project");
+  const generatedImagesRoot = path.join(fixtureRoot, "generated_images");
+  const threadId = "thread-mcp-collector-a";
+  const threadDir = path.join(generatedImagesRoot, threadId);
+  const otherThreadDir = path.join(generatedImagesRoot, "thread-mcp-collector-b");
+  await fs.mkdir(projectDir, { recursive: true });
+  await fs.mkdir(threadDir, { recursive: true });
+  await fs.mkdir(otherThreadDir, { recursive: true });
+  const targetPath = path.join(threadDir, "target.png");
+  await writeDistinctPng(targetPath, "mcp-thread-target");
+  await writeDistinctPng(path.join(otherThreadDir, "other.png"), "mcp-other-thread");
+  await writeDistinctPng(path.join(generatedImagesRoot, "global.png"), "mcp-global");
+  await writeDistinctPng(path.join(projectDir, "project.png"), "mcp-project");
+
+  const client = await startMcpServer({
+    env: {
+      ...process.env,
+      CODEX_CANVAS_GENERATED_IMAGES_ROOT: generatedImagesRoot,
+      CODEX_CANVAS_CODEX_THREAD_ID: "",
+      CODEX_THREAD_ID: ""
+    }
+  });
+  try {
+    await client.request("initialize", {});
+    const scoped = await client.request("tools/call", {
+      name: "collect_recent_images",
+      arguments: { projectDir, threadId, sinceMinutes: 120 }
+    });
+    assertEqual(scoped.structuredContent?.scannedRoots?.length, 1, "MCP default collection should scan one bound-thread directory");
+    assertEqual(scoped.structuredContent?.scannedRoots?.[0], threadDir, "MCP default collection should derive generated_images/<threadId>");
+    assertEqual(scoped.structuredContent?.imported?.length, 1, "MCP default collection should import only its thread output");
+    assertEqual(path.resolve(scoped.structuredContent?.imported?.[0]?.sourcePath || ""), path.resolve(targetPath), "MCP collection should exclude other threads, global root, and project root");
+
+    const unbound = await client.request("tools/call", {
+      name: "collect_recent_images",
+      arguments: { projectDir, canvasId: "mcp-unbound-collector", sinceMinutes: 120 }
+    });
+    assertEqual(unbound.structuredContent?.scannedRoots?.length, 0, "MCP unbound default collection should be a safe no-op");
+    assertEqual(unbound.structuredContent?.imported?.length, 0, "MCP unbound collection should not import unrelated images");
+
+    const recoveryDir = path.join(fixtureRoot, "recovery");
+    const recoveryPath = path.join(recoveryDir, "recovered.png");
+    await fs.mkdir(recoveryDir, { recursive: true });
+    await writeDistinctPng(recoveryPath, "mcp-explicit-recovery");
+    const recovered = await client.request("tools/call", {
+      name: "collect_recent_images",
+      arguments: {
+        projectDir,
+        canvasId: "mcp-explicit-recovery",
+        roots: [recoveryDir],
+        sinceMinutes: 120
+      }
+    });
+    assertEqual(recovered.structuredContent?.imported?.length, 1, "MCP explicit roots should remain available for manual recovery");
+    assertEqual(path.resolve(recovered.structuredContent?.imported?.[0]?.sourcePath || ""), path.resolve(recoveryPath), "MCP recovery should import from the explicit root");
   } finally {
     await client.stop();
   }
@@ -1749,8 +1928,8 @@ function assertMcpToolSchema(tools = []) {
   }
   const addImageSchema = byName.get("add_image")?.inputSchema || {};
   const openCanvasProperties = byName.get("open_canvas")?.inputSchema?.properties || {};
-  if (!openCanvasProperties.autoUpdate) {
-    throw new Error("MCP open_canvas should expose autoUpdate so explicit opens can opt out of the default update check.");
+  if (openCanvasProperties.autoUpdate) {
+    throw new Error("MCP open_canvas should not expose the obsolete blocking autoUpdate option.");
   }
   if (!addImageSchema.required?.includes("projectDir")) {
     throw new Error("MCP add_image should require projectDir.");
@@ -1842,7 +2021,7 @@ async function testPluginPackageManifest() {
   }
   await fs.access(path.join(process.cwd(), "src", "mcp-server.mjs"));
 
-  const { stdout } = await execFileAsync(npmExecutable(), ["pack", "--dry-run", "--json"], {
+  const { stdout } = await runPortableCommand(npmExecutable(), ["pack", "--dry-run", "--json"], {
     cwd: process.cwd(),
     maxBuffer: 1024 * 1024 * 5,
     windowsHide: true
@@ -1897,11 +2076,59 @@ function npmExecutable() {
   return process.platform === "win32" ? "npm.cmd" : "npm";
 }
 
-async function writeMinimalPluginPackage(rootDir) {
+async function runPortableCommand(command, args, options = {}) {
+  if (!(process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command))) {
+    return execFileAsync(command, args, options);
+  }
+  const child = spawn(command, args, {
+    ...options,
+    shell: true,
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  const stdout = [];
+  const stderr = [];
+  child.stdout.on("data", (chunk) => stdout.push(chunk));
+  child.stderr.on("data", (chunk) => stderr.push(chunk));
+  return new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code, signal) => {
+      const result = {
+        stdout: Buffer.concat(stdout).toString(),
+        stderr: Buffer.concat(stderr).toString()
+      };
+      if (code === 0) resolve(result);
+      else reject(Object.assign(new Error(`${command} failed with ${signal || `exit code ${code}`}.`), result, { code, signal }));
+    });
+  });
+}
+
+async function writeNodeExecutable(executablePath, source) {
+  const moduleExtension = /^\s*(?:#![^\n]*\n)?\s*(?:import|export)\s/m.test(source) ? ".mjs" : ".cjs";
+  const scriptPath = `${executablePath}${moduleExtension}`;
+  await fs.writeFile(scriptPath, source);
+  if (process.platform !== "win32") {
+    const escapedNode = process.execPath.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("$", "\\$").replaceAll("`", "\\`");
+    const wrapper = [
+      "#!/bin/sh",
+      `exec "${escapedNode}" "$(dirname "$0")/${path.basename(scriptPath)}" "$@"`,
+      ""
+    ].join("\n");
+    await fs.writeFile(executablePath, wrapper, { mode: 0o755 });
+    return;
+  }
+  const wrapper = [
+    "@echo off",
+    `"${process.execPath}" "%~dp0${path.basename(scriptPath)}" %*`,
+    ""
+  ].join("\r\n");
+  await fs.writeFile(executablePath, wrapper);
+}
+
+async function writeMinimalPluginPackage(rootDir, { version = "0.1.1", pluginVersion = `${version}+test` } = {}) {
   await fs.mkdir(path.join(rootDir, ".codex-plugin"), { recursive: true });
   await fs.writeFile(path.join(rootDir, "package.json"), `${JSON.stringify({
     name: "codex-canvas",
-    version: "0.1.1",
+    version,
     repository: {
       type: "git",
       url: "https://github.com/Xiangyu-CAS/codex-canvas.git"
@@ -1909,7 +2136,7 @@ async function writeMinimalPluginPackage(rootDir) {
   }, null, 2)}\n`);
   await fs.writeFile(path.join(rootDir, ".codex-plugin", "plugin.json"), `${JSON.stringify({
     name: "codex-canvas",
-    version: "0.1.1+test",
+    version: pluginVersion,
     repository: "https://github.com/Xiangyu-CAS/codex-canvas.git"
   }, null, 2)}\n`);
 }
@@ -1927,10 +2154,26 @@ async function createUpdateGitFixture() {
   await git(["add", "."], { cwd: source });
   await git(["commit", "-m", "initial"], { cwd: source });
   await git(["clone", "--bare", source, remote], { cwd: tmp });
+  await git(["remote", "add", "origin", remote], { cwd: source });
   await git(["clone", remote, local], { cwd: tmp });
   await git(["config", "user.email", "codex-canvas@example.invalid"], { cwd: local });
   await git(["config", "user.name", "Codex Canvas Smoke"], { cwd: local });
   return { tmp, source, remote, local };
+}
+
+async function publishUpdateFixtureRelease(fixture, version) {
+  await writeMinimalPluginPackage(fixture.source, { version, pluginVersion: version });
+  await git(["add", "package.json", ".codex-plugin/plugin.json"], { cwd: fixture.source });
+  await git(["commit", "-m", `release: v${version}`], { cwd: fixture.source });
+  await git(["tag", `v${version}`], { cwd: fixture.source });
+  await git(["push", "origin", "main", `v${version}`], { cwd: fixture.source });
+  const { stdout } = await git(["rev-list", "-n", "1", `v${version}`], { cwd: fixture.source });
+  return {
+    tag: `v${version}`,
+    version,
+    commit: stdout.trim(),
+    url: `https://example.invalid/releases/v${version}`
+  };
 }
 
 async function git(args, { cwd }) {
@@ -2108,17 +2351,121 @@ async function testAppUpdateStrategy() {
   const fixture = await createUpdateGitFixture();
   const clean = await appUpdateStatus({ rootDir: fixture.local, checkRemote: false });
   assertEqual(clean.canUpdate, true, "clean git checkouts with an upstream should support automatic updates");
-  assertEqual(clean.strategy, "git-fast-forward", "git checkouts should use the fast-forward update strategy");
+  assertEqual(clean.strategy, "git-release-fast-forward", "git checkouts should use the published release strategy");
   assertEqual(clean.git.remote, "origin", "git updater should identify the update remote");
   assertEqual(clean.git.remoteBranch, "main", "git updater should identify the update branch");
   assertEqual(clean.installKind, "git-checkout", "git checkouts should report git install kind");
+  assertEqual(clean.latestVersion, null, "git updater should not treat untagged main commits as releases");
+  assertEqual(clean.updateAvailable, false, "git updater should not offer untagged main commits");
+
+  const publishedRelease = await publishUpdateFixtureRelease(fixture, "0.1.2");
+  const releaseProvider = async () => publishedRelease;
+  const available = await appUpdateStatus({ rootDir: fixture.local, checkRemote: true, releaseProvider });
+  assertEqual(available.updateAvailable, true, "git updater should offer a newer stable release tag");
+  assertEqual(available.latestVersion, "0.1.2", "git updater should expose the latest stable release version");
+  assertEqual(available.releaseTag, "v0.1.2", "git updater should expose the selected release tag");
+  assertEqual(available.releaseRelation, "fast-forward", "git updater should verify a safe fast-forward to the release");
+
+  clearPublishedReleaseCacheForTest();
+  const previousFetch = globalThis.fetch;
+  const releaseArchiveSha256 = "a".repeat(64);
+  const releaseManifestText = JSON.stringify({
+    schemaVersion: 1,
+    name: "codex-canvas",
+    version: "0.1.2",
+    tag: "v0.1.2",
+    channel: "stable",
+    commit: publishedRelease.commit,
+    artifacts: {
+      universal: {
+        file: "codex-canvas-v0.1.2.tgz",
+        sha256: releaseArchiveSha256
+      }
+    }
+  });
+  const releaseManifestSha256 = createHash("sha256").update(releaseManifestText).digest("hex");
+  let releaseAssetsReady = true;
+  globalThis.fetch = async (url) => {
+    const value = String(url);
+    if (value.includes("/releases/latest")) {
+      return new Response(JSON.stringify({
+        tag_name: "v0.1.2",
+        draft: false,
+        prerelease: false,
+        html_url: "https://github.com/Xiangyu-CAS/codex-canvas/releases/tag/v0.1.2",
+        published_at: "2026-07-10T00:00:00Z",
+        assets: [
+          { name: "codex-canvas-v0.1.2.tgz", state: releaseAssetsReady ? "uploaded" : "new", size: 123, browser_download_url: "https://example.invalid/codex-canvas.tgz" },
+          { name: "release-manifest.json", state: "uploaded", size: releaseManifestText.length, browser_download_url: "https://example.invalid/release-manifest.json" },
+          { name: "SHA256SUMS", state: "uploaded", size: 200, browser_download_url: "https://example.invalid/SHA256SUMS" }
+        ]
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (value === "https://example.invalid/release-manifest.json") {
+      return new Response(releaseManifestText, { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (value === "https://example.invalid/SHA256SUMS") {
+      return new Response([
+        `${releaseArchiveSha256}  codex-canvas-v0.1.2.tgz`,
+        `${releaseManifestSha256}  release-manifest.json`,
+        ""
+      ].join("\n"), { status: 200, headers: { "content-type": "text/plain" } });
+    }
+    throw new Error(`Unexpected updater fetch: ${value}`);
+  };
+  try {
+    const releaseGated = await appUpdateStatus({ rootDir: fixture.local, checkRemote: true });
+    assertEqual(releaseGated.updateAvailable, true, "default updater should accept a GitHub Release only after required assets exist");
+    assertEqual(releaseGated.releaseCommit, publishedRelease.commit, "GitHub release manifest commit should gate the selected git tag");
+
+    clearPublishedReleaseCacheForTest();
+    releaseAssetsReady = false;
+    const pendingAssets = await appUpdateStatus({ rootDir: fixture.local, checkRemote: true });
+    assertEqual(pendingAssets.latestVersion, null, "updater should ignore a release while any required asset is still uploading");
+
+    clearPublishedReleaseCacheForTest();
+    globalThis.fetch = async (_url, options = {}) => new Promise((resolve, reject) => {
+      options.signal?.addEventListener("abort", () => reject(options.signal.reason || new Error("aborted")), { once: true });
+    });
+    const timedOut = await appUpdateStatus({ rootDir: fixture.local, checkRemote: true, releaseCheckTimeoutMs: 20 });
+    if (!timedOut.releaseError?.includes("timed out")) {
+      throw new Error("GitHub release checks should fail within their configured timeout budget.");
+    }
+  } finally {
+    globalThis.fetch = previousFetch;
+    clearPublishedReleaseCacheForTest();
+  }
 
   await git(["config", "--unset", "branch.main.remote"], { cwd: fixture.local });
   await git(["config", "--unset", "branch.main.merge"], { cwd: fixture.local });
-  const inferred = await appUpdateStatus({ rootDir: fixture.local, checkRemote: false });
+  const inferred = await appUpdateStatus({ rootDir: fixture.local, checkRemote: false, releaseProvider });
   assertEqual(inferred.canUpdate, true, "git updater should infer origin/current-branch when no upstream is configured");
   assertEqual(inferred.git.upstreamConfigured, false, "inferred remote branches should remain distinguishable from configured upstreams");
-  assertEqual(inferred.manualCommand.includes("pull --ff-only origin main"), true, "inferred update command should name the remote and branch explicitly");
+  assertEqual(inferred.manualCommand.includes("fetch --tags origin"), true, "inferred release command should fetch tags from the selected remote");
+  assertEqual(inferred.manualCommand.includes("merge --ff-only v0.1.2"), true, "inferred release command should name the immutable release tag");
+
+  const blockingLease = await createOperationLease("smoke-background-operation", { projectDir: fixture.local });
+  try {
+    const blockedByOperation = await updateApp({ rootDir: fixture.local, discoverInstall: false, releaseProvider }).then(
+      () => ({ ok: true, error: null }),
+      (error) => ({ ok: false, error })
+    );
+    assertEqual(blockedByOperation.ok, false, "release updater should not mutate plugin files while another process owns an operation lease");
+    assertEqual(blockedByOperation.error?.code, "active-operations", "operation lease blocker should use a stable error code");
+  } finally {
+    await blockingLease.release();
+  }
+
+  const updated = await updateApp({ rootDir: fixture.local, discoverInstall: false, releaseProvider });
+  assertEqual(updated.updated, true, "release updater should apply a safe stable release fast-forward");
+  assertEqual(updated.installedVersion, "0.1.2", "release updater should report the installed release version");
+  assertEqual(updated.restartRequired, true, "release updater should require a fresh process after changing plugin code");
+  assertEqual(JSON.parse(await fs.readFile(path.join(fixture.local, "package.json"), "utf8")).version, "0.1.2", "release updater should move the source to the tagged package version");
+
+  await publishUpdateFixtureRelease(fixture, "0.2.0-beta.1");
+  const stableOnly = await appUpdateStatus({ rootDir: fixture.local, checkRemote: true, releaseProvider });
+  assertEqual(stableOnly.latestVersion, "0.1.2", "stable updater should ignore prerelease tags");
+  assertEqual(stableOnly.updateAvailable, false, "stable updater should not offer a prerelease");
 
   await fs.writeFile(path.join(fixture.local, "dirty.txt"), "local change");
   const dirty = await appUpdateStatus({ rootDir: fixture.local, checkRemote: false });
@@ -2134,17 +2481,108 @@ async function testAppUpdateStrategy() {
   assertEqual(ahead.blockedReason, "local-ahead", "locally ahead git checkouts should report the local commits blocker");
 }
 
+async function testAppUpdateCacheReinstall() {
+  const fixture = await createUpdateGitFixture();
+  const publishedRelease = await publishUpdateFixtureRelease(fixture, "0.1.2");
+  const fakeHome = path.join(fixture.tmp, "fake-home");
+  const oldCache = path.join(fakeHome, ".codex", "plugins", "cache", "personal", "codex-canvas", "0.1.1");
+  const statePath = path.join(fakeHome, "plugin-state.json");
+  const fakeCodex = path.join(fixture.tmp, process.platform === "win32" ? "codex.cmd" : "codex");
+  await writeMinimalPluginPackage(oldCache);
+  await fs.mkdir(fakeHome, { recursive: true });
+  await fs.writeFile(statePath, `${JSON.stringify({
+    sourcePath: fixture.local,
+    installedPath: oldCache,
+    version: "0.1.1"
+  }, null, 2)}\n`);
+  await writeNodeExecutable(fakeCodex, fakePluginInstallerCodexScript());
+
+  const previousCli = process.env.CODEX_CANVAS_CODEX_CLI;
+  const previousState = process.env.CODEX_CANVAS_FAKE_PLUGIN_STATE;
+  process.env.CODEX_CANVAS_CODEX_CLI = fakeCodex;
+  process.env.CODEX_CANVAS_FAKE_PLUGIN_STATE = statePath;
+  try {
+    const result = await updateApp({
+      rootDir: oldCache,
+      releaseProvider: async () => publishedRelease
+    });
+    const newCache = path.join(fakeHome, ".codex", "plugins", "cache", "personal", "codex-canvas", "0.1.2");
+    assertEqual(result.updated, true, "cache updater should complete after Codex activates the release");
+    assertEqual(result.reinstalled, true, "cache updater should reinstall through the discovered marketplace");
+    assertEqual(await fs.realpath(result.installedPath), await fs.realpath(newCache), "cache updater should return the new Codex cache root");
+    assertEqual(await fileExistsForSmoke(oldCache), false, "Codex reinstall simulation should remove the old cache root");
+    assertEqual(JSON.parse(await fs.readFile(path.join(newCache, "package.json"), "utf8")).version, "0.1.2", "new cache should contain the released package version");
+  } finally {
+    if (previousCli === undefined) delete process.env.CODEX_CANVAS_CODEX_CLI;
+    else process.env.CODEX_CANVAS_CODEX_CLI = previousCli;
+    if (previousState === undefined) delete process.env.CODEX_CANVAS_FAKE_PLUGIN_STATE;
+    else process.env.CODEX_CANVAS_FAKE_PLUGIN_STATE = previousState;
+  }
+}
+
+function fakePluginInstallerCodexScript() {
+  return `#!/usr/bin/env node
+import fs from "node:fs/promises";
+import path from "node:path";
+
+const statePath = process.env.CODEX_CANVAS_FAKE_PLUGIN_STATE;
+const state = JSON.parse(await fs.readFile(statePath, "utf8"));
+const args = process.argv.slice(2);
+if (args[0] === "plugin" && args[1] === "list") {
+  console.log(JSON.stringify({ installed: [{
+    pluginId: "codex-canvas@personal",
+    name: "codex-canvas",
+    marketplaceName: "personal",
+    version: state.version,
+    installed: true,
+    enabled: true,
+    source: { source: "local", path: state.sourcePath }
+  }], available: [] }));
+  process.exit(0);
+}
+if (args[0] === "plugin" && args[1] === "add") {
+  const packageJson = JSON.parse(await fs.readFile(path.join(state.sourcePath, "package.json"), "utf8"));
+  const nextPath = path.join(path.dirname(state.installedPath), packageJson.version);
+  await fs.rm(nextPath, { recursive: true, force: true });
+  await fs.cp(state.sourcePath, nextPath, { recursive: true });
+  if (path.resolve(nextPath) !== path.resolve(state.installedPath)) {
+    await fs.rm(state.installedPath, { recursive: true, force: true });
+  }
+  await fs.writeFile(statePath, JSON.stringify({ ...state, installedPath: nextPath, version: packageJson.version }));
+  console.log(JSON.stringify({
+    pluginId: "codex-canvas@personal",
+    name: "codex-canvas",
+    marketplaceName: "personal",
+    version: packageJson.version,
+    installedPath: nextPath,
+    authPolicy: "ON_INSTALL"
+  }));
+  process.exit(0);
+}
+process.exit(2);
+`;
+}
+
+async function fileExistsForSmoke(filePath) {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function testCliCollectHelp() {
   const { stdout } = await execFileAsync(process.execPath, [path.join(process.cwd(), "bin", "codex-canvas.mjs"), "help"], {
     cwd: process.cwd(),
     maxBuffer: 1024 * 1024,
     windowsHide: true
   });
-  if (!stdout.includes("codex-canvas open [--project <dir>] [--host 127.0.0.1] [--port 43217] [--thread-id <codex-thread-id>] [--no-update]")) {
+  if (!stdout.includes("codex-canvas open [--project <dir>] [--host 127.0.0.1] [--port 43217] [--thread-id <codex-thread-id>]")) {
     throw new Error("CLI help should document that active opens can opt out of the default update check.");
   }
-  if (!stdout.includes("Best-effort fast-forward update, then start or reuse the local server and print the canvas URL.")) {
-    throw new Error("CLI help should describe the open-time auto-update behavior.");
+  if (!stdout.includes("the loaded UI checks for releases in the background")) {
+    throw new Error("CLI help should describe the non-mutating open-time release check.");
   }
   if (!stdout.includes("codex-canvas import <image-path> [--project <dir>] [--thread-id <id>] [--canvas-id <id>] [--prompt <text>] [--name <name>]")) {
     throw new Error("CLI help should document import canvas scope flags.");
@@ -2379,7 +2817,7 @@ async function testDoctorOptionalDepsWithoutPython() {
 async function testChatTurnActionContract() {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-chat-turn-"));
   const fakeCodex = path.join(tmp, process.platform === "win32" ? "codex.cmd" : "codex");
-  await fs.writeFile(fakeCodex, fakeCodexAppServerScript(), { mode: 0o755 });
+  await writeNodeExecutable(fakeCodex, fakeCodexAppServerScript());
 
   const previousCli = process.env.CODEX_CANVAS_CODEX_CLI;
   process.env.CODEX_CANVAS_CODEX_CLI = fakeCodex;
@@ -2670,7 +3108,7 @@ async function testChatWebSocketFallback() {
   const fakeCodex = path.join(tmp, process.platform === "win32" ? "codex.cmd" : "codex");
   const imagePath = path.join(tmp, "image.png");
   await fs.writeFile(imagePath, Buffer.from(pngOne, "base64"));
-  await fs.writeFile(fakeCodex, fakeCodexAppServerScript(), { mode: 0o755 });
+  await writeNodeExecutable(fakeCodex, fakeCodexAppServerScript());
 
   const previousCli = process.env.CODEX_CANVAS_CODEX_CLI;
   const previousWebSocket = globalThis.WebSocket;
@@ -2746,7 +3184,7 @@ async function testQuickEditAnnotations() {
     "image.save(root / 'source.png')"
   ].join("\n"));
   await runPython([makeSource, tmp]);
-  await fs.writeFile(fakeCodex, fakeCodexCaptureImageJobScript(), { mode: 0o755 });
+  await writeNodeExecutable(fakeCodex, fakeCodexCaptureImageJobScript());
 
   const previousCli = process.env.CODEX_CANVAS_CODEX_CLI;
   process.env.CODEX_CANVAS_CODEX_CLI = fakeCodex;
@@ -3271,7 +3709,7 @@ async function testEditElementsLayerPlacement(tmp) {
     const elementsDir = path.join(outputDir, "elements");
     await fs.mkdir(elementsDir, { recursive: true });
     const fakeCodex = path.join(projectDir, process.platform === "win32" ? "codex.cmd" : "codex");
-    await fs.writeFile(fakeCodex, fakeCodexCompletedBackgroundScript(), { mode: 0o755 });
+    await writeNodeExecutable(fakeCodex, fakeCodexCompletedBackgroundScript());
     process.env.CODEX_CANVAS_CODEX_CLI = fakeCodex;
 
     const placementSourcePath = path.join(projectDir, "placement-source.png");
@@ -3453,6 +3891,27 @@ async function postJson(url, body) {
   return { status: response.status, body: await response.json().catch(() => ({})) };
 }
 
+async function shutdownTestCanvas(url) {
+  if (!url) return;
+  const projectsUrl = new URL(url);
+  projectsUrl.pathname = "/api/projects";
+  const registry = await fetch(projectsUrl).then((response) => response.ok ? response.json() : null).catch(() => null);
+  const instanceId = registry?.server?.instanceId;
+  if (!instanceId) return;
+  const shutdownUrl = new URL(url);
+  shutdownUrl.pathname = "/api/shutdown";
+  await fetch(shutdownUrl, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ expectedInstanceId: instanceId })
+  }).catch(() => null);
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const response = await fetch(projectsUrl).catch(() => null);
+    if (!response) return;
+  }
+}
+
 async function runCliJson(args, options = {}) {
   const result = await runCli(args, options);
   let body = {};
@@ -3618,7 +4077,7 @@ function startMcpServer(options = {}) {
       const timeout = setTimeout(() => {
         pending.delete(id);
         reject(new Error(`MCP request timed out: ${method}${errors.length ? `: ${errors.join("").trim()}` : ""}`));
-      }, 5000);
+      }, 15000);
       timeout.unref?.();
       pending.set(id, { resolve, reject, timeout });
     });

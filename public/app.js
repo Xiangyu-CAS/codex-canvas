@@ -71,8 +71,11 @@ const translations = {
     updateBlockedDetached: "Detached HEAD",
     updateBlockedNoUpstream: "No upstream",
     updateBlockedNotGit: "Manual",
+    updateBlockedSource: "Reinstall",
+    updateBlockedRemote: "Offline",
+    updateBlockedRelease: "Manual",
     updateRunning: "Updating...",
-    updateDone: "Updated. Refresh canvas to use the new version.",
+    updateDone: "Updated. Close the canvas and start a new Codex task to load the new version.",
     updateFailed: "Update failed.",
     projectOptions: "Project options",
     switchCanvas: "Switch canvas",
@@ -207,8 +210,11 @@ const translations = {
     updateBlockedDetached: "游离 HEAD",
     updateBlockedNoUpstream: "无上游",
     updateBlockedNotGit: "需手动",
+    updateBlockedSource: "需重装",
+    updateBlockedRemote: "网络不可用",
+    updateBlockedRelease: "需手动",
     updateRunning: "更新中...",
-    updateDone: "已更新，刷新画布后生效。",
+    updateDone: "已更新。请关闭画布并新建 Codex 任务，以加载新版 MCP 和技能。",
     updateFailed: "更新失败。",
     projectOptions: "项目选项",
     switchCanvas: "切换画布",
@@ -4081,7 +4087,11 @@ async function refreshAppUpdateStatus({ checkRemote = false, showToastOnError = 
   appUpdateBusy = true;
   renderAppUpdateStatus({ label: t("updateChecking"), disabled: true });
   try {
-    const response = await fetch(apiPath(`/api/app-update${checkRemote ? "?check=1" : ""}`));
+    const response = await fetch(apiPath(checkRemote ? "/api/app-update/check" : "/api/app-update"), checkRemote ? {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({})
+    } : undefined);
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || t("updateFailed"));
     appUpdateInfo = payload;
@@ -4119,7 +4129,7 @@ async function runAppUpdate() {
 
 function renderAppUpdateStatus(override = null) {
   if (!appUpdateButton || !appVersionValue || !appUpdateStatus) return;
-  const version = appUpdateInfo?.pluginVersion || appUpdateInfo?.version || "...";
+  const version = appUpdateInfo?.installedVersion || appUpdateInfo?.pluginVersion || appUpdateInfo?.version || "...";
   appVersionValue.textContent = version;
   appUpdateButton.disabled = Boolean(override?.disabled);
 
@@ -4159,7 +4169,14 @@ function appUpdateBlockedLabel(reason) {
     "local-ahead": "updateBlockedAhead",
     "detached-head": "updateBlockedDetached",
     "no-upstream": "updateBlockedNoUpstream",
-    "not-git": "updateBlockedNotGit"
+    "not-git": "updateBlockedNotGit",
+    "source-not-found": "updateBlockedSource",
+    "plugin-reinstall-unavailable": "updateBlockedSource",
+    "remote-check-failed": "updateBlockedRemote",
+    "release-check-failed": "updateBlockedRemote",
+    "release-version-mismatch": "updateBlockedRelease",
+    "release-not-fast-forward": "updateBlockedRelease",
+    "plugin-reinstall-invalid": "updateBlockedRelease"
   };
   return t(labels[reason] || "updateUnavailable");
 }
