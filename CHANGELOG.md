@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/Xiangyu-CAS/codex-canvas/compare/v0.2.0...v0.2.1) (2026-07-10)
+
+
+### Bug Fixes
+
+* honor proxy settings in release checks ([83f50be](https://github.com/Xiangyu-CAS/codex-canvas/commit/83f50be81fa4794bcc5e788d42094197ebe7d314))
+
 ## 0.2.0 (2026-07-10)
 
 

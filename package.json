@@ -1,6 +1,6 @@
 {
   "name": "codex-canvas",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Local infinite canvas plugin for Codex image workflows.",
   "type": "module",
   "homepage": "https://github.com/Xiangyu-CAS/codex-canvas",
