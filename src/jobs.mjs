@@ -22,7 +22,6 @@ const outputPollMs = 1000;
 const jobTimeoutMs = 5 * 60_000;
 const backgroundCompletionTimeoutMs = 5 * 60_000;
 const chromaKeyColor = "#ff00ff";
-const imagegenChromaKeyScript = path.join(process.env.CODEX_HOME || path.join(os.homedir(), ".codex"), "skills", ".system", "imagegen", "scripts", "remove_chroma_key.py");
 const transparentLayerChromaActions = new Set(["quick-edit", "edit-text"]);
 const quickEditAnnotationPromptSuffix = [
   "",
@@ -1363,35 +1362,22 @@ async function hasTransparentPixels(filePath) {
 }
 
 async function removeChromaKey(inputPath, outputPath, options = {}) {
-  let scriptPath = imagegenChromaKeyScript;
-  let useImagegenHelper = true;
-  try {
-    await fs.access(scriptPath);
-  } catch {
-    scriptPath = path.join(pluginRoot, "scripts", "remove_chroma_key_connected.py");
-    useImagegenHelper = false;
-    await fs.access(scriptPath);
-  }
+  const scriptPath = path.join(pluginRoot, "scripts", "remove_chroma_key_connected.py");
+  await fs.access(scriptPath);
   const args = [
     scriptPath,
     "--input", inputPath,
     "--out", outputPath,
     "--key-color", chromaKeyColor,
     "--auto-key", "border",
-    "--force"
+    "--force",
+    "--soft-matte",
+    "--transparent-threshold", "12",
+    "--opaque-threshold", "220",
+    "--despill"
   ];
-  if (useImagegenHelper) {
-    args.push(
-      "--soft-matte",
-      "--transparent-threshold", "12",
-      "--opaque-threshold", "220",
-      "--despill"
-    );
-    if (options.edgeContract) {
-      args.push("--edge-contract", String(options.edgeContract));
-    }
-  } else {
-    args.push("--tolerance", "36");
+  if (options.edgeContract) {
+    args.push("--edge-contract", String(options.edgeContract));
   }
   await runPython(args);
 }

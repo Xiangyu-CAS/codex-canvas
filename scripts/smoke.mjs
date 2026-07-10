@@ -2247,7 +2247,8 @@ async function testPersonalPluginInstaller() {
   await fs.symlink(aliasPath, aliasLinkPath, linkType);
   await execFileAsync(process.execPath, [
     path.join(process.cwd(), "scripts", "install-personal-plugin.mjs"),
-    "--json"
+    "--json",
+    "--skip-ocr"
   ], {
     cwd: process.cwd(),
     env: {
@@ -2265,7 +2266,8 @@ async function testPersonalPluginInstaller() {
   await fs.mkdir(blockedLinkPath, { recursive: true });
   const blocked = await execFileAsync(process.execPath, [
     path.join(process.cwd(), "scripts", "install-personal-plugin.mjs"),
-    "--json"
+    "--json",
+    "--skip-ocr"
   ], {
     cwd: process.cwd(),
     env: {
