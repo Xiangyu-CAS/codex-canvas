@@ -1,6 +1,6 @@
 # Codex-Canvas
 
-[中文](README.md) | [English](README.en.md) | [日本語](README.ja.md)
+[English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
 
 Codex-Canvas は Codex 向けの無限キャンバス Plugin です。API 設定は不要で、Codex 組み込みの GPT-image-2 ワークフローを使ってローカルキャンバス上で画像編集を行えます。Codex の中で直接キャンバスを開き、生成された画像を現在のプロジェクトに収集し、視覚素材を整理、注釈、編集、比較、再利用できます。
 
