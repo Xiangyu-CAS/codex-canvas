@@ -359,12 +359,32 @@ async function fileExists(filePath) {
 
 export async function readState(projectDir, options = {}) {
   const canvasId = canvasIdFrom(options);
+  if (options.readOnly) {
+    // Inspection must not create locks, assets, state, or claim legacy migration.
+    try {
+      return await readStateFile(projectDir, { canvasId });
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    // Preview the same legacy data an explicit open would migrate, without
+    // copying assets or claiming the default canvas for this thread.
+    if (canvasId) {
+      const legacyPath = path.join(legacyCanvasDataDirFor(projectDir, canvasId), "codex-canvas.json");
+      if (legacyPath !== statePathFor(projectDir, canvasId) && await fileExists(legacyPath)) {
+        return normalizeState(await readJsonFile(legacyPath), { projectDir, canvasId });
+      }
+      if (!await fileExists(legacyThreadMigrationMarkerPath(projectDir)) && !await findExistingThreadState(projectDir)) {
+        return readState(projectDir, { readOnly: true });
+      }
+    }
+    return normalizeState(defaultState, { projectDir, canvasId });
+  }
   await ensureProjectStore(projectDir, options);
   return readStateFile(projectDir, { canvasId });
 }
 
 export async function searchObjects(projectDir, { query = "", limit = 20, type = null, canvasId = null } = {}) {
-  const state = await readState(projectDir, { canvasId });
+  const state = await readState(projectDir, { canvasId, readOnly: true });
   const normalizedQuery = normalizeSearchText(query);
   const normalizedType = typeof type === "string" && type.trim() ? type.trim().toLowerCase() : null;
   const maxResults = clampSearchLimit(limit);
@@ -390,7 +410,7 @@ export async function searchObjects(projectDir, { query = "", limit = 20, type =
 }
 
 export async function promptHistory(projectDir, { query = "", limit = 20, canvasId = null } = {}) {
-  const state = await readState(projectDir, { canvasId });
+  const state = await readState(projectDir, { canvasId, readOnly: true });
   const normalizedQuery = normalizeSearchText(query);
   const maxResults = clampSearchLimit(limit);
   const seen = new Set();
@@ -430,7 +450,7 @@ export async function promptHistory(projectDir, { query = "", limit = 20, canvas
 }
 
 export async function versionGroups(projectDir, { query = "", groupBy = "sourceObjectId", limit = 20, objectLimit = 20, canvasId = null } = {}) {
-  const state = await readState(projectDir, { canvasId });
+  const state = await readState(projectDir, { canvasId, readOnly: true });
   const normalizedQuery = normalizeSearchText(query);
   const normalizedGroupBy = normalizeVersionGroupBy(groupBy);
   const maxGroups = clampSearchLimit(limit);

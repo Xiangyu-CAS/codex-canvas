@@ -244,7 +244,7 @@ async function handle(method, params) {
     if (params.name === "canvas_status") {
       const projectDir = requireProjectDir(args);
       const canvas = await resolveCanvasOptions(projectDir, args);
-      const state = await readState(projectDir, { canvasId: canvas.canvasId });
+      const state = await readState(projectDir, { canvasId: canvas.canvasId, readOnly: true });
       return textResult(`Codex-Canvas has ${state.objects.length} object(s).`, {
         projectDir,
         canvasId: canvas.canvasId,
@@ -327,7 +327,7 @@ async function handle(method, params) {
         error.statusCode = 400;
         throw error;
       }
-      const state = await readState(projectDir, { canvasId: canvas.canvasId });
+      const state = await readState(projectDir, { canvasId: canvas.canvasId, readOnly: true });
       const object = state.objects.find((item) => item.id === args.objectId);
       if (!object || (object.type || "image") !== "image") {
         const error = new Error("A selected canvas image object is required before sending to chat.");

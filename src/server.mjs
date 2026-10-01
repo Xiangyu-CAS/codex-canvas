@@ -6,7 +6,7 @@ import crypto from "node:crypto";
 import { collectRecentImages, defaultGeneratedImagesRoot, generatedImagesDirForThread } from "./collector.mjs";
 import { hasActiveChatOperations, sendImageToBoundChat, sendMentionToBoundChat, stopActiveChatOperations } from "./codex-chat.mjs";
 import { createImageJob, createTextRecognitionJob, getActivePlaceholderIds, getIgnoredGeneratedImagePaths, getImageJob, getTextRecognitionJob, hasActiveCanvasJobs, hasRunningImageJobs, submitTextRecognitionEdit } from "./jobs.mjs";
-import { assetsDirFor, projectRegistryPath, publicDir, runtimePathFor } from "./paths.mjs";
+import { assetsDirFor, legacyCanvasDataDirFor, projectRegistryPath, publicDir, runtimePathFor, statePathFor } from "./paths.mjs";
 import { exportLayerGroupPsd } from "./psd-export.mjs";
 import { addImage, addObject, deleteObject, deleteObjects, ensureProjectStore, markStaleJobPlaceholders, promptHistory, readState, reorderLayerGroupLayer, restoreObjects, searchObjects, setLayerGroupOrder, updateObject, updateObjects, updateProjectMeta, updateSelection, updateViewport, versionGroups } from "./store.mjs";
 import { canvasIdForThread, normalizeThreadId } from "./runtime.mjs";
@@ -653,14 +653,18 @@ async function restorePersistedProjects(registry) {
     if (!entry || typeof entry !== "object") continue;
     if (typeof entry.projectDir !== "string" || !path.isAbsolute(entry.projectDir)) continue;
     if (!await directoryExists(entry.projectDir)) continue;
-    await registerProject(registry, entry.projectDir, {
-      autoCollect: registry.autoCollect && entry.autoCollect !== false,
-      chatThreadId: entry.chatThreadId || null,
-      canvasId: entry.canvasId || null,
-      registeredAt: typeof entry.registeredAt === "string" ? entry.registeredAt : null
-    }).catch((error) => {
+    try {
+      const canvasId = normalizeThreadId(entry.canvasId) || canvasIdForThread(entry.chatThreadId);
+      if (!await hasStoredCanvas(entry.projectDir, canvasId)) continue;
+      await registerProject(registry, entry.projectDir, {
+        autoCollect: registry.autoCollect && entry.autoCollect !== false,
+        chatThreadId: entry.chatThreadId || null,
+        canvasId: entry.canvasId || null,
+        registeredAt: typeof entry.registeredAt === "string" ? entry.registeredAt : null
+      });
+    } catch (error) {
       console.error(`Codex-Canvas skipped persisted project ${entry.projectDir}: ${error.message}`);
-    });
+    }
   }
   for (const alias of aliases) {
     if (!alias || typeof alias !== "object") continue;
@@ -668,6 +672,20 @@ async function restorePersistedProjects(registry) {
     const to = typeof alias.to === "string" ? alias.to : "";
     if (from && to && registry.projects.has(to)) registry.projectAliases.set(from, to);
   }
+}
+
+async function hasStoredCanvas(projectDir, canvasId) {
+  for (const statePath of new Set([
+    statePathFor(projectDir, canvasId),
+    path.join(legacyCanvasDataDirFor(projectDir, canvasId), "codex-canvas.json")
+  ])) {
+    try {
+      if ((await fs.stat(statePath)).isFile()) return true;
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+  return false;
 }
 
 async function readPersistedRegistry(registryPath) {
@@ -802,6 +820,10 @@ async function runAutoCollectorPass(project, registry) {
   project.collectorRunning = true;
   const scanStartedAt = Date.now();
   try {
+    if (!await hasStoredCanvas(project.projectDir, project.canvasId)) {
+      stopAutoCollector(project);
+      return;
+    }
     await collectRecentImages(project.projectDir, {
       sinceMs: project.collectSinceMs,
       limit: 10,
@@ -854,7 +876,7 @@ async function listProjects(registry) {
 async function publicProject(project) {
   let title = path.basename(project.projectDir) || project.projectDir;
   try {
-    const state = await readState(project.projectDir, storeOptionsFor(project));
+    const state = await readState(project.projectDir, { ...storeOptionsFor(project), readOnly: true });
     title = state.title || title;
   } catch {
     // A broken project state should not hide the rest of the registered canvases.
