@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/Xiangyu-CAS/codex-canvas/compare/v0.3.1...v0.3.2) (2026-10-01)
+
+
+### Bug Fixes
+
+* prevent read-only checks and stale registrations from recreating canvas/ ([#11](https://github.com/Xiangyu-CAS/codex-canvas/issues/11)) ([b801839](https://github.com/Xiangyu-CAS/codex-canvas/commit/b8018398c3cbed8fad2622ade72a3f9c345b53c9))
+
 ## [0.3.1](https://github.com/Xiangyu-CAS/codex-canvas/compare/v0.3.0...v0.3.1) (2026-07-10)
 
 
