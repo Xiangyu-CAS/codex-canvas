@@ -23,7 +23,7 @@ export async function collectRecentImages(projectDir, options = {}) {
   const sinceMs = Number.isFinite(options.sinceMs) ? options.sinceMs : Date.now() - 2 * 60 * 60 * 1000;
   const limit = normalizeCollectLimit(options.limit);
   const excludePaths = new Set((options.excludePaths || []).map((item) => path.resolve(item)));
-  const state = await readState(projectDir, storeOptions);
+  const state = await readState(projectDir, { ...storeOptions, readOnly: true });
   const knownSources = new Set(
     state.objects
       .map((object) => object.sourcePath)

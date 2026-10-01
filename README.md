@@ -106,7 +106,21 @@ Expand provides a visual expansion frame and common aspect-ratio presets such as
 
 Codex-Canvas stores canvas data in the current project's `canvas/` directory. Generated assets, job logs, and intermediate files stay local to the project.
 
+MCP startup and tool discovery do not create this directory. `status` (including `npm run validate`), search, prompt history, and version queries read existing state without creating files or claiming a legacy canvas for a thread. An absent scope reports an empty canvas unless eligible legacy data can be previewed; copying assets and claiming that legacy canvas still happen only when the canvas is explicitly opened or written. Collection with no new images also leaves an unused project untouched.
+
+`open` / `open_canvas` and `start` explicitly initialize a canvas and write its runtime file, even with `--no-auto-collect`. Importing images and other mutations also create storage. The HTTP server restores previously registered canvases, but skips scopes whose stored state has been removed. A running auto-collector stops when its stored canvas disappears. Close/stop the server before moving or deleting data: the canvas UI and in-flight writes can still create it again.
+
 `Send to chat` is currently a prototype path through the Codex app-server. It can submit at the protocol layer, but it may not always appear in the currently visible Codex desktop chat UI. The more reliable workflow is to use `Copy @file`, then paste that reference into the current Codex chat box.
+
+## Uninstall (keep your assets)
+
+There is no npm uninstall hook: removing a package alone does not stop a detached server or remove the Codex plugin registration.
+
+1. Wait for image/text jobs to finish. For foreground `start`, press Ctrl+C in its terminal. For a server launched by `open`, closing the browser tab is **not** enough: inspect `canvas/.codex-canvas-runtime.json` for its URL and PID, verify the live process command points to this plugin's `bin/codex-canvas.mjs start` and the expected project, then stop that specific process using Activity Monitor on macOS or Task Manager on Windows (or your OS process tools). Do not terminate a PID solely from an old runtime file; PIDs can be reused. Repeat for any other Canvas server instances. A server may serve multiple projects, so stopping it stops collection for all of them.
+2. Remove/disable **codex-canvas@personal** in Codex's plugin management. For CLI installations, run `codex plugin --help` and use the removal subcommand supported by your installed version, then verify with `codex plugin list --json`. End old Codex tasks and restart Codex so already-loaded MCP processes/skills are no longer available. If you manually added a `codex-canvas` MCP entry, remove only that entry from the configuration where you added it.
+3. To remove the personal marketplace listing, back up `~/.agents/plugins/marketplace.json` and remove only the plugin object whose `name` is `codex-canvas`; keep every other entry. Remove `~/plugins/codex-canvas` only after verifying it is the installer's symlink/junction, deleting the link itself without following its target. If it is a real directory, leave it in place for manual review. With `CODEX_CANVAS_PERSONAL_HOME`, use that installation's home instead. If installed through Red SkillHub, also remove its separate `codex-canvas` bootstrap skill using that manager so it cannot reinstall the plugin.
+4. After all servers are stopped, optionally remove the plugin-specific `~/.agents/codex-canvas/projects.json` registry (or your `CODEX_CANVAS_PROJECT_REGISTRY_PATH` override) and each project's `canvas/.codex-canvas-runtime.json`. These are registration/runtime metadata, not images. Keeping them is harmless once the plugin is uninstalled. Do not remove the shared `.agents` or `.codex` directories.
+5. Keep or back up each project's **entire `canvas/` folder**: it contains user images, thread canvases, state, job outputs and intermediate files. Delete it only after reviewing and backing up what you need. Optionally archive/remove the plugin's verified source checkout and leftover plugin-specific cache after inspecting them for local changes; never recursively delete through `~/plugins/codex-canvas`. Leave shared Python dependencies and `~/.codex/generated_images/` alone, since other workflows may use them.
 
 ## Development
 

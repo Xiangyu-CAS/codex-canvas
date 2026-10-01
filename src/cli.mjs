@@ -190,7 +190,7 @@ export async function main(args, context = {}) {
   if (command === "status") {
     const runtime = await readRuntime(projectDir);
     const canvas = await resolveCanvasOptions(projectDir, options, runtime);
-    const state = await readState(projectDir, { canvasId: canvas.canvasId });
+    const state = await readState(projectDir, { canvasId: canvas.canvasId, readOnly: true });
     const payload = {
       projectDir,
       runtime,

@@ -27,6 +27,8 @@ let smokeProjectRegistryPath = null;
 async function main() {
   const results = [];
   for (const [name, test] of [
+    ["read-only canvas inspection", testReadOnlyCanvasInspection],
+    ["deleted canvas registry and collector", testDeletedCanvasRegistryAndCollector],
     ["store concurrency", testStoreConcurrency],
     ["cross process store locking", testCrossProcessStoreLocking],
     ["delete undo restore", testDeleteUndoRestore],
@@ -119,6 +121,85 @@ async function persistentRegistryPathForSmoke() {
     smokeProjectRegistryPath = path.join(tmp, "projects.json");
   }
   return smokeProjectRegistryPath;
+}
+
+async function testReadOnlyCanvasInspection() {
+  const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-read-only-"));
+  const env = { ...process.env, CODEX_CANVAS_PROJECT_DIR: projectDir, CODEX_THREAD_ID: "", CODEX_CANVAS_CODEX_THREAD_ID: "" };
+  const client = startMcpServer({ env });
+  try {
+    await client.request("initialize", {});
+    await client.request("tools/list", {});
+    for (const scope of [{}, { threadId: "unused-thread" }, { canvasId: "unused-canvas" }]) {
+      for (const name of ["canvas_status", "search_canvas", "prompt_history", "version_groups"]) {
+        const result = await client.request("tools/call", { name, arguments: { projectDir, ...scope } });
+        assertEqual(Boolean(result.isError), false, `${name} should succeed on an unused canvas`);
+      }
+    }
+    for (const command of ["status", "search", "prompts", "versions"]) {
+      for (const scope of [[], ["--thread-id", "unused-thread"], ["--canvas-id", "unused-canvas"]]) {
+        await execFileAsync(process.execPath, ["bin/codex-canvas.mjs", command, "--project", projectDir, "--json", ...scope], { env });
+      }
+    }
+    await collectRecentImages(projectDir, { roots: [projectDir], canvasId: "unused-canvas" });
+    assertEqual((await fs.readdir(projectDir)).length, 0, "inspection and empty collection must not create any project files");
+
+    const image = await addImage(projectDir, { dataUrl: `data:image/png;base64,${pngOne}`, name: "preserved.png" });
+    const before = await fs.readFile(statePathFor(projectDir), "utf8");
+    const assetBefore = await fs.readFile(image.assetPath);
+    await fs.rm(assetsDirFor(projectDir), { recursive: true });
+    const status = await client.request("tools/call", { name: "canvas_status", arguments: { projectDir } });
+    assertEqual(status.structuredContent.objects, 1, "inspection must still read existing state");
+    assertEqual(await fs.readFile(statePathFor(projectDir), "utf8"), before, "inspection must not rewrite state");
+    assertEqual((await fs.readdir(path.join(projectDir, "canvas"))).includes("assets"), false, "inspection must not repair missing assets directories");
+    await fs.mkdir(assetsDirFor(projectDir));
+    await fs.writeFile(image.assetPath, assetBefore);
+    const preview = await client.request("tools/call", { name: "canvas_status", arguments: { projectDir, threadId: "inspection-only" } });
+    assertEqual(preview.structuredContent.objects, 1, "inspection should preview eligible legacy data");
+    assertEqual((await fs.readdir(path.join(projectDir, "canvas"))).includes(".legacy-thread-migration.json"), false, "inspection must not claim legacy data");
+    const migrated = await readState(projectDir, { canvasId: canvasIdForThread("actual-use") });
+    assertEqual(migrated.objects[0]?.id, image.id, "actual use must retain one-time legacy migration");
+    assertEqual((await fs.readFile(migrated.objects[0].assetPath)).equals(assetBefore), true, "migration must preserve assets");
+    await fs.writeFile(statePathFor(projectDir), "invalid JSON");
+    let rejected = false;
+    try { await readState(projectDir, { readOnly: true }); } catch (error) { rejected = error instanceof SyntaxError; }
+    assertEqual(rejected, true, "corrupt state must not silently appear empty");
+  } finally {
+    await client.stop();
+    await fs.rm(projectDir, { recursive: true, force: true });
+  }
+}
+
+async function testDeletedCanvasRegistryAndCollector() {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-deleted-"));
+  const projectDir = path.join(root, "deleted");
+  const activeDir = path.join(root, "active");
+  const persistentRegistryPath = path.join(root, "projects.json");
+  await fs.mkdir(projectDir);
+  await fs.mkdir(activeDir);
+  let running;
+  try {
+    running = await createServer({ projectDir, port: 0, chatThreadId: "deleted-thread", autoCollectIntervalMs: 30, generatedImagesRoot: path.join(root, "generated"), persistentRegistryPath });
+    await fs.rm(path.join(projectDir, "canvas"), { recursive: true });
+    const generated = path.join(root, "generated", "deleted-thread");
+    await fs.mkdir(generated, { recursive: true });
+    await fs.writeFile(path.join(generated, "new.png"), Buffer.from(pngOne, "base64"));
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    await fetch(new URL("/api/projects", running.url));
+    assertEqual((await fs.readdir(projectDir)).length, 0, "collector and project listing must not recreate deleted canvas");
+    await new Promise((resolve) => running.server.close(resolve));
+    running = null;
+    running = await createServer({ projectDir: activeDir, port: 0, autoCollect: false, persistentRegistryPath });
+    const listed = await (await fetch(new URL("/api/projects", running.url))).json();
+    assertEqual(listed.projects.length, 1, "restart must skip deleted persisted canvas");
+    assertEqual((await fs.readdir(projectDir)).length, 0, "restore must leave deleted canvas absent");
+    await fs.access(statePathFor(activeDir));
+    await fs.access(path.join(activeDir, "canvas", ".codex-canvas-runtime.json"));
+    assertEqual(JSON.parse(await fs.readFile(persistentRegistryPath, "utf8")).projects.length, 1, "persisted registry must drop skipped entries");
+  } finally {
+    if (running) await new Promise((resolve) => running.server.close(resolve));
+    await fs.rm(root, { recursive: true, force: true });
+  }
 }
 
 async function testObjectPatchSanitization() {

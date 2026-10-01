@@ -145,3 +145,9 @@ CODEX_CANVAS_PERSONAL_HOME=/path/to/home npm run install:personal
 ```
 
 这样会写入该目录下的 `plugins/codex-canvas` 和 `.agents/plugins/marketplace.json`，不影响真实用户目录。
+
+## 卸载与保留资产
+
+完整步骤见 [README 的卸载说明](README.md#uninstall-keep-your-assets)。先停止所有 Canvas HTTP server，再移除 Codex 插件和 personal marketplace 中单独的 `codex-canvas` 条目，并结束旧任务、重启 Codex。关闭画布标签页不会停止 `open` 启动的后台进程；不要仅凭旧 runtime 文件中的 PID 杀进程。
+
+项目 `canvas/` 中包含用户图片、线程画布、任务输出及中间文件，默认保留。备份并检查后才可手动删除；不要通过递归删除安装 symlink/junction 来清理源码，也不要删除共享 `.codex`、`.agents`、Python 依赖或 generated_images 目录。
