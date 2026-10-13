@@ -39,7 +39,7 @@ https://github.com/Xiangyu-CAS/codex-canvas.git とその INSTALL.md に従っ�
 
 ### 1. キャンバスを開き、生成画像を自動収集
 
-現在の Codex 会話で `@Codex-Canvas codex canvas を開いて` と入力すると、Codex-Canvas は in-app browser でプロジェクトのローカルキャンバスを開きます。左側でチャットを続けながら、右側で視覚素材を管理できます。thread をバインドすると、Codex-Canvas は `~/.codex/generated_images/<thread-id>` にあるその thread の出力だけを収集し、他のプロジェクト、他の thread、プロジェクト全体はスキャンしません。生成結果はその thread のキャンバスに保存されます。
+現在の Codex 会話で `@Codex-Canvas codex canvas を開いて` と入力すると、Codex-Canvas は MCP App として Codex のプラグインサイドパネルにキャンバスを直接開きます。IP アドレス、HTTP ポート、ブラウザタブは不要です。左側でチャットを続けながら、右側で視覚素材を管理できます。thread をバインドすると、Codex-Canvas は `~/.codex/generated_images/<thread-id>` にあるその thread の出力だけを収集し、他のプロジェクト、他の thread、プロジェクト全体はスキャンしません。生成結果はその thread のキャンバスに保存されます。
 
 <p align="center">
   <img src="assets/readme/auto-collect.webp" alt="生成画像の自動収集" width="640">
@@ -87,7 +87,7 @@ Expand は視覚的な拡張フレームと、1:1、3:4、16:9、9:16 などの�
 
 ## 機能
 
-- Codex の in-app browser でローカル無限キャンバスを開きます。
+- Codex のプラグインサイドパネルでローカル無限キャンバスを直接開きます。CLI／ブラウザは互換用として利用できます。
 - Codex/ImageGen の出力をバインドされた thread のキャンバスへ自動収集し、他のプロジェクトや会話から分離します。
 - キャンバス画像のアップロード、インポート、配置、選択、ドラッグ、削除、ダウンロードに対応します。
 - 画像に明示的に関連付けた矢印注釈、ブラシ注釈、一時テキストに対応し、画像外にも説明を配置できます。

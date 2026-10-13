@@ -9,23 +9,15 @@ Use this skill to open the local Codex-Canvas board and keep generated images co
 
 ## Workflow
 
-1. Start or reuse the local canvas server for the active project:
-   - Use the CLI opener as the default path: `node <plugin-root>/bin/codex-canvas.mjs open --project <workspace>`.
-   - Pass the current Codex thread id with `--thread-id <thread-id>` whenever it is available; Codex-Canvas uses this explicit binding for canvas-to-chat image sends and to keep one canvas per Codex thread.
-   - Opening never installs an update. After the UI loads, its version control checks for a published Codex-Canvas release in the background.
-   - `codex-canvas open` will also read `CODEX_THREAD_ID` or `CODEX_CANVAS_CODEX_THREAD_ID` from the environment. If neither an explicit thread id nor an environment thread id is available, the canvas is the shared project default, not a per-thread canvas.
-   - If the `codex-canvas.open_canvas` MCP tool is already exposed in the thread, it is also acceptable to use it with `projectDir` and `threadId`, but do not probe for it or announce anything about MCP availability. Treat CLI opening as the normal supported behavior.
-2. Fast open behavior:
-   - Prefer reusing the existing runtime URL in `<workspace>/canvas/.codex-canvas-runtime.json` when it responds.
-   - Prefer `codex-canvas open --project <workspace>` over `codex-canvas start`; `open` already reuses the saved runtime or starts a detached server only when needed.
-   - If the Codex in-app browser already has a tab on that exact Codex-Canvas URL, reuse it and make it visible. Do not open a duplicate tab or reload the page unless the user asks.
-   - Do not repeat Browser plugin bootstrap/path discovery when a browser tab is already connected and usable in this turn; reuse the existing tab binding.
-3. Open the returned URL directly in the Codex in-app browser.
-   - Use the Browser plugin / in-app browser control surface for this step. The intended result is that the canvas appears inside Codex, next to the chat.
-   - Do not open the URL with the operating system default browser. Do not use `open`, `xdg-open`, `start`, PowerShell `Start-Process`, AppleScript, clipboard paste, coordinate clicking, or any desktop UI automation as a fallback.
-   - Do not rely on the user clicking a printed URL; that commonly opens Chrome or the system default browser instead of Codex's in-app browser.
-   - Whenever you show the canvas URL to the user, format it as a Markdown link: `[Open Codex-Canvas](<url>)`. Do not show only a bare `url` field, because some Codex surfaces do not make that clickable.
-   - If the Browser plugin / in-app browser control surface is unavailable in the current Codex surface, return a Markdown link and state that Codex-Canvas is running but the in-app browser could not be opened from this surface. Do not launch an external browser.
+1. Open the native plugin sidebar with the `codex-canvas.open_canvas` MCP tool. Discover the installed tool if it is deferred, then pass the active workspace's absolute `projectDir` and the current Codex `threadId` whenever available.
+   - `open_canvas` defaults to `presentation: "sidebar"`. The tool result opens the MCP App directly beside the chat; no browser tab, localhost URL, HTTP port, or desktop UI automation is needed.
+   - The conversation's plugin panel entrypoint can also open the UI. If it has no project binding yet, its button asks the chat to call `open_canvas` with the active workspace and thread.
+   - Opening never installs an update. Canvas state and images stay under the workspace's `canvas/` directory, with separate scopes for bound threads.
+   - Repeat calls reuse the panel in the same chat. Do not open a browser after a successful sidebar call.
+2. Keep the workspace and thread explicit for subsequent imports and operations. Without a thread binding, use the shared project default; never guess another chat's binding.
+3. Browser compatibility fallback: only when the host lacks MCP App support, the plugin MCP tool is unavailable, or the user explicitly asks for a browser, run `node <plugin-root>/bin/codex-canvas.mjs open --project <workspace> --thread-id <thread-id>` (omit thread when unavailable), or call `open_canvas` with `presentation: "browser"`.
+   - Reuse an existing exact-URL Codex in-app browser tab, or open the returned URL in the in-app browser.
+   - If browser control is unavailable, return `[Open Codex-Canvas](<url>)` and report the limitation. Do not launch the OS default browser or use desktop UI automation.
 4. When the user asks for image generation or image editing while this skill is active:
    - Use Codex `imagegen` for the image work.
    - Save or identify the generated image file path and keep the current Codex thread id attached to the canvas operation.
@@ -45,5 +37,5 @@ Use this skill to open the local Codex-Canvas board and keep generated images co
 ## Notes
 
 - Canvas data is stored under `<workspace>/canvas/`.
-- The visible canvas runs as a local web service and is intended to be opened in Codex `in-app browser`.
+- The default UI is a self-contained MCP App in the plugin sidebar. Its state, images, and actions use the app-only MCP transport; the local web service is a compatibility fallback.
 - The first milestone should preserve generated images as project assets, not only as chat attachments.

@@ -39,7 +39,7 @@ Codex-Canvas 是一个面向 Codex 的无限画布 Plugin，无需配置 API，�
 
 ### 1. 打开画布并自动收录生成图片
 
-在当前 Codex 对话里输入 `@Codex-Canvas 打开画布`，Codex-Canvas 会在 in-app browser 中打开项目本地画布。左侧继续对话，右侧管理视觉资产。绑定 thread 后，Codex-Canvas 只会收录该 thread 在 `~/.codex/generated_images/<thread-id>` 下的生成图片，不会扫描其他项目、其他 thread 或整个项目目录；生成结果会持久化到当前 thread 的画布中。
+在当前 Codex 对话里输入 `@Codex-Canvas 打开画布`，Codex-Canvas 会以 MCP App 直接在 Codex 插件右侧栏打开项目画布，无需 IP 地址、HTTP 端口或 Browser。左侧继续对话，右侧管理视觉资产。绑定 thread 后，Codex-Canvas 只会收录该 thread 在 `~/.codex/generated_images/<thread-id>` 下的生成图片，不会扫描其他项目、其他 thread 或整个项目目录；生成结果会持久化到当前 thread 的画布中。
 
 <p align="center">
   <img src="assets/readme/auto-collect.webp" alt="自动收录生成图片" width="640">
@@ -93,7 +93,7 @@ Expand 支持可视化扩图框和常用比例预设，例如 1:1、3:4、16:9�
 
 ## 功能
 
-- 在 Codex 的 in-app browser 中打开本地无限画布。
+- 直接在 Codex 插件右侧栏打开本地无限画布；CLI / 浏览器保留为兼容入口。
 - 按绑定 thread 自动收录 Codex/ImageGen 生成的图片，隔离其他项目和对话。
 - 支持上传、导入、排列、选择、拖动、删除和下载画布图片。
 - 支持与图片显式关联的箭头批注、画笔标注和临时文字标注，说明可以放在图片外。

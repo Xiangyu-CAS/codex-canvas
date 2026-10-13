@@ -2,7 +2,7 @@
 
 ## Current Issues
 
-- `/canvas` opens the in-app browser at a single local service, now using URLs like `http://127.0.0.1:43217/?project=<id>`. Opening Codex-Canvas from another project registers another canvas page in the same service, and the left project menu switches between registered canvases. Some Codex builds may still expose the same skill as `$canvas` or via natural-language invocation instead of a slash command.
+- `/canvas` opens a self-contained MCP App in the plugin side panel by default. State, images, edits, and exports use scoped app-only MCP calls without an HTTP listener. CLI/browser opening remains available as a compatibility fallback.
 - Personal marketplace registration is now deterministic through `npm run install:personal`, which updates `~/.agents/plugins/marketplace.json` and points `~/plugins/codex-canvas` at this repository.
 - MCP stdio support is implemented with a minimal JSON-RPC handler. Smoke coverage now exercises `initialize`, `tools/list`, and an actual `canvas_status` tool call, including the rule that thread-scoped canvases require explicit `threadId` and do not infer the last runtime binding. Replacing the hand-rolled handler with the official MCP SDK is still a maintainability improvement, but it is no longer a known blocker for tool discovery.
 - Image auto-collection is thread-scoped: the local canvas service watches and polls only `~/.codex/generated_images/<threadId>` for a bound canvas, while the skill still prefers importing explicit `imagegen` output paths. It never scans the project root or the global generated-images root by default, and an unbound canvas performs no automatic collection. CLI/MCP callers can still provide explicit recovery roots when a user intentionally requests a broader scan.

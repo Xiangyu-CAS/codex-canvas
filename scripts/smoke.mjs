@@ -1803,7 +1803,7 @@ async function testMcpCanvasStatus() {
     );
     const opened = await client.request("tools/call", {
       name: "open_canvas",
-      arguments: { projectDir, port: 0 }
+      arguments: { projectDir, port: 0, presentation: "browser" }
     });
     openedCanvasUrl = opened.structuredContent?.url || null;
     const openedText = opened.content?.find((item) => item.type === "text")?.text || "";
@@ -2065,7 +2065,7 @@ async function testMcpNumericBoundaries() {
 
 function assertMcpToolSchema(tools = []) {
   const byName = new Map(tools.map((tool) => [tool.name, tool]));
-  for (const name of ["open_canvas", "canvas_status", "search_canvas", "prompt_history", "version_groups", "collect_recent_images"]) {
+  for (const name of ["canvas_status", "search_canvas", "prompt_history", "version_groups", "collect_recent_images"]) {
     const required = byName.get(name)?.inputSchema?.required || [];
     if (!required.includes("projectDir")) {
       throw new Error(`MCP ${name} should require projectDir.`);
@@ -2233,6 +2233,8 @@ async function testPluginPackageManifest() {
     "bin/codex-canvas.mjs",
     "public/app.js",
     "public/canvas-history.js",
+    "public/canvas-app.html",
+    "public/canvas-transport.js",
     "scripts/install-personal-plugin.mjs",
     "skills/canvas/SKILL.md",
     "src/mcp-server.mjs"
@@ -2243,14 +2245,14 @@ async function testPluginPackageManifest() {
   }
 
   const canvasSkill = await fs.readFile(path.join(process.cwd(), "skills", "canvas", "SKILL.md"), "utf8");
-  if (!canvasSkill.includes("Open the returned URL directly in the Codex in-app browser")) {
-    throw new Error("canvas skill should require direct Codex in-app browser opening.");
+  if (!canvasSkill.includes('`presentation: "sidebar"`') || !canvasSkill.includes("codex-canvas.open_canvas")) {
+    throw new Error("canvas skill should default to the native MCP App sidebar.");
   }
-  if (!canvasSkill.includes("Do not open the URL with the operating system default browser")) {
-    throw new Error("canvas skill should forbid falling back to the system default browser.");
+  if (!canvasSkill.includes("Do not open a browser after a successful sidebar call")) {
+    throw new Error("canvas skill should prevent duplicate browser opening.");
   }
-  if (!canvasSkill.includes("Do not rely on the user clicking a printed URL")) {
-    throw new Error("canvas skill should avoid printed URL click fallback because it opens the default browser.");
+  if (!canvasSkill.includes("Do not launch the OS default browser")) {
+    throw new Error("canvas skill should keep the system browser fallback disabled.");
   }
   if (!canvasSkill.includes("[Open Codex-Canvas](<url>)")) {
     throw new Error("canvas skill should tell agents to present returned canvas URLs as Markdown links.");

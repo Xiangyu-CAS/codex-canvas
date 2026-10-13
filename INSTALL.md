@@ -62,6 +62,8 @@ npm run install:personal -- --skip-ocr
 codex plugin add codex-canvas@personal
 ```
 
+新版默认通过 MCP App 直接打开插件右侧栏，无需本地 IP 地址或 Browser。旧版宿主可使用 CLI / 浏览器兼容入口。
+
 安装后新建一个 Codex 任务，再使用 `@Codex-Canvas` 打开画布，让新版 skills 和 MCP server 从新缓存加载。也可以尝试输入 `/canvas`；如果当前 Codex 版本没有把插件 skill 暴露成 slash command，可以使用 `$canvas` 或直接说“打开 Codex-Canvas 画布”。
 
 ## 更新

@@ -39,6 +39,8 @@ try {
   }
   await Promise.all([
     fs.access(path.join(pluginRoot, "public", "app.js")),
+    fs.access(path.join(pluginRoot, "public", "canvas-app.html")),
+    fs.access(path.join(pluginRoot, "public", "canvas-transport.js")),
     fs.access(path.join(pluginRoot, "public", "canvas-history.js")),
     fs.access(path.join(pluginRoot, "src", "operation-leases.mjs")),
     fs.access(path.join(pluginRoot, "src", "updater.mjs")),

@@ -19,7 +19,7 @@
   "interface": {
     "displayName": "Codex Canvas",
     "shortDescription": "Open a local infinite canvas for Codex images.",
-    "longDescription": "Codex Canvas adds a project-local infinite canvas to Codex. It can open a browser canvas, collect ImageGen outputs, run background image-edit jobs, split images into editable element layers, and send selected canvas images back to a bound Codex thread.",
+    "longDescription": "Codex Canvas adds a project-local infinite canvas to Codex. It opens a native MCP App in the plugin side panel without a browser or HTTP port, and can collect ImageGen outputs, run background image-edit jobs, split images into editable element layers, and send selected canvas images back to a bound Codex thread.",
     "developerName": "Codex-Canvas Contributors",
     "category": "Productivity",
     "capabilities": [

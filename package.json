@@ -38,7 +38,9 @@
     "scripts/split_elements.py",
     "scripts/verify_elements_layers.py",
     "skills/",
-    "src/"
+    "src/",
+    "public/canvas-app.html",
+    "public/canvas-transport.js"
   ],
   "scripts": {
     "setup:ocr": "node ./bin/codex-canvas.mjs setup-ocr",
@@ -58,7 +60,10 @@
     "verify:release": "node ./scripts/verify-release.mjs",
     "verify:archive": "node ./scripts/verify-release-archive.mjs",
     "build:release": "node ./scripts/build-release.mjs",
-    "test": "npm run smoke"
+    "test": "npm run smoke && npm run test:app",
+    "build:app": "node scripts/build-app.mjs",
+    "test:app": "node --test scripts/mcp-app.test.mjs",
+    "smoke:app": "node scripts/visual-app-smoke.mjs"
   },
   "keywords": [
     "codex",
@@ -77,5 +82,10 @@
     "ag-psd": "^31.0.0",
     "cross-spawn": "^7.0.6",
     "pngjs": "^7.0.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/ext-apps": "1.7.5",
+    "esbuild": "0.25.11",
+    "playwright": "1.61.1"
   }
 }
