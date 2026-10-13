@@ -54,6 +54,18 @@ jobs:
       - name: Run tests
         run: npm test
 
+      - name: Verify native sidebar bundle
+        if: runner.os == 'Linux' && matrix.node == '22.x'
+        run: node scripts/build-app.mjs --check
+
+      - name: Install browser for sidebar checks
+        if: runner.os == 'Linux' && matrix.node == '22.x'
+        run: npx playwright install --with-deps chromium
+
+      - name: Verify sidebar in an isolated MCP App sandbox
+        if: runner.os == 'Linux' && matrix.node == '22.x'
+        run: npm run smoke:app
+
       - name: Verify release metadata
         if: runner.os == 'Linux' && matrix.node == '22.x'
         run: npm run verify:release

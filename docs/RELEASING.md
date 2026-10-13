@@ -61,6 +61,7 @@ Run the same builder locally with:
 ```sh
 npm ci
 npm test
+node scripts/build-app.mjs --check
 node scripts/build-release.mjs --output-dir dist/release
 ```
 
@@ -75,7 +76,9 @@ archive size, and SHA-256 digest. `SHA256SUMS` covers both the archive and the
 manifest. The builder rejects version drift between `package.json`,
 `package-lock.json`, and `.codex-plugin/plugin.json`.
 
-The normal app uses one loopback server. If maintainers have manually started
+The native side panel uses MCP without a listening port. Its self-contained `public/canvas-app.html` is checked in; run `npm run build:app` after editing the UI. UI bundling requires Node 20+, while the shipped plugin continues to support Node 18.18.
+
+The browser fallback uses one loopback server. If maintainers have manually started
 additional servers on custom ports, close them before exercising an update so
 only one process can run the Git/npm/Codex reinstall sequence. A server also
 refuses to update while image, text, or chat operations are active.

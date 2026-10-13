@@ -1,4 +1,5 @@
 import { CanvasHistory } from "./canvas-history.js";
+import { sidebar, canvasOrigin, canvasFetch as fetch, preferences } from "./canvas-transport.js";
 
 const board = document.querySelector("#board");
 const world = document.querySelector("#world");
@@ -48,11 +49,12 @@ const toolColors = ["#202124", "#d93025", "#f9ab00", "#188038", "#1a73e8", "#933
 const defaultQuickEditMarkColor = "#d93025";
 const annotationMinimumLengthPx = 18;
 const initialSearchParams = new URLSearchParams(window.location.search);
-let currentProjectId = initialSearchParams.get("project") || "";
-let currentThreadId = initialSearchParams.get("threadId") || initialSearchParams.get("thread-id") || "";
+let currentProjectId = sidebar?.scope.projectId || initialSearchParams.get("project") || "";
+let currentThreadId = sidebar?.scope.threadId || initialSearchParams.get("threadId") || initialSearchParams.get("thread-id") || "";
 let registeredProjects = [];
 const pendingTextRecognitionCancels = new Set();
 let quickEditAutoColorPrevious = null;
+let stateLoadPending = null;
 
 const translations = {
   en: {
@@ -436,10 +438,16 @@ applyLanguage();
 setActiveTool(defaultCanvasTool);
 renderCanvasHistoryStatus();
 renderColorPalette();
+if (sidebar) sidebar.onScopeChange = async () => {
+  currentProjectId = sidebar.scope.projectId;
+  currentThreadId = sidebar.scope.threadId;
+  await loadProjects();
+  await loadState();
+};
 await loadProjects();
 await loadState();
 refreshAppUpdateStatus({ checkRemote: true }).catch(() => {});
-setInterval(loadState, 2000);
+setInterval(() => { if (!sidebar || sidebar.active) loadState().catch(() => {}); }, 2000);
 
 projectTitle.addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
@@ -1236,7 +1244,7 @@ async function fetchPromptHistory() {
   promptHistoryUi.list.replaceChildren();
 
   try {
-    const url = new URL(apiPath("/api/prompts"), window.location.origin);
+    const url = new URL(apiPath("/api/prompts"), canvasOrigin);
     url.searchParams.set("q", query);
     url.searchParams.set("limit", "20");
     const response = await fetch(`${url.pathname}${url.search}`);
@@ -1259,7 +1267,7 @@ async function fetchVersionGroups() {
   promptHistoryUi.list.replaceChildren();
 
   try {
-    const url = new URL(apiPath("/api/versions"), window.location.origin);
+    const url = new URL(apiPath("/api/versions"), canvasOrigin);
     url.searchParams.set("q", query);
     url.searchParams.set("groupBy", promptHistoryUi.groupBy.value || "sourceObjectId");
     url.searchParams.set("limit", "20");
@@ -1510,10 +1518,20 @@ async function copyPromptToClipboard(prompt) {
   }
 }
 
-async function loadState() {
+function loadState() {
+  if (!stateLoadPending) stateLoadPending = loadStateOnce().finally(() => { stateLoadPending = null; });
+  return stateLoadPending;
+}
+
+async function loadStateOnce() {
+  const requestedProject = currentProjectId;
   if (drag || resize || marquee || pan || drawing || annotationDraft || editingTextId || editingAnnotationId || canvasHistory.busy || isComposerActive()) return;
   const response = await fetch(apiPath("/api/state"));
+  if (!response.ok) throw new Error("Canvas state unavailable.");
   const nextState = await response.json();
+  if (requestedProject !== currentProjectId) return;
+  if (sidebar) await sidebar.prepareAssets(nextState.objects);
+  if (requestedProject !== currentProjectId) return;
   updateCanvasScope(nextState.canvasScope);
   const previousObjectIds = knownObjectIds;
   const addedObjects = previousObjectIds
@@ -1691,7 +1709,7 @@ async function runCanvasSearch() {
   }
 
   try {
-    const url = new URL(apiPath("/api/search"), window.location.origin);
+    const url = new URL(apiPath("/api/search"), canvasOrigin);
     url.searchParams.set("q", query);
     url.searchParams.set("limit", "12");
     if (type) url.searchParams.set("type", type);
@@ -4310,7 +4328,7 @@ function closeQuickEdit({ keepPrompt = false, cancelTextSession = true, restoreE
 
 function applyQuickEditDefaultMarkColor(action) {
   if (action !== "quick-edit") return;
-  if (localStorage.getItem(toolColorStorageKey)) return;
+  if (preferences.getItem(toolColorStorageKey)) return;
   if (activeColor === defaultQuickEditMarkColor) return;
   quickEditAutoColorPrevious = activeColor;
   activeColor = defaultQuickEditMarkColor;
@@ -4318,7 +4336,7 @@ function applyQuickEditDefaultMarkColor(action) {
 
 function restoreQuickEditDefaultMarkColor() {
   if (!quickEditAutoColorPrevious) return;
-  if (!localStorage.getItem(toolColorStorageKey) && activeColor === defaultQuickEditMarkColor) {
+  if (!preferences.getItem(toolColorStorageKey) && activeColor === defaultQuickEditMarkColor) {
     activeColor = quickEditAutoColorPrevious;
   }
   quickEditAutoColorPrevious = null;
@@ -4862,7 +4880,7 @@ function setSpacePanPressed(pressed) {
 }
 
 function loadToolColor() {
-  const stored = localStorage.getItem(toolColorStorageKey);
+  const stored = preferences.getItem(toolColorStorageKey);
   return toolColors.includes(stored) ? stored : toolColors[0];
 }
 
@@ -4900,7 +4918,7 @@ function updateColorPalette() {
 function setActiveColor(color) {
   if (!toolColors.includes(color)) return;
   activeColor = color;
-  localStorage.setItem(toolColorStorageKey, activeColor);
+  preferences.setItem(toolColorStorageKey, activeColor);
   updateColorPalette();
   const object = state?.objects.find((item) => item.id === selectedId);
   if (!object) return;
@@ -4943,7 +4961,7 @@ function setActiveColor(color) {
 }
 
 function loadLanguage() {
-  const stored = localStorage.getItem(languageStorageKey);
+  const stored = preferences.getItem(languageStorageKey);
   if (stored === "en" || stored === "zh") return stored;
   return navigator.language?.toLowerCase().startsWith("zh") ? "zh" : "en";
 }
@@ -4951,7 +4969,7 @@ function loadLanguage() {
 function setLanguage(nextLanguage) {
   if (!translations[nextLanguage]) return;
   language = nextLanguage;
-  localStorage.setItem(languageStorageKey, language);
+  preferences.setItem(languageStorageKey, language);
   applyLanguage();
 }
 
@@ -5654,7 +5672,7 @@ function clamp(value, min, max) {
 }
 
 function apiPath(pathname) {
-  const url = new URL(pathname, window.location.origin);
+  const url = new URL(pathname, canvasOrigin);
   if (currentProjectId) url.searchParams.set("project", currentProjectId);
   if (currentThreadId) url.searchParams.set("threadId", currentThreadId);
   return `${url.pathname}${url.search}`;
@@ -5662,9 +5680,10 @@ function apiPath(pathname) {
 
 function assetUrl(src, object = null) {
   if (!src) return "";
+  if (sidebar) return sidebar.assetUrl(src, object);
   try {
-    const url = new URL(src, window.location.origin);
-    if (url.origin === window.location.origin && url.pathname.startsWith("/assets/") && currentProjectId) {
+    const url = new URL(src, canvasOrigin);
+    if (url.origin === canvasOrigin && url.pathname.startsWith("/assets/") && currentProjectId) {
       url.searchParams.set("project", currentProjectId);
       if (Number.isFinite(object?.assetVersion)) url.searchParams.set("v", String(object.assetVersion));
       return `${url.pathname}${url.search}`;
@@ -5705,6 +5724,7 @@ async function downloadSelectedImage() {
 }
 
 async function saveUrlWithPicker(href, suggestedName, mimeType) {
+  if (sidebar) return sidebar.download(href, suggestedName);
   if (!("showSaveFilePicker" in window)) {
     fallbackAnchorDownload(href, suggestedName);
     return;

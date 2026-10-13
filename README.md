@@ -39,7 +39,7 @@ After installation, start a new Codex task and open the canvas:
 
 ### 1. Open a canvas and collect generated images automatically
 
-Type `@Codex-Canvas open the codex canvas` in your current Codex conversation, and Codex-Canvas opens a local project canvas in the in-app browser. Keep chatting on the left while managing visual assets on the right. Once bound, Codex-Canvas collects only that thread's outputs from `~/.codex/generated_images/<thread-id>`; it does not scan other projects, other threads, or the whole project directory. Results are persisted into that thread's canvas.
+Type `@Codex-Canvas open the codex canvas` in your current Codex conversation, and Codex-Canvas opens the project canvas directly in Codex’s plugin side panel as an MCP App. No IP address, HTTP port, or browser tab is needed. Keep chatting on the left while managing visual assets on the right. Once bound, Codex-Canvas collects only that thread's outputs from `~/.codex/generated_images/<thread-id>`; it does not scan other projects, other threads, or the whole project directory. Results are persisted into that thread's canvas.
 
 <p align="center">
   <img src="assets/readme/auto-collect.webp" alt="Auto collect generated images" width="640">
@@ -87,7 +87,7 @@ Expand provides a visual expansion frame and common aspect-ratio presets such as
 
 ## Features
 
-- Opens a local infinite canvas in Codex's in-app browser.
+- Opens a local infinite canvas directly in Codex’s plugin side panel; the CLI/browser remains a compatibility fallback.
 - Automatically collects Codex/ImageGen outputs into the bound thread canvas without leaking outputs from other projects or conversations.
 - Supports uploading, importing, arranging, selecting, dragging, deleting, and downloading canvas images.
 - Supports explicitly linked arrow notes, brush annotations, and temporary text labels, including notes outside the image.
@@ -129,6 +129,7 @@ Common local commands:
 ```bash
 npm install
 npm test
+npm run build:app # Node 20+; rebuild after UI changes
 node ./bin/codex-canvas.mjs open --project .
 ```
 

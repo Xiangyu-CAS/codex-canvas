@@ -31,12 +31,10 @@ description: 安装、更新并使用 Codex-Canvas。通过 Red SkillHub 或其�
 
 ## 打开画布
 
-1. 使用以下命令启动或复用项目本地画布：
-   `node <codex-canvas-root>/bin/codex-canvas.mjs open --project <workspace>`
-2. 如果能拿到当前 Codex thread id，传入 `--thread-id <thread-id>`。Codex-Canvas 也会读取 `CODEX_THREAD_ID` 和 `CODEX_CANVAS_CODEX_THREAD_ID`。
-3. 优先使用 `open`，不要直接用 `start`；`open` 会复用健康的已保存运行时，只在需要时启动 detached server。
-4. 当 Codex in-app browser 控制能力可用时，直接在 Codex 内置浏览器打开返回的 URL。
-5. 如果当前环境无法控制内置浏览器，返回画布 URL 的 Markdown 链接。不要启动系统默认浏览器。
+1. 默认调用插件的 `codex-canvas.open_canvas` MCP 工具，传入当前工作区的绝对路径 `projectDir` 和当前对话的 `threadId`。工具被延迟加载时先发现该工具。
+2. 默认 `presentation: "sidebar"`，工具结果直接在右侧打开原生 MCP App 插件画布，不需要 IP 地址、HTTP 端口或 Browser。成功后不要再打开浏览器。
+3. 也可以从对话的插件侧栏入口打开；如果尚未绑定工作区，面板按钮会请当前对话调用 `open_canvas` 完成绑定。不要猜测其他对话的工作区或 thread id。
+4. 只有旧版宿主不支持 MCP App、插件 MCP 工具不可用，或用户明确要求浏览器时，才用 `node <codex-canvas-root>/bin/codex-canvas.mjs open --project <workspace> --thread-id <thread-id>`，或 `open_canvas` 的 `presentation: "browser"`。优先在 Codex 内置浏览器复用返回 URL；不可用时返回 Markdown 链接，不启动系统浏览器。
 
 ## 图片收集
 

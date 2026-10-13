@@ -1,4 +1,5 @@
 import http from "node:http";
+import { Readable } from "node:stream";
 import fs from "node:fs/promises";
 import { watch } from "node:fs";
 import path from "node:path";
@@ -28,6 +29,80 @@ const contentTypes = {
 };
 const defaultMaxJsonBodyBytes = 32 * 1024 * 1024;
 const maxQueryLimit = 100;
+
+// The MCP App shares the same handlers as the browser, without binding a port.
+// Each session owns exactly one explicitly opened project/thread scope.
+export async function createAppSession({ projectDir, threadId = null, autoCollect = true } = {}) {
+  const registry = createProjectRegistry({
+    host: "127.0.0.1", port: 0, autoCollect,
+    maxJsonBodyBytes: defaultMaxJsonBodyBytes,
+    generatedImagesRoot: defaultGeneratedImagesRoot(), hasActiveJobs: hasActiveCanvasJobs
+  });
+  const project = await registerProject(registry, projectDir, { autoCollect, chatThreadId: threadId });
+  const close = () => stopAutoCollector(project);
+  return {
+    projectId: project.id,
+    close,
+    async request({ path: requestPath, method = "GET", body } = {}) {
+      if (typeof requestPath !== "string" || !requestPath.startsWith("/") || requestPath.startsWith("//") || requestPath.includes("\\")) {
+        throw new Error("Canvas requests require a local API or asset path.");
+      }
+      const url = new URL(requestPath, "http://codex-canvas.local");
+      const pathname = decodePathname(url.pathname);
+      if (!(["GET", "POST", "PATCH", "DELETE"].includes(method)) ||
+          !(pathname.startsWith("/api/") || (method === "GET" && /^\/assets\/[^/]+$/.test(pathname))) ||
+          pathname === "/api/shutdown" || pathname === "/api/chat-binding" ||
+          (pathname === "/api/projects" && method !== "GET")) {
+        throw new Error("This route is unavailable in the canvas sidebar.");
+      }
+      for (const [key, value] of [["project", project.id], ["threadId", project.chatThreadId || ""], ["thread-id", project.chatThreadId || ""]]) {
+        if (url.searchParams.has(key) && url.searchParams.get(key) !== value) throw new Error("Canvas scope mismatch.");
+      }
+      url.searchParams.set("project", project.id);
+      const assetMatch = pathname.match(/^\/api\/app-assets\/([^/]+)$/);
+      if (method === "GET" && assetMatch) {
+        const state = await readState(projectDir, { canvasId: project.canvasId });
+        const object = state.objects.find(item => item.id === assetMatch[1]);
+        if (!object?.src) throw new Error("Canvas image not found.");
+        if (object.src.startsWith("/assets/")) {
+          url.pathname = `/assets/${path.basename(object.src)}`;
+        } else if (/^https?:\/\//i.test(object.src)) {
+          // Only fetch a URL already present on this explicitly opened canvas.
+          const remote = await fetch(object.src, { signal: AbortSignal.timeout(15000), redirect: "error" });
+          if (!remote.ok || !remote.headers.get("content-type")?.startsWith("image/")) throw new Error("Remote canvas image unavailable.");
+          let size = 0;
+          const chunks = [];
+          for await (const chunk of remote.body) {
+            size += chunk.length;
+            if (size > defaultMaxJsonBodyBytes) throw new Error("Remote canvas image exceeds 32 MiB.");
+            chunks.push(chunk);
+          }
+          return { status: 200, headers: { "content-type": remote.headers.get("content-type") }, encoding: "base64", body: Buffer.concat(chunks).toString("base64") };
+        } else throw new Error("Unsupported canvas image source.");
+      }
+      const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
+      if (payload && payload.length > defaultMaxJsonBodyBytes) throw new Error("Canvas request body is too large.");
+      const request = Readable.from(payload ? [payload] : []);
+      Object.assign(request, { url: `${url.pathname}${url.search}`, method, headers: { "content-type": "application/json" } });
+      let result;
+      const response = {
+        writeHead(status, headers = {}) { result = { status, headers }; return this; },
+        end(data = "") {
+          const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+          const json = result.headers["content-type"]?.startsWith("application/json");
+          result.body = json ? JSON.parse(buffer.toString("utf8")) : buffer.toString("base64");
+          result.encoding = json ? "json" : "base64";
+        }
+      };
+      try {
+        await handleRequest(request, response, { registry, server: { close } });
+      } catch (error) {
+        sendJson(response, error.statusCode || 500, { error: error.message });
+      }
+      return result;
+    }
+  };
+}
 
 export async function createServer({ projectDir, host = "127.0.0.1", port = 43217, autoCollect = true, chatThreadId = null, autoCollectIntervalMs = 5000, autoCollectWatchDebounceMs = 250, maxJsonBodyBytes = defaultMaxJsonBodyBytes, persistentRegistryPath = projectRegistryPath(), generatedImagesRoot = defaultGeneratedImagesRoot(), hasActiveJobs = hasActiveCanvasJobs } = {}) {
   const registry = createProjectRegistry({ host, port, autoCollect, autoCollectIntervalMs, autoCollectWatchDebounceMs, maxJsonBodyBytes, persistentRegistryPath, generatedImagesRoot, hasActiveJobs });

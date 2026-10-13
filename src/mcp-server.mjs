@@ -1,4 +1,6 @@
 import readline from "node:readline";
+import fs from "node:fs/promises";
+import crypto from "node:crypto";
 import path from "node:path";
 import { main as cliMain, normalizePort } from "./cli.mjs";
 import { collectRecentImages } from "./collector.mjs";
@@ -8,6 +10,15 @@ import { addImage, promptHistory, readState, searchObjects, versionGroups } from
 import { pluginRoot, resolveProjectDir } from "./paths.mjs";
 import { canvasIdForThread, normalizeThreadId } from "./runtime.mjs";
 import { APP_VERSION } from "./version.mjs";
+import { createAppSession } from "./server.mjs";
+
+const canvasResourceUri = `ui://codex-canvas/canvas-${APP_VERSION}.html`;
+const canvasResourceMeta = {
+  ui: { csp: { connectDomains: [], resourceDomains: [] }, permissions: { clipboardWrite: {} }, prefersBorder: false },
+  "openai/ui": { availableDisplayModes: ["fullscreen"], preferredDisplayMode: "fullscreen" }
+};
+const appSessions = new Map();
+const openingSessions = new Map();
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -19,6 +30,7 @@ const defaultToolLimit = 20;
 const maxToolLimit = 100;
 const defaultSinceMinutes = 120;
 const millisecondsPerMinute = 60_000;
+rl.on("close", () => { for (const session of appSessions.values()) session.close(); });
 
 rl.on("line", async (line) => {
   if (!line.trim()) return;
@@ -43,21 +55,41 @@ async function handle(method, params) {
   if (method === "initialize") {
     return {
       protocolVersion: params.protocolVersion || "2024-11-05",
-      capabilities: { tools: {} },
+      capabilities: { tools: {}, resources: {} },
       serverInfo: { name: "codex-canvas", version: APP_VERSION }
     };
+  }
+
+  if (method === "ping") return {};
+  if (method === "resources/list") return { resources: [{ uri: canvasResourceUri, name: "Codex Canvas", mimeType: "text/html;profile=mcp-app", _meta: canvasResourceMeta }] };
+  if (method === "resources/read") {
+    if (params.uri !== canvasResourceUri) throw Object.assign(new Error("Unknown canvas resource."), { statusCode: 404 });
+    return { contents: [{ uri: canvasResourceUri, mimeType: "text/html;profile=mcp-app", text: await fs.readFile(path.join(pluginRoot, "public", "canvas-app.html"), "utf8"), _meta: canvasResourceMeta }] };
   }
 
   if (method === "tools/list") {
     return {
       tools: [
         {
+          name: "canvas_app_request",
+          description: "Private transport for the Codex-Canvas sidebar's scoped API and image requests.",
+          _meta: { ui: { visibility: ["app"] } },
+          annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+          inputSchema: { type: "object", required: ["sessionId", "path"], properties: {
+            sessionId: { type: "string" }, path: { type: "string" },
+            method: { type: "string", enum: ["GET", "POST", "PATCH", "DELETE"] }, body: { type: "object" }
+          } }
+        },
+        {
           name: "open_canvas",
-          description: "Start the Codex-Canvas local server and return the browser URL.",
+          title: "Codex Canvas",
+          description: "Open Codex-Canvas directly in the plugin sidebar. Pass the active workspace projectDir and threadId. Use presentation=browser only for an explicit browser fallback.",
+          _meta: { ui: { resourceUri: canvasResourceUri }, "openai/ui": { entrypoints: [{ type: "thread" }] } },
+          annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
           inputSchema: {
             type: "object",
-            required: ["projectDir"],
             properties: {
+              presentation: { type: "string", enum: ["sidebar", "browser"], description: "Defaults to the native plugin sidebar; browser is a compatibility fallback." },
               projectDir: { type: "string", description: "Absolute path to the active Codex project." },
               port: { type: "number", description: "Local port. Defaults to 43217." },
               threadId: { type: "string", description: "Codex thread id to bind this canvas to for canvas-to-chat and thread-scoped canvas state. Defaults to the current Codex thread when available." }
@@ -220,8 +252,32 @@ async function handle(method, params) {
 
   if (method === "tools/call") {
     const args = params.arguments || {};
+    if (params.name === "canvas_app_request") {
+      const session = appSessions.get(args.sessionId);
+      if (!session) throw Object.assign(new Error("Canvas session expired. Call open_canvas again."), { statusCode: 404 });
+      return { content: [], structuredContent: await session.request(args) };
+    }
     if (params.name === "open_canvas") {
+      if (args.presentation !== undefined && !["sidebar", "browser"].includes(args.presentation)) throw Object.assign(new Error("Unknown canvas presentation."), { statusCode: 400 });
+      if (!args.projectDir && args.presentation !== "browser") return {
+        ...textResult("Choose the active workspace by calling open_canvas with projectDir and threadId.", { presentation: "sidebar", needsProject: true }),
+        _meta: { "openai/widgetSessionId": "codex-canvas" }
+      };
       const projectDir = requireProjectDir(args);
+      if (args.presentation !== "browser") {
+        const threadId = normalizeThreadId(args.threadId) || environmentThreadId();
+        const key = JSON.stringify([projectDir, threadId]);
+        if (!openingSessions.has(key)) openingSessions.set(key, createAppSession({ projectDir, threadId }).then(session => {
+          const sessionId = crypto.randomUUID();
+          appSessions.set(sessionId, session);
+          return { sessionId, projectId: session.projectId };
+        }).catch(error => { openingSessions.delete(key); throw error; }));
+        const session = await openingSessions.get(key);
+        return {
+          ...textResult("Opened Codex-Canvas in the plugin sidebar.", { presentation: "sidebar", projectDir, threadId, projectId: session.projectId }),
+          _meta: { "openai/widgetSessionId": "codex-canvas", canvasSession: session }
+        };
+      }
       const entrypoint = path.join(pluginRoot, "bin", "codex-canvas.mjs");
       const cliArgs = ["open", "--project", projectDir, "--port", String(normalizePort(args.port))];
       if (args.threadId) cliArgs.push("--thread-id", args.threadId);
