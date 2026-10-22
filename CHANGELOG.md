@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/Xiangyu-CAS/codex-canvas/compare/v0.4.0...v0.4.1) (2026-10-22)
+
+
+### Bug Fixes
+
+* preserve native imagegen transparency in foreground jobs ([#14](https://github.com/Xiangyu-CAS/codex-canvas/issues/14)) ([375cbae](https://github.com/Xiangyu-CAS/codex-canvas/commit/375cbaeaee8976ca0776f967e3fde127bcbeba0b))
+
 ## [0.4.0](https://github.com/Xiangyu-CAS/codex-canvas/compare/v0.3.1...v0.4.0) (2026-10-13)
 
 
