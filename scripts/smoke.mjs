@@ -1,4 +1,7 @@
 import { execFile, spawn } from "node:child_process";
+import { PNG } from "pngjs";
+import { readPsd, initializeCanvas } from "ag-psd";
+import { promptForAction } from "../src/codex-runner.mjs";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -84,6 +87,7 @@ async function main() {
     ["chat turn action contract", testChatTurnActionContract],
     ["edit text cancellation cleanup", testEditTextCancellationCleanup],
     ["quick edit annotations", testQuickEditAnnotations],
+    ["native alpha outputs and export", testNativeAlphaOutputs],
     ["alpha recut edit outputs", testAlphaRecutEditOutputs],
     ["edit elements scripts", testEditElementsScripts]
   ]) {
@@ -3598,6 +3602,84 @@ async function testQuickEditAnnotations() {
   }
 }
 
+async function testNativeAlphaOutputs() {
+  const previous = process.env.CODEX_CANVAS_TEST_HELPERS;
+  process.env.CODEX_CANVAS_TEST_HELPERS = "1";
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "codex-canvas-native-alpha-"));
+  try {
+    const png = new PNG({ width: 12, height: 10 });
+    // Connected magenta foreground plus fine and translucent edges must survive.
+    png.data.set([255, 0, 255, 255], (5 * 12 + 5) * 4);
+    png.data.set([255, 0, 255, 128], (5 * 12 + 4) * 4);
+    png.data.set([80, 200, 240, 1], (4 * 12 + 4) * 4);
+    const bytes = PNG.sync.write(png);
+    const input = path.join(tmp, "native.png");
+    await fs.writeFile(input, bytes);
+    for (const action of ["remove-bg", "quick-edit", "edit-text"]) {
+      for (const transparencyMode of ["native", "chroma-key"]) {
+        const job = { action, transparentLayerMode: true, transparencyMode,
+          outputDir: path.join(tmp, `${action}-${transparencyMode}`), logPath: path.join(tmp, "test.log") };
+        const output = await prepareImageForCollectionForTest(job, 0, input);
+        assertEqual((await fs.readFile(output)).equals(bytes), true, `${action} must preserve native PNG bytes even in compatibility mode`);
+      }
+      const prompt = promptForAction({ action, outputDir: tmp, transparentLayerMode: true });
+      assertEqual(prompt.includes("transparent_background: true"), true, `${action} must use schema-checked native transparency`);
+      assertEqual(prompt.includes("perfectly flat solid #ff00ff"), false, `${action} must not request a key by default`);
+    }
+    const grayBytes = PNG.sync.write(png, { colorType: 4 });
+    const grayPath = path.join(tmp, "gray-alpha.png");
+    await fs.writeFile(grayPath, grayBytes);
+    const grayOutput = await prepareImageForCollectionForTest({ action: "remove-bg", outputDir: path.join(tmp, "gray"), logPath: path.join(tmp, "test.log") }, 0, grayPath);
+    const normalized = await fs.readFile(grayOutput);
+    assertEqual(normalized[25], 6, "grayscale alpha should normalize to RGBA");
+    assertEqual(PNG.sync.read(normalized).data.equals(PNG.sync.read(grayBytes).data), true, "normalization must preserve decoded RGBA");
+    const malformedPath = path.join(tmp, "malformed.png");
+    await fs.writeFile(malformedPath, "not a PNG");
+    await assertRejectsAsync(() => prepareImageForCollectionForTest({ action: "remove-bg" }, 0, malformedPath), /valid PNG/, "malformed PNG must fail");
+    const sessionPrompt = promptForAction({ action: "edit-text-session", outputDir: tmp, transparentLayerMode: true });
+    assertEqual(sessionPrompt.includes("transparent_background: true"), true, "Edit Text sessions must preserve native alpha");
+    const fallbackPrompt = promptForAction({ action: "remove-bg", outputDir: tmp, transparencyMode: "chroma-key" });
+    assertEqual(fallbackPrompt.includes("explicitly enabled"), true, "legacy generation must be explicit");
+    const invalid = new PNG({ width: 12, height: 10 });
+    const job = { action: "remove-bg", outputDir: path.join(tmp, "invalid"), logPath: path.join(tmp, "test.log") };
+    for (const fixture of ["empty", "checkerboard", "white", "magenta"]) {
+      for (let y = 0; y < invalid.height; y++) for (let x = 0; x < invalid.width; x++) {
+        const gray = fixture === "checkerboard" && (x + y) % 2 ? 180 : 255;
+        invalid.data.set(fixture === "magenta" ? [255, 0, 255, 255] : [gray, gray, gray, fixture === "empty" ? 0 : 255], (y * invalid.width + x) * 4);
+      }
+      const file = path.join(tmp, `${fixture}.png`);
+      await fs.writeFile(file, PNG.sync.write(invalid));
+      await assertRejectsAsync(() => prepareImageForCollectionForTest(job, 0, file), /opaque|empty/, `${fixture} must not count as a native cutout`);
+      if (["checkerboard", "white"].includes(fixture)) {
+        await assertRejectsAsync(() => prepareImageForCollectionForTest({ ...job, transparencyMode: "chroma-key" }, 0, file), /uniform #ff00ff border/, "legacy mode must not key arbitrary opaque backgrounds");
+      }
+    }
+    const imported = await addImage(tmp, { path: input });
+    assertEqual((await fs.readFile(imported.assetPath)).equals(bytes), true, "canvas import must preserve PNG bytes");
+    await updateObject(tmp, imported.id, { layerGroupId: "alpha-test", layerGroupIndex: 0, x: 0, y: 0, width: 12, height: 10 });
+    const psd = await exportLayerGroupPsd(tmp, "alpha-test");
+    initializeCanvas(() => { throw new Error("Unexpected canvas allocation"); }, (width, height) => ({ width, height, data: new Uint8ClampedArray(width * height * 4) }));
+    const decoded = readPsd(psd.buffer, { useImageData: true, skipCompositeImageData: true });
+    assertEqual(Buffer.from(decoded.children[0].imageData.data).equals(png.data), true, "PSD export must preserve all RGBA pixels");
+    const server = await createServer({ projectDir: tmp, port: 0, autoCollect: false });
+    try {
+      const downloaded = await fetch(new URL(imported.src, server.url));
+      assertEqual(Buffer.from(await downloaded.arrayBuffer()).equals(bytes), true, "preview and PNG download endpoint must preserve bytes");
+    } finally { await new Promise((resolve) => server.server.close(resolve)); }
+  } finally {
+    if (previous === undefined) delete process.env.CODEX_CANVAS_TEST_HELPERS;
+    else process.env.CODEX_CANVAS_TEST_HELPERS = previous;
+  }
+}
+
+async function assertRejectsAsync(fn, pattern, label) {
+  try { await fn(); } catch (error) {
+    if (pattern.test(error.message)) return;
+    throw error;
+  }
+  throw new Error(label);
+}
+
 async function testAlphaRecutEditOutputs() {
   const deps = await checkImageProcessingDepsAvailable();
   if (!deps.available) {
@@ -3633,6 +3715,7 @@ async function testAlphaRecutEditOutputs() {
     const generatedPath = path.join(tmp, "generated-chroma.png");
     const quickOutput = await prepareImageForCollectionForTest({
       action: "quick-edit",
+      transparencyMode: "chroma-key",
       imagePath: path.join(tmp, "transparent-source.png"),
       sourceImagePath: path.join(tmp, "transparent-source.png"),
       outputDir: path.join(tmp, "quick-edit-output"),
@@ -3645,6 +3728,7 @@ async function testAlphaRecutEditOutputs() {
 
     const editTextOutput = await prepareImageForCollectionForTest({
       action: "edit-text",
+      transparencyMode: "chroma-key",
       imagePath: path.join(tmp, "transparent-source.png"),
       sourceImagePath: path.join(tmp, "transparent-source.png"),
       outputDir: path.join(tmp, "edit-text-output"),
@@ -3657,6 +3741,7 @@ async function testAlphaRecutEditOutputs() {
 
     const normalOutput = await prepareImageForCollectionForTest({
       action: "quick-edit",
+      transparencyMode: "chroma-key",
       imagePath: path.join(tmp, "opaque-source.png"),
       sourceImagePath: path.join(tmp, "opaque-source.png"),
       outputDir: path.join(tmp, "normal-output"),
@@ -3667,6 +3752,7 @@ async function testAlphaRecutEditOutputs() {
 
     const removeBgOutput = await prepareImageForCollectionForTest({
       action: "remove-bg",
+      transparencyMode: "chroma-key",
       imagePath: path.join(tmp, "opaque-source.png"),
       sourceImagePath: path.join(tmp, "opaque-source.png"),
       outputDir: path.join(tmp, "remove-bg-output"),
