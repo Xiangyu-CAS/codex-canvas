@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import crossSpawn from "cross-spawn";
+import { pluginRoot } from "./paths.mjs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -23,12 +24,21 @@ export async function resolveCodexExecutable() {
   throw error;
 }
 
-export async function startCodexImageJob({ projectDir, action, imagePath, outputDir, logPath, prompt: userPrompt, transparentLayerMode = false }) {
+export async function startCodexImageJob({ projectDir, action, imagePath, outputDir, logPath, prompt: userPrompt, transparentLayerMode = false, transparencyMode = "native" }) {
   const executable = await resolveCodexExecutable();
   await fs.mkdir(outputDir, { recursive: true });
   await fs.mkdir(path.dirname(logPath), { recursive: true });
 
-  const prompt = promptForAction({ action, outputDir, userPrompt, transparentLayerMode });
+  const operationSkill = {
+    "remove-bg": "canvas-remove-bg",
+    "quick-edit": "canvas-quick-edit",
+    "edit-text": "canvas-edit-text",
+    "edit-text-session": "canvas-edit-text"
+  }[action];
+  const skillInstruction = operationSkill
+    ? `Read the operation skill shipped with this running plugin: ${path.join(pluginRoot, "skills", operationSkill, "SKILL.md")}.\n`
+    : "";
+  const prompt = skillInstruction + promptForAction({ action, outputDir, userPrompt, transparentLayerMode, transparencyMode });
   const model = process.env.CODEX_CANVAS_CODEX_MODEL;
   const requestedReasoningEffort = process.env.CODEX_CANVAS_CODEX_REASONING_EFFORT || "low";
   const reasoningEffort = requestedReasoningEffort === "minimal" ? "low" : requestedReasoningEffort;
@@ -161,7 +171,9 @@ function platformBundledCandidates() {
   if (process.platform === "darwin") {
     return [
       "/Applications/Codex.app/Contents/Resources/codex",
-      path.join(os.homedir(), "Applications", "Codex.app", "Contents", "Resources", "codex")
+      path.join(os.homedir(), "Applications", "Codex.app", "Contents", "Resources", "codex"),
+      "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
+      path.join(os.homedir(), "Applications", "ChatGPT.app", "Contents", "Resources", "codex-cli", "bin", "codex")
     ];
   }
 
@@ -199,20 +211,30 @@ async function isExecutable(filePath) {
   }
 }
 
-function transparentLayerChromaInstructions() {
+function transparencyInstructions(transparencyMode) {
+  if (transparencyMode === "chroma-key") {
+    return [
+      "Legacy chroma-key compatibility mode was explicitly enabled for this job.",
+      "Use a perfectly flat solid #ff00ff background with generous padding and no shadows, texture, or gradients.",
+      "Preserve subject colors. If the subject contains magenta or translucent material that cannot be preserved by this key, stop and report that native transparency is required; do not recolor the subject.",
+      "Codex-Canvas will verify the key background before local alpha conversion."
+    ].join("\n");
+  }
   return [
-    "The source image is a transparent layer. The edited content may have a different silhouette than the source.",
-    "Render the edited layer on a perfectly flat solid #ff00ff chroma-key background, not on white, checkerboard, gray, transparent-preview, or scene background.",
-    "Do not use #ff00ff anywhere in the edited layer content.",
-    "Codex-Canvas will remove the chroma-key background locally and create the final alpha channel after generation."
+    "Generate a PNG with a genuinely transparent background and preserve all subject colors, fine edges, and partial opacity.",
+    "Inspect the actual built-in imagegen tool schema. When it exposes the boolean transparent_background argument, set transparent_background: true. Do not invent a transparent or background argument.",
+    "If the tool lacks native transparency support, stop and report the limitation; do not silently switch to chroma key or a paid API.",
+    "Do not render a checkerboard, white backdrop, or colored matte. Codex-Canvas verifies real PNG alpha pixels and preserves native alpha without chroma removal or despill."
   ].join("\n");
 }
 
-function maybeTransparentLayerChromaInstruction(transparentLayerMode) {
-  return transparentLayerMode ? transparentLayerChromaInstructions() : "";
+function maybeTransparentLayerInstruction(transparentLayerMode, transparencyMode) {
+  return transparentLayerMode
+    ? "The source is a transparent layer; the edited silhouette may change.\n" + transparencyInstructions(transparencyMode)
+    : "";
 }
 
-function promptForAction({ action, outputDir, userPrompt, transparentLayerMode = false }) {
+export function promptForAction({ action, outputDir, userPrompt, transparentLayerMode = false, transparencyMode = "native" }) {
   if (action === "recognize-text") {
     const textInventoryPath = path.join(outputDir, "recognized-text.json");
     return [
@@ -255,7 +277,7 @@ function promptForAction({ action, outputDir, userPrompt, transparentLayerMode =
       "Step 3: after the edit plan file exists, read it and call imagegen exactly once to create the revised image.",
       "Preserve non-text content, composition, aspect ratio, colors, perspective, typography style, and design intent.",
       "Only change text requested by the edit plan. Keep unchanged recognized text as-is.",
-      maybeTransparentLayerChromaInstruction(transparentLayerMode),
+      maybeTransparentLayerInstruction(transparentLayerMode, transparencyMode),
       "Treat this as an image edit, not a new unrelated generation.",
       "",
       `Save or copy the final image into this exact directory: ${outputDir}`,
@@ -279,7 +301,7 @@ function promptForAction({ action, outputDir, userPrompt, transparentLayerMode =
       "When two images are attached, image 1 is the clean source and image 2 is the annotation board. Use image 1 as the visual base and image 2 only to locate and interpret the requested changes.",
       "Call imagegen exactly once to create one revised clean image.",
       "Preserve the source image's important subject identity, composition, aspect ratio, visible text, and design intent unless the edit explicitly says to change them.",
-      maybeTransparentLayerChromaInstruction(transparentLayerMode),
+      maybeTransparentLayerInstruction(transparentLayerMode, transparencyMode),
       "Treat this as an image edit, not a new unrelated generation.",
       "",
       `Save or copy the final image into this exact directory: ${outputDir}`,
@@ -329,7 +351,7 @@ function promptForAction({ action, outputDir, userPrompt, transparentLayerMode =
       "Call imagegen exactly once to create a revised image with the requested text changes.",
       "Preserve non-text content, composition, aspect ratio, colors, perspective, typography style, and design intent.",
       "Only change text requested by the edit instruction. Keep unchanged visible text as-is.",
-      maybeTransparentLayerChromaInstruction(transparentLayerMode),
+      maybeTransparentLayerInstruction(transparentLayerMode, transparencyMode),
       "Treat this as an image edit, not a new unrelated generation.",
       "",
       `Save or copy the final image into this exact directory: ${outputDir}`,
@@ -400,13 +422,10 @@ function promptForAction({ action, outputDir, userPrompt, transparentLayerMode =
     "Preserve only the primary foreground subject, its proportions, and visual quality as much as possible.",
     "Do not preserve or recreate readable text, captions, labels, logos, watermarks, UI text, or decorative typography; the cutout should contain the subject only, without text.",
     "Use the default built-in image generation/editing path.",
-    "Generate the foreground subject on a perfectly flat solid #ff00ff chroma-key background.",
-    "The background must be one uniform #ff00ff color with no shadows, gradients, texture, reflections, floor plane, or lighting variation.",
-    "Do not use #ff00ff anywhere in the subject. Keep the subject fully separated from the background with crisp edges, no cast shadow, no contact shadow, no reflection, and generous padding.",
-    "Codex-Canvas will remove the chroma key locally and verify the final PNG alpha channel before collecting it.",
+    transparencyInstructions(transparencyMode),
     "",
     `Save or copy the final image into this exact directory: ${outputDir}`,
-    "Use a descriptive filename ending in .png, such as remove-bg-chroma-source.png.",
+    "Use a descriptive filename ending in .png, such as remove-bg.png.",
     "As soon as the generated PNG exists, copy it into the output directory and finish.",
     "Do not modify source files outside that output directory.",
     "Do not ask follow-up questions. Do not perform extra visual QA unless generation clearly failed.",

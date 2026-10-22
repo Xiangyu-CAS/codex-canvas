@@ -13,11 +13,11 @@ Use this skill when the user invokes Remove BG from Codex-Canvas or asks to isol
 2. Preserve only the primary foreground subject, proportions, and visual quality.
 3. Remove the background only; do not redesign, restyle, crop, or replace the subject.
 4. Do not preserve or recreate readable text, captions, labels, logos, watermarks, UI text, or decorative typography. The cutout should contain the subject only, without text.
-5. Use imagegen once to place the foreground subject on a perfectly flat solid `#ff00ff` chroma-key background.
-6. The chroma-key background must be one uniform color with no shadows, gradients, texture, reflections, floor plane, or lighting variation.
-7. Do not use `#ff00ff` anywhere in the subject.
-8. Keep crisp foreground edges, no cast shadow, no contact shadow, no reflection, and enough padding for reliable alpha conversion.
-9. Save the generated chroma-key PNG under the Codex-Canvas job output directory.
-10. Codex-Canvas will remove the chroma key locally using its bundled chroma-key helper with soft matte and despill, verify the RGBA alpha PNG, collect it, and place it in a row to the right of the source image.
+5. Default to native transparent PNG generation. Inspect the actual built-in imagegen schema: if it exposes `transparent_background` (boolean), set `transparent_background: true`. Never guess a `transparent` or `background` tool argument.
+6. Preserve all subject colors (including magenta), fine edges, and partial opacity. Do not draw a checkerboard, white background, or colored matte.
+7. Save/copy the generated PNG under the job output directory. Codex-Canvas validates decoded alpha pixels, rejects opaque or empty results, and preserves native RGBA PNGs byte-for-byte.
+8. If native transparency is unavailable, report the limitation. Do not switch to a paid API or silently key an opaque output.
+9. Only when the job explicitly selects compatibility mode (`CODEX_CANVAS_TRANSPARENCY_MODE=chroma-key` on the canvas server), generate on a uniform `#ff00ff` background with generous padding and no shadows or gradients. If magenta subject colors or translucent material conflict with this key, stop instead of recoloring the subject. Codex-Canvas verifies the border before conversion; valid native alpha always bypasses keying even in this mode.
+10. The verified transparent result replaces the placeholder in a row to the right of the source image.
 
 Do not ask follow-up questions from a background Remove BG job. Make the most reasonable subject isolation from the selected image.

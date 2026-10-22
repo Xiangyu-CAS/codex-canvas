@@ -22,7 +22,7 @@ const outputPollMs = 1000;
 const jobTimeoutMs = 5 * 60_000;
 const backgroundCompletionTimeoutMs = 5 * 60_000;
 const chromaKeyColor = "#ff00ff";
-const transparentLayerChromaActions = new Set(["quick-edit", "edit-text"]);
+const transparentLayerActions = new Set(["quick-edit", "edit-text"]);
 const quickEditAnnotationPromptSuffix = [
   "",
   "Attached image 1 is the clean source image and is the authoritative visual base for the edit.",
@@ -70,7 +70,7 @@ export async function createImageJob(projectDir, input, options = {}) {
   const expandOptions = action === "expand"
     ? normalizeExpandOptions(input.expand || input.options || {}, object)
     : null;
-  const transparentLayerMode = transparentLayerChromaActions.has(action)
+  const transparentLayerMode = transparentLayerActions.has(action)
     ? await hasTransparentPixels(imagePath)
     : false;
 
@@ -92,6 +92,7 @@ export async function createImageJob(projectDir, input, options = {}) {
     expandOptions,
     expandInputPath: null,
     transparentLayerMode,
+    transparencyMode: configuredTransparencyMode(),
     quickEditAnnotations,
     annotationSessionId,
     annotatedImagePath: null,
@@ -170,6 +171,7 @@ export async function createTextRecognitionJob(projectDir, input, options = {}) 
     sourceObjectId: object.id,
     imagePath,
     transparentLayerMode: await hasTransparentPixels(imagePath),
+    transparencyMode: configuredTransparencyMode(),
     outputDir,
     logPath,
     textInventoryPath: path.join(outputDir, "recognized-text.json"),
@@ -356,7 +358,8 @@ async function runJob(projectDir, job, startedAtMs) {
     outputDir: job.outputDir,
     logPath: job.logPath,
     prompt: codexInput.prompt,
-    transparentLayerMode: job.transparentLayerMode
+    transparentLayerMode: job.transparentLayerMode,
+    transparencyMode: job.transparencyMode
   });
   job.imagegenPrompt = codexJob.prompt;
 
@@ -426,7 +429,8 @@ async function runTextRecognitionJob(projectDir, job, startedAtMs) {
     outputDir: job.outputDir,
     logPath: job.logPath,
     prompt: "",
-    transparentLayerMode: job.transparentLayerMode
+    transparentLayerMode: job.transparentLayerMode,
+    transparencyMode: job.transparencyMode
   });
   job.imagegenPrompt = codexJob.prompt;
 
@@ -518,7 +522,8 @@ async function runStandaloneTextEditGeneration(projectDir, job, startedAtMs, edi
     outputDir: job.outputDir,
     logPath: job.logPath,
     prompt: job.prompt,
-    transparentLayerMode: job.transparentLayerMode
+    transparentLayerMode: job.transparentLayerMode,
+    transparencyMode: job.transparencyMode
   });
   job.imagegenPrompt = codexJob.prompt;
 
@@ -1169,37 +1174,70 @@ async function prepareImageForCollection(job, startedAtMs, detectedImagePath) {
   if (job.action === "edit-elements") {
     return splitElementLayers(job, imagePath);
   }
-  if (transparentLayerChromaActions.has(job.action) && job.transparentLayerMode) {
-    return recutTransparentLayerFromChroma(job, imagePath);
+  if (job.action === "remove-bg" || (transparentLayerActions.has(job.action) && job.transparentLayerMode)) {
+    return prepareTransparentOutput(job, imagePath);
   }
-  if (job.action !== "remove-bg") return imagePath;
-
-  const alphaDir = path.join(job.outputDir, "alpha");
-  const alphaPath = path.join(alphaDir, "remove-bg-alpha.png");
-  await fs.mkdir(alphaDir, { recursive: true });
-  if (await isPngRgba(imagePath) && await hasTransparentPixels(imagePath)) {
-    await fs.copyFile(imagePath, alphaPath);
-  } else {
-    await appendJobLog(job, `Converting Remove BG result to RGBA alpha PNG: ${imagePath}`);
-    await removeChromaKey(imagePath, alphaPath, { edgeContract: 1 });
-  }
-  if (!await isPngRgba(alphaPath)) {
-    throw new Error("Remove BG did not produce a four-channel RGBA PNG.");
-  }
-  await appendJobLog(job, `Remove BG alpha verified: ${alphaPath}`);
-  return alphaPath;
+  return imagePath;
 }
 
-async function recutTransparentLayerFromChroma(job, imagePath) {
+function configuredTransparencyMode() {
+  return process.env.CODEX_CANVAS_TRANSPARENCY_MODE === "chroma-key" ? "chroma-key" : "native";
+}
+
+async function prepareTransparentOutput(job, imagePath) {
+  let png;
+  try {
+    png = PNG.sync.read(await fs.readFile(imagePath));
+  } catch {
+    throw new Error(`${actionLabel(job.action)} requires a valid PNG with real alpha transparency.`);
+  }
+  const alpha = alphaCounts(png);
+  if (alpha.visible === 0) throw new Error("Transparent output is empty; no visible foreground pixels.");
   const alphaDir = path.join(job.outputDir, "alpha");
   const alphaPath = path.join(alphaDir, `${job.action}-alpha.png`);
   await fs.mkdir(alphaDir, { recursive: true });
-  await removeChromaKey(imagePath, alphaPath);
-  if (!await isPngRgba(alphaPath)) {
-    throw new Error(`${actionLabel(job.action)} transparent layer recut did not produce a four-channel RGBA PNG.`);
+  if (alpha.transparent > 0) {
+    // Preserve RGBA output byte-for-byte. Normalize other valid PNG alpha forms
+    // (grayscale/palette + tRNS) without changing decoded RGBA pixels.
+    if (await isPngRgba(imagePath)) await fs.copyFile(imagePath, alphaPath);
+    else await fs.writeFile(alphaPath, PNG.sync.write(png));
+    await appendJobLog(job, `${actionLabel(job.action)} native alpha preserved: ${alphaPath}`);
+    return alphaPath;
   }
-  await appendJobLog(job, `${actionLabel(job.action)} transparent layer alpha recut from chroma key: ${alphaPath}`);
+  if (job.transparencyMode !== "chroma-key") {
+    throw new Error("Generated PNG is opaque (a painted checkerboard is not transparency). Native alpha is required. For an older tool, explicitly enable CODEX_CANVAS_TRANSPARENCY_MODE=chroma-key and retry only with a compatible subject.");
+  }
+  // Never infer a key from arbitrary scene/white/checkerboard border colors.
+  let border = 0;
+  let keyed = 0;
+  for (let y = 0; y < png.height; y++) {
+    for (let x = 0; x < png.width; x++) {
+      if (x !== 0 && y !== 0 && x !== png.width - 1 && y !== png.height - 1) continue;
+      const i = (y * png.width + x) * 4;
+      border++;
+      if (png.data[i] >= 243 && png.data[i + 1] <= 12 && png.data[i + 2] >= 243) keyed++;
+    }
+  }
+  if (!border || keyed / border < 0.95) {
+    throw new Error("Legacy alpha conversion requires a uniform #ff00ff border; refusing to infer a background key.");
+  }
+  await removeChromaKey(imagePath, alphaPath, job.action === "remove-bg" ? { edgeContract: 1 } : {});
+  const result = alphaCounts(PNG.sync.read(await fs.readFile(alphaPath)));
+  if (!await isPngRgba(alphaPath) || !result.transparent || !result.visible) {
+    throw new Error("Legacy alpha conversion did not produce a visible foreground with real transparency.");
+  }
+  await appendJobLog(job, `${actionLabel(job.action)} explicit legacy chroma-key alpha verified: ${alphaPath}`);
   return alphaPath;
+}
+
+function alphaCounts(png) {
+  let transparent = 0;
+  let visible = 0;
+  for (let i = 3; i < png.data.length; i += 4) {
+    if (png.data[i] < 255) transparent++;
+    if (png.data[i] > 0) visible++;
+  }
+  return { transparent, visible };
 }
 
 async function splitElementLayers(job, segmentationPath) {
@@ -1447,7 +1485,6 @@ async function hasTransparentPixels(filePath) {
   try {
     const buffer = await fs.readFile(filePath);
     if (buffer.length < 26 || buffer.toString("ascii", 1, 4) !== "PNG") return false;
-    if (buffer[25] !== 4 && buffer[25] !== 6) return false;
     const png = PNG.sync.read(buffer);
     for (let index = 3; index < png.data.length; index += 4) {
       if (png.data[index] < 255) return true;
@@ -1466,7 +1503,7 @@ async function removeChromaKey(inputPath, outputPath, options = {}) {
     "--input", inputPath,
     "--out", outputPath,
     "--key-color", chromaKeyColor,
-    "--auto-key", "border",
+    "--auto-key", "none",
     "--force",
     "--soft-matte",
     "--transparent-threshold", "12",

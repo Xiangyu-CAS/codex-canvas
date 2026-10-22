@@ -68,3 +68,7 @@ AI 图片操作必须使用稳定的 Codex-Canvas action id 和后端 job。不�
 ## 插件兼容
 
 不要要求 `.codex-plugin/plugin.json` 指向这个根 Skill。Skill 负责发现、bootstrap 和故障恢复；正式使用由 personal marketplace 安装的插件负责。插件安装路径继续暴露现有 `skills/` 目录和 MCP server 配置。
+
+## 原生透明前景
+
+前景生成或抠图默认使用原生 PNG alpha。先检查本会话 imagegen 的真实 schema；暴露 `transparent_background` 布尔参数时设为 `true`，不要猜测 `transparent` 参数。保留主体洋红色、细边缘与半透明材质，不绘制棋盘格或色底。无原生透明支持时明确报告限制；只有服务器显式选择 `CODEX_CANVAS_TRANSPARENCY_MODE=chroma-key` 的兼容作业才使用色键流程。导入前验证真实 alpha，不能把不透明棋盘格视为成功。兼容模式边界见 `skills/canvas-remove-bg/SKILL.md`。
