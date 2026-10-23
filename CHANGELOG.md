@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/Xiangyu-CAS/codex-canvas/compare/v0.4.1...v0.4.2) (2026-10-23)
+
+
+### Bug Fixes
+
+* reuse verified Python runtimes in background image jobs ([#16](https://github.com/Xiangyu-CAS/codex-canvas/issues/16)) ([6b52075](https://github.com/Xiangyu-CAS/codex-canvas/commit/6b52075146fc531211ae343baaaaffed19f9d274))
+
 ## [0.4.1](https://github.com/Xiangyu-CAS/codex-canvas/compare/v0.4.0...v0.4.1) (2026-10-22)
 
 
