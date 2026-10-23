@@ -32,7 +32,7 @@ try {
   if (installedPackage.version !== packageJson.version || installedPlugin.version !== packageJson.version) {
     throw new Error("Installed release archive version does not match package.json.");
   }
-  for (const sourceOnlyScript of ["install:dev-cache", "smoke", "smoke:visual", "visual:regression", "verify:release", "verify:archive", "build:release", "test"]) {
+  for (const sourceOnlyScript of ["install:dev-cache", "smoke", "smoke:visual", "visual:regression", "verify:release", "verify:archive", "build:release", "test", "test:python"]) {
     if (installedPackage.scripts?.[sourceOnlyScript]) {
       throw new Error(`Installed release archive exposes source-only npm script: ${sourceOnlyScript}`);
     }

@@ -60,8 +60,9 @@
     "verify:release": "node ./scripts/verify-release.mjs",
     "verify:archive": "node ./scripts/verify-release-archive.mjs",
     "build:release": "node ./scripts/build-release.mjs",
-    "test": "npm run smoke && npm run test:app",
+    "test": "npm run smoke && npm run test:app && npm run test:python",
     "build:app": "node scripts/build-app.mjs",
+    "test:python": "node --test scripts/python-runtime.test.mjs",
     "test:app": "node --test scripts/mcp-app.test.mjs",
     "smoke:app": "node scripts/visual-app-smoke.mjs"
   },

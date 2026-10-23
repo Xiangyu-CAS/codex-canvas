@@ -5,6 +5,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { promisify } from "node:util";
 import { PNG } from "pngjs";
+import { pythonCandidates } from "./python-runtime.mjs";
 import { collectRecentImages } from "./collector.mjs";
 import { jobsDirFor, pluginRoot } from "./paths.mjs";
 import { addJobPlaceholder, deleteObject, readState, transformState, updateObject } from "./store.mjs";
@@ -1517,9 +1518,7 @@ async function removeChromaKey(inputPath, outputPath, options = {}) {
 }
 
 async function runPython(args, options = {}) {
-  const candidates = process.platform === "win32"
-    ? [["py", ["-3", ...args]], ["python", args], ["python3", args]]
-    : [["python3", args], ["python", args]];
+  const candidates = await pythonCandidates(args);
   const errors = [];
   for (const [command, commandArgs] of candidates) {
     try {

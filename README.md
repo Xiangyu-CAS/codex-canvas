@@ -142,3 +142,9 @@ Related docs:
 ## Credits
 
 Thanks to [Cowart](https://github.com/zhongerxin/Cowart) for the canvas concept.
+
+### Python runtime troubleshooting
+
+If image post-processing reports `spawn … ENOENT` despite Python working in a terminal, run `npm run setup:image-deps` from the plugin source in that working environment. Once dependencies are verified, setup remembers the absolute Python executable for subsequent jobs, including jobs in an already running service with an older PATH. OCR setup stores its own interpreter. `doctor:*` remains read-only and reports `pythonExecutable`; a missing or broken saved interpreter falls back to PATH candidates.
+
+Set `CODEX_CANVAS_PYTHON` to an executable path (without arguments) to explicitly choose an interpreter for setup or the service. This override is authoritative. Records live in `~/.agents/codex-canvas/python/`; `CODEX_CANVAS_PYTHON_CONFIG_DIR` can override that directory and must match between setup and the service. No job installs Python or dependencies automatically. Services running older plugin code must first be restarted with the fix; a service with an incorrect explicit override also requires an environment correction and restart. See [installation troubleshooting](INSTALL.md) for examples.

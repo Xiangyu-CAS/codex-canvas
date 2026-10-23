@@ -119,6 +119,25 @@ npm run doctor:image-deps
 npm run setup:image-deps
 ```
 
+### Python 已安装，但画布仍报 ENOENT
+
+`setup:image-deps` / `setup:ocr`（以及 `setup:deps`）在验证依赖可用后，会分别把 Python 的实际绝对路径记到 `~/.agents/codex-canvas/python/`。图片后处理和 OCR 在每次操作时重新读取各自的记录，避免已运行服务的旧 PATH 导致再次找不到 Python。`doctor:*` 只检查，不写记录。已删除或无效的记录会回退到 PATH 中的候选解释器。
+
+如需选定解释器，在运行 setup 时设置 `CODEX_CANVAS_PYTHON` 为 Python 可执行文件的路径（不要包含命令行参数）。例如：
+
+```powershell
+# Windows PowerShell：先获取已安装的 Python 3 的实际位置
+$env:CODEX_CANVAS_PYTHON = py -3 -c "import sys; print(sys.executable)"
+npm run setup:image-deps
+```
+
+```bash
+# macOS / Linux：使用你已验证可用的 Python
+CODEX_CANVAS_PYTHON="$(python3 -c 'import sys; print(sys.executable)')" npm run setup:image-deps
+```
+
+显式 `CODEX_CANVAS_PYTHON` 优先于保存记录和 PATH；配置错误会报错，不会悄悄换用其他解释器。可以用 `CODEX_CANVAS_PYTHON_CONFIG_DIR` 指定其他记录目录，但 setup 与服务必须使用同一目录。不会自动安装 Python，也不会在图片任务中运行 pip；依赖仍须通过 setup 显式安装。旧版服务需要先加载包含此修复的代码，之后的 setup 才能帮助运行中的服务。若服务自身显式配置了错误的 Python，需要修改它的环境并重启。保存在临时目录、已删除的虚拟环境或缺少依赖的解释器仍可能不可用。
+
 ## 安装器行为
 
 `npm run install:personal` 写入的插件条目形如：
