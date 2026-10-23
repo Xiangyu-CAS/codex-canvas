@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import { promisify } from "node:util";
+import { pythonCandidates } from "./python-runtime.mjs";
 
 const execFileAsync = promisify(execFile);
 const ocrTimeoutMs = 25_000;
@@ -120,7 +121,7 @@ except Exception as exc:
 `;
 
   const errors = [];
-  for (const [command, args] of pythonCandidates(["-c", script, imagePath])) {
+  for (const [command, args] of await pythonCandidates(["-c", script, imagePath], "ocr")) {
     try {
       const { stdout } = await execFileAsync(command, args, {
         windowsHide: true,
@@ -128,6 +129,10 @@ except Exception as exc:
         maxBuffer: 1024 * 1024
       });
       const parsed = JSON.parse(stdout.trim() || "{}");
+      if (parsed.backend === "none") {
+        errors.push(`${command}: ${parsed.error || "RapidOCR is unavailable"}`);
+        continue;
+      }
       return {
         backend: parsed.backend || command,
         items: Array.isArray(parsed.items) ? parsed.items : [],
@@ -138,12 +143,6 @@ except Exception as exc:
     }
   }
   return { backend: "none", items: [], error: errors.join(" | ") };
-}
-
-function pythonCandidates(args) {
-  return process.platform === "win32"
-    ? [["py", ["-3", ...args]], ["python", args], ["python3", args]]
-    : [["python3", args], ["python", args]];
 }
 
 function normalizeItem(item) {

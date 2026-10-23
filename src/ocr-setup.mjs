@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { pythonCandidates, rememberPythonRuntime } from "./python-runtime.mjs";
 
 const execFileAsync = promisify(execFile);
 const defaultPackageName = "rapidocr_onnxruntime";
@@ -13,7 +14,7 @@ import sys
 for name in ("rapidocr_onnxruntime", "rapidocr"):
     try:
         module = __import__(name)
-        print(json.dumps({"available": True, "backend": name, "version": getattr(module, "__version__", None)}))
+        print(json.dumps({"available": True, "backend": name, "version": getattr(module, "__version__", None), "pythonExecutable": sys.executable}))
         sys.exit(0)
     except Exception:
         pass
@@ -22,7 +23,8 @@ print(json.dumps({"available": False, "backend": None, "version": None}))
 `;
 
   const errors = [];
-  for (const [command, args] of pythonCandidates(["-c", script])) {
+  let unavailable;
+  for (const [command, args] of await pythonCandidates(["-c", script], "ocr")) {
     try {
       const { stdout } = await execFileAsync(command, args, {
         windowsHide: true,
@@ -30,19 +32,22 @@ print(json.dumps({"available": False, "backend": None, "version": None}))
         maxBuffer: 1024 * 1024
       });
       const result = JSON.parse(stdout.trim() || "{}");
-      return {
+      const status = {
         available: result.available === true,
         backend: result.backend || null,
         version: result.version || null,
         pythonCommand: command,
+        pythonExecutable: result.pythonExecutable || null,
         pythonArgs: args.slice(0, args.length - 2)
       };
+      if (status.available) return status;
+      unavailable ||= status;
     } catch (error) {
       errors.push(`${command}: ${error.message}`);
     }
   }
 
-  return {
+  return unavailable || {
     available: false,
     backend: null,
     version: null,
@@ -64,6 +69,7 @@ export async function installRapidOcr({ optional = false } = {}) {
 
   const existing = await checkRapidOcrAvailable();
   if (existing.available) {
+    await rememberPythonRuntime(existing, "ocr");
     return {
       installed: false,
       skipped: true,
@@ -71,13 +77,14 @@ export async function installRapidOcr({ optional = false } = {}) {
       backend: existing.backend,
       version: existing.version,
       pythonCommand: existing.pythonCommand,
+      pythonExecutable: existing.pythonExecutable,
       message: `${existing.backend} is already installed.`
     };
   }
 
   const packageName = process.env.CODEX_CANVAS_OCR_PACKAGE || defaultPackageName;
   const errors = [];
-  for (const [command, baseArgs] of pythonCandidates([])) {
+  for (const [command, baseArgs] of await pythonCandidates([], "ocr")) {
     const args = [...baseArgs, "-m", "pip", "install", "--user", packageName];
     try {
       await execFileAsync(command, args, {
@@ -87,6 +94,7 @@ export async function installRapidOcr({ optional = false } = {}) {
       });
       const installed = await checkRapidOcrAvailable();
       if (installed.available) {
+        await rememberPythonRuntime(installed, "ocr");
         return {
           installed: true,
           skipped: false,
@@ -94,6 +102,7 @@ export async function installRapidOcr({ optional = false } = {}) {
           backend: installed.backend,
           version: installed.version,
           pythonCommand: installed.pythonCommand,
+          pythonExecutable: installed.pythonExecutable,
           message: `${installed.backend} installed successfully.`
         };
       }
@@ -121,7 +130,7 @@ export async function checkImageProcessingDepsAvailable() {
 import json
 import sys
 
-result = {"available": True, "missing": [], "versions": {}}
+result = {"available": True, "missing": [], "versions": {}, "pythonExecutable": sys.executable}
 for module_name, package_name in (("PIL", "Pillow"), ("numpy", "numpy")):
     try:
         module = __import__(module_name)
@@ -133,7 +142,8 @@ print(json.dumps(result))
 `;
 
   const errors = [];
-  for (const [command, args] of pythonCandidates(["-c", script])) {
+  let unavailable;
+  for (const [command, args] of await pythonCandidates(["-c", script], "image-processing")) {
     try {
       const { stdout } = await execFileAsync(command, args, {
         windowsHide: true,
@@ -141,19 +151,22 @@ print(json.dumps(result))
         maxBuffer: 1024 * 1024
       });
       const result = JSON.parse(stdout.trim() || "{}");
-      return {
+      const status = {
         available: result.available === true,
         missing: Array.isArray(result.missing) ? result.missing : [],
         versions: result.versions || {},
         pythonCommand: command,
+        pythonExecutable: result.pythonExecutable || null,
         pythonArgs: args.slice(0, args.length - 2)
       };
+      if (status.available) return status;
+      unavailable ||= status;
     } catch (error) {
       errors.push(`${command}: ${error.message}`);
     }
   }
 
-  return {
+  return unavailable || {
     available: false,
     missing: imageProcessingPackages,
     versions: {},
@@ -175,12 +188,14 @@ export async function installImageProcessingDeps({ optional = false } = {}) {
 
   const existing = await checkImageProcessingDepsAvailable();
   if (existing.available) {
+    await rememberPythonRuntime(existing, "image-processing");
     return {
       installed: false,
       skipped: true,
       available: true,
       versions: existing.versions,
       pythonCommand: existing.pythonCommand,
+      pythonExecutable: existing.pythonExecutable,
       message: "Pillow and numpy are already installed."
     };
   }
@@ -190,7 +205,7 @@ export async function installImageProcessingDeps({ optional = false } = {}) {
     .map((item) => item.trim())
     .filter(Boolean);
   const errors = [];
-  for (const [command, baseArgs] of pythonCandidates([])) {
+  for (const [command, baseArgs] of await pythonCandidates([], "image-processing")) {
     const args = [...baseArgs, "-m", "pip", "install", "--user", ...packages];
     try {
       await execFileAsync(command, args, {
@@ -200,12 +215,14 @@ export async function installImageProcessingDeps({ optional = false } = {}) {
       });
       const installed = await checkImageProcessingDepsAvailable();
       if (installed.available) {
+        await rememberPythonRuntime(installed, "image-processing");
         return {
           installed: true,
           skipped: false,
           available: true,
           versions: installed.versions,
           pythonCommand: installed.pythonCommand,
+          pythonExecutable: installed.pythonExecutable,
           message: "Pillow and numpy installed successfully."
         };
       }
@@ -252,10 +269,4 @@ export async function checkOptionalPythonDepsAvailable() {
     ocr,
     imageProcessing
   };
-}
-
-function pythonCandidates(args) {
-  return process.platform === "win32"
-    ? [["py", ["-3", ...args]], ["python", args], ["python3", args]]
-    : [["python3", args], ["python", args]];
 }

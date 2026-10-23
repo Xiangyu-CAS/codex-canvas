@@ -3004,7 +3004,9 @@ async function testDoctorOptionalDepsWithoutPython() {
   const env = {
     ...withoutPathEnv(process.env),
     PATH: emptyPath,
-    CODEX_CANVAS_PROJECT_DIR: tmp
+    CODEX_CANVAS_PROJECT_DIR: tmp,
+    CODEX_CANVAS_PYTHON: "",
+    CODEX_CANVAS_PYTHON_CONFIG_DIR: path.join(tmp, "python-runtime")
   };
   for (const command of ["doctor-ocr", "doctor-image-deps", "doctor-deps", "setup-deps"]) {
     const result = await runCliJson([command, "--json"], { env });
