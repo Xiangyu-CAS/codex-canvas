@@ -195,6 +195,7 @@ async function sanitizeReleasePackageJson(stageDir) {
     "install:dev-cache",
     "build:app",
     "test:app",
+    "test:python",
     "smoke:app",
     "smoke",
     "smoke:visual",
