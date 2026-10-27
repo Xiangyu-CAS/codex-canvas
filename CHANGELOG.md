@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.2](https://github.com/Xiangyu-CAS/codex-canvas/compare/v0.4.1...v0.4.2) (2026-10-27)
+
+
+### Bug Fixes
+
+* dispose Edit Text phase timers and child processes ([#18](https://github.com/Xiangyu-CAS/codex-canvas/issues/18)) ([75f8118](https://github.com/Xiangyu-CAS/codex-canvas/commit/75f811837c4ad72984d89044c3ab94d1e3255d10))
+* reuse verified Python runtimes in background image jobs ([#16](https://github.com/Xiangyu-CAS/codex-canvas/issues/16)) ([6b52075](https://github.com/Xiangyu-CAS/codex-canvas/commit/6b52075146fc531211ae343baaaaffed19f9d274))
+
 ## [0.4.1](https://github.com/Xiangyu-CAS/codex-canvas/compare/v0.4.0...v0.4.1) (2026-10-22)
 
 
