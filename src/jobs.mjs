@@ -243,6 +243,7 @@ export async function submitTextRecognitionEdit(projectDir, id, input = {}, opti
     await fs.mkdir(path.dirname(job.editPlanPath), { recursive: true });
     await fs.writeFile(job.editPlanPath, `${JSON.stringify({ cancelled: true, submittedAt: new Date().toISOString() }, null, 2)}\n`);
     job.stage = "cancelling";
+    job.cancelTextRecognition?.();
     await appendJobLog(job, `Edit Text cancellation written: ${job.editPlanPath}`);
     return publicTextRecognitionJob(job);
   }
@@ -291,6 +292,7 @@ export async function submitTextRecognitionEdit(projectDir, id, input = {}, opti
   await fs.writeFile(job.editPlanPath, `${JSON.stringify(plan, null, 2)}\n`);
   job.stage = "generating";
   job.prompt = plan.prompt;
+  job.submitTextRecognitionPlan?.({ type: "edit-plan", plan, submittedAtMs: Date.now() });
   await appendJobLog(job, `Edit Text plan written: ${job.editPlanPath}`);
   return publicTextRecognitionJob(job);
 }
@@ -401,113 +403,145 @@ async function runTextRecognitionJob(projectDir, job, startedAtMs) {
   await fs.mkdir(job.outputDir, { recursive: true });
   await appendJobLog(job, "Codex-Canvas edit text session started");
 
-  const localOcr = await recognizeTextLocal(job.imagePath, { outputPath: job.textInventoryPath }).catch((error) => ({
-    backend: "local-ocr",
-    items: [],
-    error: error?.message || String(error)
-  }));
-  job.recognitionBackend = localOcr.backend;
-  job.localOcrError = localOcr.error || null;
-  if (localOcr.items.length > 0) {
-    job.items = localOcr.items;
-    job.stage = "ready";
-    await appendJobLog(job, `Local OCR ready after ${formatDuration(Date.now() - startedAtMs)} using ${localOcr.backend} with ${job.items.length} item(s).`);
-    const editPlan = await Promise.race([
-      waitForEditPlan(job),
-      timeoutAfter(10 * 60_000)
-    ]);
-    if (editPlan.type === "timeout") throw new Error("Edit Text session timed out after 10 minutes.");
-    if (editPlan.type === "failed") throw editPlan.error;
-    await runStandaloneTextEditGeneration(projectDir, job, startedAtMs, editPlan);
-    return;
-  }
-  await appendJobLog(job, `Local OCR unavailable or empty via ${localOcr.backend}: ${localOcr.error || "no text found"}. Falling back to Codex vision.`);
-
-  const codexJob = await startCodexImageJob({
-    projectDir,
-    action: "edit-text-session",
-    imagePath: job.imagePath,
-    outputDir: job.outputDir,
-    logPath: job.logPath,
-    prompt: "",
-    transparentLayerMode: job.transparentLayerMode,
-    transparencyMode: job.transparencyMode
+  const polling = new AbortController();
+  const timers = [];
+  let codexJob;
+  const cancelled = new Promise((resolve) => {
+    job.cancelTextRecognition = () => resolve({ type: "edit-plan", plan: { cancelled: true } });
   });
-  job.imagegenPrompt = codexJob.prompt;
+  const submitted = new Promise((resolve) => {
+    job.submitTextRecognitionPlan = resolve;
+  });
+  try {
+    const localOcr = await recognizeTextLocal(job.imagePath, { outputPath: job.textInventoryPath }).catch((error) => ({
+      backend: "local-ocr",
+      items: [],
+      error: error?.message || String(error)
+    }));
+    job.recognitionBackend = localOcr.backend;
+    job.localOcrError = localOcr.error || null;
+    if (localOcr.items.length > 0) {
+      job.items = localOcr.items;
+      job.stage = "ready";
+      await appendJobLog(job, `Local OCR ready after ${formatDuration(Date.now() - startedAtMs)} using ${localOcr.backend} with ${job.items.length} item(s).`);
+      const sessionTimeout = timeoutAfter(10 * 60_000);
+      timers.push(sessionTimeout);
+      const editPlan = await Promise.race([waitForEditPlan(job, polling.signal), submitted, cancelled, sessionTimeout]);
+      sessionTimeout.cancel();
+      polling.abort();
+      if (editPlan.type === "timeout") throw new Error("Edit Text session timed out after 10 minutes.");
+      if (editPlan.type === "failed") throw editPlan.error;
+      await runStandaloneTextEditGeneration(projectDir, job, startedAtMs, editPlan, cancelled);
+      return;
+    }
+    await appendJobLog(job, `Local OCR unavailable or empty via ${localOcr.backend}: ${localOcr.error || "no text found"}. Falling back to Codex vision.`);
 
-  await appendJobLog(job, `Codex child started: ${codexJob.executable}`);
-  const codexDone = codexJob.done.then(
-    () => ({ type: "done" }),
-    (error) => ({ type: "failed", error })
-  );
-  const sessionTimeoutMs = 10 * 60_000;
-  const sessionTimeout = timeoutAfter(sessionTimeoutMs, () => stopChild(codexJob.child));
-  const recognized = await Promise.race([
-    waitForTextInventory(job),
-    waitForEditPlan(job),
-    codexDone,
-    sessionTimeout
-  ]);
-  if (recognized.type === "timeout") throw new Error(`Edit Text session timed out after ${Math.round(sessionTimeoutMs / 60_000)} minutes.`);
-  if (recognized.type === "failed") throw recognized.error;
-  if (recognized.type === "done") throw new Error("Codex exited before text recognition completed.");
-  if (recognized.type === "edit-plan") {
-    if (recognized.plan.cancelled) {
-      await stopChild(codexJob.child);
+    codexJob = await startCodexImageJob({
+      projectDir,
+      action: "edit-text-session",
+      imagePath: job.imagePath,
+      outputDir: job.outputDir,
+      logPath: job.logPath,
+      prompt: "",
+      transparentLayerMode: job.transparentLayerMode,
+      transparencyMode: job.transparencyMode
+    });
+    job.imagegenPrompt = codexJob.prompt;
+
+    const codexDone = codexJob.done.then(
+      () => ({ type: "done" }),
+      (error) => ({ type: "failed", error })
+    );
+    await appendJobLog(job, `Codex child started: ${codexJob.executable}`);
+    const sessionTimeoutMs = 10 * 60_000;
+    const sessionTimeout = timeoutAfter(sessionTimeoutMs);
+    timers.push(sessionTimeout);
+    // Wake immediately for accepted UI submissions, while retaining file-based plans.
+    const editPlanReady = Promise.race([waitForEditPlan(job, polling.signal), submitted]);
+    const recognized = await Promise.race([
+      waitForTextInventory(job, polling.signal),
+      editPlanReady,
+      cancelled,
+      codexDone,
+      sessionTimeout
+    ]);
+    if (recognized.type === "timeout") throw new Error(`Edit Text session timed out after ${Math.round(sessionTimeoutMs / 60_000)} minutes.`);
+    if (recognized.type === "failed") throw recognized.error;
+    if (recognized.type === "done") throw new Error("Codex exited before text recognition completed.");
+    if (recognized.type === "edit-plan") {
+      if (recognized.plan.cancelled) {
+        await markTextRecognitionCancelled(job, startedAtMs);
+        return;
+      }
+      throw new Error("Edit Text plan was submitted before text recognition completed.");
+    }
+
+    const inventory = recognized.inventory;
+    job.items = inventory.items;
+    job.stage = "ready";
+    await appendJobLog(job, `Text recognition ready after ${formatDuration(Date.now() - startedAtMs)} with ${job.items.length} item(s).`);
+
+    const editPlan = await Promise.race([
+      editPlanReady,
+      cancelled,
+      codexDone,
+      sessionTimeout
+    ]);
+    if (editPlan.type === "timeout") throw new Error(`Edit Text session timed out after ${Math.round(sessionTimeoutMs / 60_000)} minutes.`);
+    if (editPlan.type === "failed") throw editPlan.error;
+    if (editPlan.type === "done") throw new Error("Codex exited before the edit plan was submitted.");
+    if (editPlan.plan.cancelled) {
       await markTextRecognitionCancelled(job, startedAtMs);
       return;
     }
-    throw new Error("Edit Text plan was submitted before text recognition completed.");
-  }
 
-  const inventory = recognized.inventory;
-  job.items = inventory.items;
-  job.stage = "ready";
-  await appendJobLog(job, `Text recognition ready after ${formatDuration(Date.now() - startedAtMs)} with ${job.items.length} item(s).`);
+    // The child is reused, but its recognition/session deadline must not be.
+    sessionTimeout.cancel();
+    job.stage = "generating";
+    job.prompt = editPlan.plan.prompt || "";
+    const generationStartedAtMs = editPlan.submittedAtMs || Date.now();
+    await appendJobLog(job, "Edit Text plan submitted; waiting for image output.");
+    const outputReady = waitForJobOutputImage(job, generationStartedAtMs, jobTimeoutMs, polling.signal).then((imagePath) => ({ type: "output", imagePath }));
+    const imageTimeout = timeoutAfter(jobTimeoutMs);
+    timers.push(imageTimeout);
+    const first = await Promise.race([outputReady, codexDone, imageTimeout, cancelled]);
+    if (first.type === "edit-plan") {
+      await markTextRecognitionCancelled(job, startedAtMs);
+      return;
+    }
+    if (first.type === "timeout") throw new Error(`${actionLabel(job.action)} timed out after ${Math.round(jobTimeoutMs / 60_000)} minutes.`);
+    if (first.type === "failed") throw first.error;
+    if (first.type === "output" && first.imagePath) {
+      job.outputDetectedAt = new Date().toISOString();
+      job.detectedOutputPath = first.imagePath;
+      await appendJobLog(job, `Output detected after ${formatDuration(Date.now() - generationStartedAtMs)}: ${first.imagePath}`);
+      await rememberGeneratedImages(generationStartedAtMs, job);
+      await collectAndPlaceResult(projectDir, job, generationStartedAtMs, { final: false, detectedImagePath: first.imagePath });
+    }
+    if (job.status === "done") {
+      return;
+    }
 
-  const editPlan = await Promise.race([
-    waitForEditPlan(job),
-    codexDone,
-    sessionTimeout
-  ]);
-  if (editPlan.type === "timeout") throw new Error(`Edit Text session timed out after ${Math.round(sessionTimeoutMs / 60_000)} minutes.`);
-  if (editPlan.type === "failed") throw editPlan.error;
-  if (editPlan.type === "done") throw new Error("Codex exited before the edit plan was submitted.");
-  if (editPlan.plan.cancelled) {
-    await markTextRecognitionCancelled(job, startedAtMs);
-    return;
-  }
-
-  job.stage = "generating";
-  job.prompt = editPlan.plan.prompt || "";
-  const generationStartedAtMs = editPlan.submittedAtMs || Date.now();
-  await appendJobLog(job, "Edit Text plan submitted; waiting for image output.");
-  const outputReady = waitForJobOutputImage(job, generationStartedAtMs, jobTimeoutMs).then((imagePath) => ({ type: "output", imagePath }));
-  const imageTimeout = timeoutAfter(jobTimeoutMs, () => stopChild(codexJob.child));
-  const first = await Promise.race([outputReady, codexDone, imageTimeout]);
-  if (first.type === "timeout") throw new Error(`${actionLabel(job.action)} timed out after ${Math.round(jobTimeoutMs / 60_000)} minutes.`);
-  if (first.type === "failed") throw first.error;
-  if (first.type === "output" && first.imagePath) {
-    job.outputDetectedAt = new Date().toISOString();
-    job.detectedOutputPath = first.imagePath;
-    await appendJobLog(job, `Output detected after ${formatDuration(Date.now() - generationStartedAtMs)}: ${first.imagePath}`);
+    const final = first.type === "done" ? first : await Promise.race([codexDone, imageTimeout, cancelled]);
+    if (final.type === "edit-plan") {
+      await markTextRecognitionCancelled(job, startedAtMs);
+      return;
+    }
+    if (final.type === "timeout") throw new Error(`${actionLabel(job.action)} timed out after ${Math.round(jobTimeoutMs / 60_000)} minutes.`);
+    if (final.type === "failed") throw final.error;
+    await appendJobLog(job, `Codex child finished before output collection after ${formatDuration(Date.now() - generationStartedAtMs)}`);
     await rememberGeneratedImages(generationStartedAtMs, job);
-    await collectAndPlaceResult(projectDir, job, generationStartedAtMs, { final: false, detectedImagePath: first.imagePath });
+    await collectAndPlaceResult(projectDir, job, generationStartedAtMs, { final: true });
+  } finally {
+    for (const timer of timers) timer.cancel();
+    polling.abort();
+    delete job.cancelTextRecognition;
+    delete job.submitTextRecognitionPlan;
+    await stopChild(codexJob?.child);
   }
-  if (job.status === "done") {
-    await stopChild(codexJob.child);
-    return;
-  }
-
-  const final = first.type === "done" ? first : await Promise.race([codexDone, imageTimeout]);
-  if (final.type === "timeout") throw new Error(`${actionLabel(job.action)} timed out after ${Math.round(jobTimeoutMs / 60_000)} minutes.`);
-  if (final.type === "failed") throw final.error;
-  await appendJobLog(job, `Codex child finished before output collection after ${formatDuration(Date.now() - generationStartedAtMs)}`);
-  await rememberGeneratedImages(generationStartedAtMs, job);
-  await collectAndPlaceResult(projectDir, job, generationStartedAtMs, { final: true });
 }
 
-async function runStandaloneTextEditGeneration(projectDir, job, startedAtMs, editPlan) {
+async function runStandaloneTextEditGeneration(projectDir, job, startedAtMs, editPlan, cancelled) {
   if (editPlan.plan.cancelled) {
     await markTextRecognitionCancelled(job, startedAtMs);
     return;
@@ -528,34 +562,50 @@ async function runStandaloneTextEditGeneration(projectDir, job, startedAtMs, edi
   });
   job.imagegenPrompt = codexJob.prompt;
 
-  await appendJobLog(job, `Codex generation child started after local OCR: ${codexJob.executable}`);
-  const outputReady = waitForJobOutputImage(job, generationStartedAtMs, jobTimeoutMs).then((imagePath) => ({ type: "output", imagePath }));
-  const codexDone = codexJob.done.then(
-    () => ({ type: "done" }),
-    (error) => ({ type: "failed", error })
-  );
-  const imageTimeout = timeoutAfter(jobTimeoutMs, () => stopChild(codexJob.child));
-  const first = await Promise.race([outputReady, codexDone, imageTimeout]);
-  if (first.type === "timeout") throw new Error(`${actionLabel(job.action)} timed out after ${Math.round(jobTimeoutMs / 60_000)} minutes.`);
-  if (first.type === "failed") throw first.error;
-  if (first.type === "output" && first.imagePath) {
-    job.outputDetectedAt = new Date().toISOString();
-    job.detectedOutputPath = first.imagePath;
-    await appendJobLog(job, `Output detected after ${formatDuration(Date.now() - generationStartedAtMs)}: ${first.imagePath}`);
-    await rememberGeneratedImages(generationStartedAtMs, job);
-    await collectAndPlaceResult(projectDir, job, generationStartedAtMs, { final: false, detectedImagePath: first.imagePath });
-  }
-  if (job.status === "done") {
-    await stopChild(codexJob.child);
-    return;
-  }
+  const polling = new AbortController();
+  const timers = [];
+  try {
+    const outputReady = waitForJobOutputImage(job, generationStartedAtMs, jobTimeoutMs, polling.signal).then((imagePath) => ({ type: "output", imagePath }));
+    const codexDone = codexJob.done.then(
+      () => ({ type: "done" }),
+      (error) => ({ type: "failed", error })
+    );
+    await appendJobLog(job, `Codex generation child started after local OCR: ${codexJob.executable}`);
+    const imageTimeout = timeoutAfter(jobTimeoutMs);
+    timers.push(imageTimeout);
+    const first = await Promise.race([outputReady, codexDone, imageTimeout, cancelled]);
+    if (first.type === "edit-plan") {
+      await markTextRecognitionCancelled(job, startedAtMs);
+      return;
+    }
+    if (first.type === "timeout") throw new Error(`${actionLabel(job.action)} timed out after ${Math.round(jobTimeoutMs / 60_000)} minutes.`);
+    if (first.type === "failed") throw first.error;
+    if (first.type === "output" && first.imagePath) {
+      job.outputDetectedAt = new Date().toISOString();
+      job.detectedOutputPath = first.imagePath;
+      await appendJobLog(job, `Output detected after ${formatDuration(Date.now() - generationStartedAtMs)}: ${first.imagePath}`);
+      await rememberGeneratedImages(generationStartedAtMs, job);
+      await collectAndPlaceResult(projectDir, job, generationStartedAtMs, { final: false, detectedImagePath: first.imagePath });
+    }
+    if (job.status === "done") {
+      return;
+    }
 
-  const final = first.type === "done" ? first : await Promise.race([codexDone, imageTimeout]);
-  if (final.type === "timeout") throw new Error(`${actionLabel(job.action)} timed out after ${Math.round(jobTimeoutMs / 60_000)} minutes.`);
-  if (final.type === "failed") throw final.error;
-  await appendJobLog(job, `Codex child finished before output collection after ${formatDuration(Date.now() - generationStartedAtMs)}`);
-  await rememberGeneratedImages(generationStartedAtMs, job);
-  await collectAndPlaceResult(projectDir, job, generationStartedAtMs, { final: true });
+    const final = first.type === "done" ? first : await Promise.race([codexDone, imageTimeout, cancelled]);
+    if (final.type === "edit-plan") {
+      await markTextRecognitionCancelled(job, startedAtMs);
+      return;
+    }
+    if (final.type === "timeout") throw new Error(`${actionLabel(job.action)} timed out after ${Math.round(jobTimeoutMs / 60_000)} minutes.`);
+    if (final.type === "failed") throw final.error;
+    await appendJobLog(job, `Codex child finished before output collection after ${formatDuration(Date.now() - generationStartedAtMs)}`);
+    await rememberGeneratedImages(generationStartedAtMs, job);
+    await collectAndPlaceResult(projectDir, job, generationStartedAtMs, { final: true });
+  } finally {
+    for (const timer of timers) timer.cancel();
+    polling.abort();
+    await stopChild(codexJob.child);
+  }
 }
 
 async function markTextRecognitionCancelled(job, startedAtMs) {
@@ -571,36 +621,36 @@ async function markTextRecognitionCancelled(job, startedAtMs) {
   await appendJobLog(job, "Edit Text session cancelled.");
 }
 
-async function waitForTextInventory(job) {
-  while (job.status === "running") {
+async function waitForTextInventory(job, signal) {
+  while (job.status === "running" && !signal?.aborted) {
     const sessionId = job.codexSessionId || await readCodexSessionId(job.logPath);
     if (sessionId && sessionId !== job.codexSessionId) {
       job.codexSessionId = sessionId;
       await appendJobLog(job, `Codex session detected: ${sessionId}`);
     }
     try {
-      if (await isStableFile(job.textInventoryPath)) {
+      if (await isStableFile(job.textInventoryPath, signal)) {
         return { type: "recognized", inventory: await readTextInventory(job.textInventoryPath) };
       }
     } catch {
       // Keep polling until valid JSON is fully written.
     }
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    await pollDelay(600, signal);
   }
   return { type: "failed", error: new Error("Text recognition stopped before completion.") };
 }
 
-async function waitForEditPlan(job) {
-  while (job.status === "running") {
+async function waitForEditPlan(job, signal) {
+  while (job.status === "running" && !signal?.aborted) {
     try {
-      if (await isStableFile(job.editPlanPath)) {
+      if (await isStableFile(job.editPlanPath, signal)) {
         const plan = JSON.parse(await fs.readFile(job.editPlanPath, "utf8"));
         return { type: "edit-plan", plan, submittedAtMs: Date.now() };
       }
     } catch {
       // Keep polling until the edit plan is valid JSON.
     }
-    await new Promise((resolve) => setTimeout(resolve, 600));
+    await pollDelay(600, signal);
   }
   return { type: "failed", error: new Error("Edit Text stopped before the edit plan was submitted.") };
 }
@@ -627,14 +677,30 @@ async function readTextInventory(filePath) {
 }
 
 function timeoutAfter(timeoutMs, onTimeout) {
-  return new Promise((resolve) => {
-    const timer = setTimeout(async () => {
+  let timer;
+  const promise = new Promise((resolve) => {
+    timer = setTimeout(async () => {
       try {
         await onTimeout?.();
       } catch {}
       resolve({ type: "timeout" });
     }, timeoutMs);
     timer.unref?.();
+  });
+  promise.cancel = () => clearTimeout(timer);
+  return promise;
+}
+
+function pollDelay(ms, signal) {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    signal?.addEventListener("abort", finish, { once: true });
   });
 }
 
@@ -1394,10 +1460,10 @@ async function prepareCompletedBackground(sourcePath, completedPath, outputPath)
   ]);
 }
 
-async function waitForJobOutputImage(job, startedAtMs, timeoutMs) {
+async function waitForJobOutputImage(job, startedAtMs, timeoutMs, signal) {
   const startedAt = Date.now();
   const sinceMs = startedAtMs - 1000;
-  while (Date.now() - startedAt < timeoutMs) {
+  while (!signal?.aborted && Date.now() - startedAt < timeoutMs) {
     const sessionId = job.codexSessionId || await readCodexSessionId(job.logPath);
     if (sessionId && sessionId !== job.codexSessionId) {
       job.codexSessionId = sessionId;
@@ -1408,8 +1474,8 @@ async function waitForJobOutputImage(job, startedAtMs, timeoutMs) {
       job.outputDir,
       job.codexSessionId ? codexGeneratedSessionDir(job.codexSessionId) : null
     ], sinceMs);
-    if (imagePath && await isStableFile(imagePath)) return imagePath;
-    await new Promise((resolve) => setTimeout(resolve, outputPollMs));
+    if (imagePath && await isStableFile(imagePath, signal)) return imagePath;
+    await pollDelay(outputPollMs, signal);
   }
   return null;
 }
@@ -1459,11 +1525,12 @@ function codexGeneratedSessionDir(sessionId) {
   return path.join(os.homedir(), ".codex", "generated_images", sessionId);
 }
 
-async function isStableFile(filePath) {
+async function isStableFile(filePath, signal) {
   try {
     const first = await fs.stat(filePath);
     if (first.size <= 0) return false;
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await pollDelay(500, signal);
+    if (signal?.aborted) return false;
     const second = await fs.stat(filePath);
     return first.size === second.size && second.size > 0;
   } catch {
