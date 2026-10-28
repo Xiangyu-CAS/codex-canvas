@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
-export function createMcpClient(root = new URL("../", import.meta.url)) {
+export function createMcpClient(root = new URL("../", import.meta.url), { env = {} } = {}) {
   const child = spawn(process.execPath, [fileURLToPath(new URL("src/mcp-server.mjs", root))], {
-    env: { ...process.env, CODEX_THREAD_ID: "", CODEX_CANVAS_CODEX_THREAD_ID: "" }, stdio: ["pipe", "pipe", "inherit"]
+    env: { ...process.env, ...env, CODEX_THREAD_ID: "", CODEX_CANVAS_CODEX_THREAD_ID: "" }, stdio: ["pipe", "pipe", "inherit"]
   });
   let sequence = 0;
   const pending = new Map();
