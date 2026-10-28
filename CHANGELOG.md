@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.3](https://github.com/Xiangyu-CAS/codex-canvas/compare/v0.4.2...v0.4.3) (2026-10-28)
+
+
+### Bug Fixes
+
+* prevent broken images during automatic collection ([#20](https://github.com/Xiangyu-CAS/codex-canvas/issues/20)) ([c9a7aeb](https://github.com/Xiangyu-CAS/codex-canvas/commit/c9a7aebcce694d88e783e288d3a9c7e67b6ab27f))
+
 ## [0.4.2](https://github.com/Xiangyu-CAS/codex-canvas/compare/v0.4.1...v0.4.2) (2026-10-27)
 
 
