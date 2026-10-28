@@ -778,18 +778,18 @@ async function selectExistingImage(projectDir, id, options = {}) {
 }
 
 async function findExistingImageForInput(projectDir, input, options = {}) {
-  const fingerprint = await imageInputFingerprint(input);
+  const fingerprint = await imageInputFingerprint(input, options);
   if (!fingerprint) return null;
   const state = await readState(projectDir, options);
   return findDuplicateImageObject(state, fingerprint);
 }
 
-async function imageInputFingerprint(input = {}) {
+async function imageInputFingerprint(input = {}, options = {}) {
   if (input.path) {
     const sourcePath = path.resolve(input.path);
     let buffer;
     try {
-      buffer = await fs.readFile(sourcePath);
+      buffer = options.imageBuffer || await fs.readFile(sourcePath);
     } catch {
       return { sourcePath };
     }
@@ -1665,11 +1665,16 @@ async function persistImage(projectDir, input, options = {}) {
       error.statusCode = 400;
       throw error;
     }
-    await assertSupportedImageFile(sourcePath);
+    if (options.imageBuffer) {
+      if (!isSupportedImageBuffer(options.imageBuffer)) throw new Error("Unsupported image data.");
+    } else {
+      await assertSupportedImageFile(sourcePath);
+    }
     const ext = normalizeExt(path.extname(sourcePath)) || ".png";
     const name = safeAssetName(input.name || path.basename(sourcePath, ext), ext);
     const assetPath = path.join(assetsDir, name);
-    await copyImageSource(sourcePath, assetPath);
+    if (options.imageBuffer) await fs.writeFile(assetPath, options.imageBuffer);
+    else await copyImageSource(sourcePath, assetPath);
     const dimensions = await readImageDimensions(assetPath);
     return {
       name,

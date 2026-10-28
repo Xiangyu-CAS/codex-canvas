@@ -23,6 +23,8 @@ export async function collectRecentImages(projectDir, options = {}) {
   const sinceMs = Number.isFinite(options.sinceMs) ? options.sinceMs : Date.now() - 2 * 60 * 60 * 1000;
   const limit = normalizeCollectLimit(options.limit);
   const excludePaths = new Set((options.excludePaths || []).map((item) => path.resolve(item)));
+  const retryPaths = new Set((options.pendingPaths || []).map((item) => path.resolve(item)));
+  const pendingPaths = new Set();
   const state = await readState(projectDir, { ...storeOptions, readOnly: true });
   const knownSources = new Set(
     state.objects
@@ -39,12 +41,16 @@ export async function collectRecentImages(projectDir, options = {}) {
       knownHashes,
       knownSources,
       excludePaths,
+      retryPaths,
+      pendingPaths,
       projectDir,
       sinceMs
     });
   }
 
   candidates.sort((a, b) => a.mtimeMs - b.mtimeMs);
+  // Keep candidates beyond this pass's limit eligible after the watermark moves.
+  for (const candidate of candidates.slice(0, -limit)) pendingPaths.add(candidate.path);
   const imported = [];
   const planned = planImageLayout({
     candidates: candidates.slice(-limit),
@@ -52,6 +58,14 @@ export async function collectRecentImages(projectDir, options = {}) {
     options
   });
   for (const candidate of planned) {
+    // Persist the same bytes that were checked. The producer may still be
+    // replacing or writing the source while a collection pass is running.
+    let imageBuffer;
+    try { imageBuffer = await fs.readFile(candidate.path); } catch { continue; }
+    if (!isSupportedImageBuffer(imageBuffer) || !isCompletePng(imageBuffer)) {
+      pendingPaths.add(candidate.path);
+      continue;
+    }
     const object = await addImage(projectDir, {
       path: candidate.path,
       name: path.basename(candidate.path),
@@ -62,11 +76,11 @@ export async function collectRecentImages(projectDir, options = {}) {
       batchId: candidate.batchId,
       layoutMode: candidate.layoutMode,
       sourceObjectId: options.sourceObjectId || null
-    }, storeOptions);
+    }, { ...storeOptions, imageBuffer });
     imported.push(object);
   }
 
-  return { scannedRoots: roots, imported, skippedKnown: knownSources.size };
+  return { scannedRoots: roots, imported, skippedKnown: knownSources.size, pendingPaths: [...pendingPaths] };
 }
 
 function normalizeCollectLimit(value) {
@@ -234,10 +248,14 @@ async function walkImages(currentPath, context) {
     } catch {
       continue;
     }
-    if (stat.mtimeMs < context.sinceMs) continue;
+    if (stat.mtimeMs < context.sinceMs && !context.retryPaths.has(absolutePath)) continue;
 
-    const buffer = await fs.readFile(absolutePath);
-    if (!isSupportedImageBuffer(buffer)) continue;
+    let buffer;
+    try { buffer = await fs.readFile(absolutePath); } catch { continue; }
+    if (!isSupportedImageBuffer(buffer) || !isCompletePng(buffer)) {
+      context.pendingPaths.add(absolutePath);
+      continue;
+    }
     const hash = crypto.createHash("sha256").update(buffer).digest("hex");
     if (context.knownHashes.has(hash)) continue;
     context.knownHashes.add(hash);
@@ -248,6 +266,25 @@ async function walkImages(currentPath, context) {
       ...displaySizeFromDimensions(readImageDimensionsFromBuffer(buffer))
     });
   }
+}
+
+// A PNG's dimensions appear near the beginning, well before the image is fully
+// written. Wait for the complete chunk stream before collecting it.
+function isCompletePng(buffer) {
+  if (!buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return true;
+  let offset = 8;
+  let hasImageData = false;
+  while (offset + 12 <= buffer.length) {
+    const length = buffer.readUInt32BE(offset);
+    const end = offset + 12 + length;
+    if (end > buffer.length) return false;
+    const type = buffer.toString("ascii", offset + 4, offset + 8);
+    if (offset === 8 && (type !== "IHDR" || length !== 13)) return false;
+    if (type === "IDAT") hasImageData = true;
+    if (type === "IEND") return length === 0 && hasImageData;
+    offset = end;
+  }
+  return false;
 }
 
 async function knownImageHashes(objects) {

@@ -38,12 +38,14 @@ function acceptSession(result) {
     if (!session && result.structuredContent?.needsProject) showOpenAction("Choose this chat's workspace to open the canvas. / 请绑定当前对话的工作区。");
     return;
   }
-  const changed = session && next.projectId !== session.projectId;
+  const nextSession = { ...next, threadId: result.structuredContent?.threadId || "" };
+  const changed = session && (nextSession.projectId !== session.projectId || nextSession.sessionId !== session.sessionId || nextSession.threadId !== session.threadId);
   if (changed) {
     for (const asset of assets.values()) if (asset.url) URL.revokeObjectURL(asset.url);
     assets.clear();
   }
-  session = { ...next, threadId: result.structuredContent?.threadId || "" };
+  // Re-opening the same panel must not invalidate an in-flight asset request.
+  if (!session || changed) session = nextSession;
   status.style.display = "none";
   resolveSession(session);
   if (changed) window.codexCanvasApp.onScopeChange?.().catch(() => showOpenAction("Could not load this canvas. Reopen it from the chat."));

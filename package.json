@@ -64,7 +64,7 @@
     "build:app": "node scripts/build-app.mjs",
     "test:edit-text": "node --experimental-vm-modules --test scripts/edit-text-timers.test.mjs",
     "test:python": "node --test scripts/python-runtime.test.mjs",
-    "test:app": "node --test scripts/mcp-app.test.mjs",
+    "test:app": "node --test scripts/mcp-app.test.mjs scripts/collector-partial.test.mjs",
     "smoke:app": "node scripts/visual-app-smoke.mjs"
   },
   "keywords": [
