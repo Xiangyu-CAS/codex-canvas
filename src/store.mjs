@@ -779,7 +779,7 @@ export async function repairTruncatedImageAsset(projectDir, expected, truncated,
     } finally {
       await fs.rm(temp, { force: true }).catch(() => {});
     }
-    const objects = state.objects.map((item) => item.id === object.id
+    const objects = state.objects.map((item) => item.assetPath === target && item.src === object.src
       ? { ...item, assetVersion: Math.max(Date.now(), (Number.isFinite(item.assetVersion) ? item.assetVersion : 0) + 1) }
       : item);
     return { state: { ...state, objects }, value: true };

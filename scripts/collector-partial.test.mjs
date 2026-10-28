@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { PNG } from "pngjs";
 import { collectRecentImages } from "../src/collector.mjs";
-import { addImage, readState } from "../src/store.mjs";
+import { addImage, addJobPlaceholder, readState } from "../src/store.mjs";
 
 test("collection waits for a complete PNG and imports the complete bytes", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "canvas-partial-"));
@@ -48,6 +48,7 @@ test("auto collection repairs only proven truncated thread PNGs, preserving the 
     const source = path.join(thread, "original.png");
     await fs.writeFile(source, full.subarray(0, 33));
     const broken = await addImage(project, { path: source, layoutMode: "session-column", x: 234, y: 345 }, { canvasId: "thread-canvas" });
+    const preview = await addJobPlaceholder(project, { sourceObjectId: broken.id }, { canvasId: "thread-canvas" });
     await fs.writeFile(source, full);
 
     const other = new PNG({ width: 41, height: 30 });
@@ -73,6 +74,7 @@ test("auto collection repairs only proven truncated thread PNGs, preserving the 
     assert.equal(restored.x, 234);
     assert.equal(restored.y, 345);
     assert.ok(restored.assetVersion > 0);
+    assert.ok(state.objects.find((object) => object.id === preview.id).assetVersion > 0);
     assert.equal((await collectRecentImages(project, { threadId: "thread-a", generatedImagesRoot: generated, canvasId: "thread-canvas", repairTruncated: true })).repaired, 0);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
