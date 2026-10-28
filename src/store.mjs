@@ -758,6 +758,34 @@ export async function addImage(projectDir, input, options = {}) {
   });
 }
 
+// Caller must first verify that fullImage is a complete version of this
+// truncated auto-collected PNG. Recheck the object and bytes under the lock.
+export async function repairTruncatedImageAsset(projectDir, expected, truncated, fullImage, options = {}) {
+  return mutateState(projectDir, options, async (state) => {
+    const object = state.objects.find((item) => item.id === expected.id);
+    if (!object || object.assetPath !== expected.assetPath || object.sourcePath !== expected.sourcePath ||
+        object.src !== `/assets/${encodeURIComponent(path.basename(object.assetPath || ""))}` ||
+        !object.layoutMode?.startsWith("session-") || truncated.length >= fullImage.length ||
+        !fullImage.subarray(0, truncated.length).equals(truncated)) return { write: false, value: false };
+    const assetDir = assetsDirFor(projectDir, canvasIdFrom(options));
+    const target = object.assetPath;
+    const info = await fs.lstat(target);
+    if (!info.isFile() || path.dirname(await fs.realpath(target)) !== await fs.realpath(assetDir) ||
+        !(await fs.readFile(target)).equals(truncated)) return { write: false, value: false };
+    const temp = `${target}.${crypto.randomBytes(8).toString("hex")}.tmp`;
+    try {
+      await fs.writeFile(temp, fullImage, { flag: "wx" });
+      await fs.rename(temp, target);
+    } finally {
+      await fs.rm(temp, { force: true }).catch(() => {});
+    }
+    const objects = state.objects.map((item) => item.id === object.id
+      ? { ...item, assetVersion: Math.max(Date.now(), (Number.isFinite(item.assetVersion) ? item.assetVersion : 0) + 1) }
+      : item);
+    return { state: { ...state, objects }, value: true };
+  });
+}
+
 function shouldDedupeImage(input = {}) {
   if (input.allowDuplicate === true || input.dedupe === false) return false;
   return input.dedupe === true || Boolean(input.path);

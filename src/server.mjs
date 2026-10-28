@@ -903,6 +903,7 @@ async function runAutoCollectorPass(project, registry) {
     const result = await collectRecentImages(project.projectDir, {
       sinceMs: project.collectSinceMs,
       pendingPaths: project.pendingCollectPaths,
+      repairTruncated: true,
       limit: 10,
       prompt: "Auto-collected while Codex-Canvas was open",
       excludePaths: getIgnoredGeneratedImagePaths(jobScopeFor(project)),

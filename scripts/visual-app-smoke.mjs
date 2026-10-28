@@ -104,6 +104,27 @@ try {
       assert.ok(collected, "complete PNG should be automatically imported");
       assert.deepEqual(await fs.readFile(collected.assetPath), bytes);
       assert.equal(await page.evaluate(() => window.repeatOnNextAsset), false, "reopen must occur while an asset is loading");
+
+      // Model an image that v0.4.2 already copied while its source was partial.
+      const legacyOutput = path.join(generatedRoot, "visual-thread", "legacy.png");
+      const legacy = new PNG({ width: 128, height: 86 });
+      legacy.data.fill(200);
+      const legacyBytes = PNG.sync.write(legacy);
+      await fs.writeFile(legacyOutput, legacyBytes.subarray(0, 33));
+      const legacyAdded = await call("add_image", { projectDir, threadId: "visual-thread", path: legacyOutput, layoutMode: "session-column" });
+      const legacyObject = legacyAdded.structuredContent;
+      await frame.waitForFunction(id => {
+        const img = document.querySelector(`#objects img[data-object-id="${id}"]`);
+        return img && img.complete && img.naturalWidth === 0;
+      }, legacyObject.id, { timeout: 12000 });
+      await fs.writeFile(legacyOutput, legacyBytes);
+      await frame.waitForFunction(id => {
+        const img = document.querySelector(`#objects img[data-object-id="${id}"]`);
+        return img && img.complete && img.naturalWidth === 128;
+      }, legacyObject.id, { timeout: 20000 });
+      const restored = (await requestState()).objects.find(object => object.id === legacyObject.id);
+      assert.ok(restored.assetVersion > 0, "repaired image should invalidate the sidebar asset cache");
+      assert.deepEqual(await fs.readFile(restored.assetPath), legacyBytes);
     }
     assert.deepEqual(errors, []);
     assert.deepEqual(network, []);
