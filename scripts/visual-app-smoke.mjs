@@ -7,6 +7,9 @@ import { PNG } from "pngjs";
 import { createMcpClient } from "./mcp-app-client.mjs";
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ? pathToFileURL(process.env.PLAYWRIGHT_MODULE).href : "playwright");
 const projectDir = await fs.mkdtemp(path.join(os.tmpdir(), "canvas-app-visual-"));
+const generatedRoot = await fs.mkdtemp(path.join(os.tmpdir(), "canvas-app-generated-"));
+await fs.mkdir(path.join(generatedRoot, "visual-thread"));
+process.env.CODEX_CANVAS_GENERATED_IMAGES_ROOT = generatedRoot;
 const client = createMcpClient();
 const browser = await chromium.launch(process.env.PLAYWRIGHT_EXECUTABLE ? { executablePath: process.env.PLAYWRIGHT_EXECUTABLE } : {});
 const call = (name, args) => client.request("tools/call", { name, arguments: args });
@@ -46,7 +49,14 @@ try {
             hostCapabilities: { serverTools: {}, downloadFile: {}, message: {} },
             hostContext: { displayMode: "fullscreen", availableDisplayModes: ["fullscreen"], theme: "light" }
           };
-          else if (message.method === "tools/call") result = await window.mcpRequest(message.params);
+          else if (message.method === "tools/call") {
+            if (window.repeatOnNextAsset && message.params.arguments?.path?.startsWith("/api/app-assets/")) {
+              window.repeatOnNextAsset = false;
+              event.source.postMessage({ jsonrpc: "2.0", method: "ui/notifications/tool-result", params: window.opened }, "*");
+              await new Promise(resolve => setTimeout(resolve, 150));
+            }
+            result = await window.mcpRequest(message.params);
+          }
           else if (message.method === "ui/download-file") window.downloads.push(message.params);
           event.source.postMessage({ jsonrpc: "2.0", id: message.id, result }, "*");
         } catch (error) { event.source.postMessage({ jsonrpc: "2.0", id: message.id, error: { code: -32000, message: error.message } }, "*"); }
@@ -73,9 +83,52 @@ try {
     await page.evaluate(opened => document.querySelector("iframe").contentWindow.postMessage({ jsonrpc: "2.0", method: "ui/notifications/tool-result", params: opened }, "*"), reopened);
     await fs.mkdir("dist", { recursive: true });
     await page.screenshot({ path: `dist/canvas-sidebar-${width}.png` });
+    if (width === 440) {
+      const output = path.join(generatedRoot, "visual-thread", "generated.png");
+      const generated = new PNG({ width: 1024, height: 1024 });
+      // Synthetic, poorly compressible pixels exercise a realistic MCP payload.
+      let seed = 123456789;
+      for (let i = 0; i < generated.data.length; i++) {
+        seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+        generated.data[i] = seed >>> 24;
+      }
+      const bytes = PNG.sync.write(generated);
+      await fs.writeFile(output, bytes.subarray(0, 33));
+      await new Promise(resolve => setTimeout(resolve, 900));
+      const requestState = async () => (await call("canvas_app_request", { sessionId: opened._meta.canvasSession.sessionId, path: "/api/state" })).structuredContent.body;
+      assert.equal((await requestState()).objects.length, 1, "partial PNG must not be imported");
+      await page.evaluate(() => { window.repeatOnNextAsset = true; });
+      await fs.writeFile(output, bytes);
+      await frame.waitForFunction(() => [...document.querySelectorAll("#objects img")].some(img => img.naturalWidth === 1024), null, { timeout: 20000 });
+      const collected = (await requestState()).objects.find(object => object.sourcePath === output);
+      assert.ok(collected, "complete PNG should be automatically imported");
+      assert.deepEqual(await fs.readFile(collected.assetPath), bytes);
+      assert.equal(await page.evaluate(() => window.repeatOnNextAsset), false, "reopen must occur while an asset is loading");
+
+      // Model an image that v0.4.2 already copied while its source was partial.
+      const legacyOutput = path.join(generatedRoot, "visual-thread", "legacy.png");
+      const legacy = new PNG({ width: 128, height: 86 });
+      legacy.data.fill(200);
+      const legacyBytes = PNG.sync.write(legacy);
+      await fs.writeFile(legacyOutput, legacyBytes.subarray(0, 33));
+      const legacyAdded = await call("add_image", { projectDir, threadId: "visual-thread", path: legacyOutput, layoutMode: "session-column" });
+      const legacyObject = legacyAdded.structuredContent;
+      await frame.waitForFunction(id => {
+        const img = document.querySelector(`#objects img[data-object-id="${id}"]`);
+        return img && img.complete && img.naturalWidth === 0;
+      }, legacyObject.id, { timeout: 12000 });
+      await fs.writeFile(legacyOutput, legacyBytes);
+      await frame.waitForFunction(id => {
+        const img = document.querySelector(`#objects img[data-object-id="${id}"]`);
+        return img && img.complete && img.naturalWidth === 128;
+      }, legacyObject.id, { timeout: 20000 });
+      const restored = (await requestState()).objects.find(object => object.id === legacyObject.id);
+      assert.ok(restored.assetVersion > 0, "repaired image should invalidate the sidebar asset cache");
+      assert.deepEqual(await fs.readFile(restored.assetPath), legacyBytes);
+    }
     assert.deepEqual(errors, []);
     assert.deepEqual(network, []);
     await page.close();
   }
   console.log("Native sidebar sandbox passed: render, images, drag, zoom, host download, panel reuse; no network requests.");
-} finally { await browser.close(); await client.close(); await fs.rm(projectDir, { recursive: true, force: true }); }
+} finally { await browser.close(); await client.close(); await fs.rm(projectDir, { recursive: true, force: true }); await fs.rm(generatedRoot, { recursive: true, force: true }); }

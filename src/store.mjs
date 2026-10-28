@@ -758,6 +758,34 @@ export async function addImage(projectDir, input, options = {}) {
   });
 }
 
+// Caller must first verify that fullImage is a complete version of this
+// truncated auto-collected PNG. Recheck the object and bytes under the lock.
+export async function repairTruncatedImageAsset(projectDir, expected, truncated, fullImage, options = {}) {
+  return mutateState(projectDir, options, async (state) => {
+    const object = state.objects.find((item) => item.id === expected.id);
+    if (!object || object.assetPath !== expected.assetPath || object.sourcePath !== expected.sourcePath ||
+        object.src !== `/assets/${encodeURIComponent(path.basename(object.assetPath || ""))}` ||
+        !object.layoutMode?.startsWith("session-") || truncated.length >= fullImage.length ||
+        !fullImage.subarray(0, truncated.length).equals(truncated)) return { write: false, value: false };
+    const assetDir = assetsDirFor(projectDir, canvasIdFrom(options));
+    const target = object.assetPath;
+    const info = await fs.lstat(target);
+    if (!info.isFile() || path.dirname(await fs.realpath(target)) !== await fs.realpath(assetDir) ||
+        !(await fs.readFile(target)).equals(truncated)) return { write: false, value: false };
+    const temp = `${target}.${crypto.randomBytes(8).toString("hex")}.tmp`;
+    try {
+      await fs.writeFile(temp, fullImage, { flag: "wx" });
+      await fs.rename(temp, target);
+    } finally {
+      await fs.rm(temp, { force: true }).catch(() => {});
+    }
+    const objects = state.objects.map((item) => item.assetPath === target && item.src === object.src
+      ? { ...item, assetVersion: Math.max(Date.now(), (Number.isFinite(item.assetVersion) ? item.assetVersion : 0) + 1) }
+      : item);
+    return { state: { ...state, objects }, value: true };
+  });
+}
+
 function shouldDedupeImage(input = {}) {
   if (input.allowDuplicate === true || input.dedupe === false) return false;
   return input.dedupe === true || Boolean(input.path);
@@ -778,18 +806,18 @@ async function selectExistingImage(projectDir, id, options = {}) {
 }
 
 async function findExistingImageForInput(projectDir, input, options = {}) {
-  const fingerprint = await imageInputFingerprint(input);
+  const fingerprint = await imageInputFingerprint(input, options);
   if (!fingerprint) return null;
   const state = await readState(projectDir, options);
   return findDuplicateImageObject(state, fingerprint);
 }
 
-async function imageInputFingerprint(input = {}) {
+async function imageInputFingerprint(input = {}, options = {}) {
   if (input.path) {
     const sourcePath = path.resolve(input.path);
     let buffer;
     try {
-      buffer = await fs.readFile(sourcePath);
+      buffer = options.imageBuffer || await fs.readFile(sourcePath);
     } catch {
       return { sourcePath };
     }
@@ -1665,11 +1693,16 @@ async function persistImage(projectDir, input, options = {}) {
       error.statusCode = 400;
       throw error;
     }
-    await assertSupportedImageFile(sourcePath);
+    if (options.imageBuffer) {
+      if (!isSupportedImageBuffer(options.imageBuffer)) throw new Error("Unsupported image data.");
+    } else {
+      await assertSupportedImageFile(sourcePath);
+    }
     const ext = normalizeExt(path.extname(sourcePath)) || ".png";
     const name = safeAssetName(input.name || path.basename(sourcePath, ext), ext);
     const assetPath = path.join(assetsDir, name);
-    await copyImageSource(sourcePath, assetPath);
+    if (options.imageBuffer) await fs.writeFile(assetPath, options.imageBuffer);
+    else await copyImageSource(sourcePath, assetPath);
     const dimensions = await readImageDimensions(assetPath);
     return {
       name,

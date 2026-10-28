@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { addImage, isSupportedImageBuffer, readState } from "./store.mjs";
+import { addImage, isSupportedImageBuffer, readState, repairTruncatedImageAsset } from "./store.mjs";
+import { assetsDirFor } from "./paths.mjs";
 
 const imageExtensions = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif"]);
 const boardPadding = 120;
@@ -23,7 +24,12 @@ export async function collectRecentImages(projectDir, options = {}) {
   const sinceMs = Number.isFinite(options.sinceMs) ? options.sinceMs : Date.now() - 2 * 60 * 60 * 1000;
   const limit = normalizeCollectLimit(options.limit);
   const excludePaths = new Set((options.excludePaths || []).map((item) => path.resolve(item)));
+  const retryPaths = new Set((options.pendingPaths || []).map((item) => path.resolve(item)));
+  const pendingPaths = new Set();
   const state = await readState(projectDir, { ...storeOptions, readOnly: true });
+  const repaired = options.repairTruncated && !options.roots?.length
+    ? await repairTruncatedCollectedImages(projectDir, state.objects, roots[0], storeOptions)
+    : 0;
   const knownSources = new Set(
     state.objects
       .map((object) => object.sourcePath)
@@ -39,12 +45,16 @@ export async function collectRecentImages(projectDir, options = {}) {
       knownHashes,
       knownSources,
       excludePaths,
+      retryPaths,
+      pendingPaths,
       projectDir,
       sinceMs
     });
   }
 
   candidates.sort((a, b) => a.mtimeMs - b.mtimeMs);
+  // Keep candidates beyond this pass's limit eligible after the watermark moves.
+  for (const candidate of candidates.slice(0, -limit)) pendingPaths.add(candidate.path);
   const imported = [];
   const planned = planImageLayout({
     candidates: candidates.slice(-limit),
@@ -52,6 +62,14 @@ export async function collectRecentImages(projectDir, options = {}) {
     options
   });
   for (const candidate of planned) {
+    // Persist the same bytes that were checked. The producer may still be
+    // replacing or writing the source while a collection pass is running.
+    let imageBuffer;
+    try { imageBuffer = await fs.readFile(candidate.path); } catch { continue; }
+    if (!isSupportedImageBuffer(imageBuffer) || !isCompletePng(imageBuffer)) {
+      pendingPaths.add(candidate.path);
+      continue;
+    }
     const object = await addImage(projectDir, {
       path: candidate.path,
       name: path.basename(candidate.path),
@@ -62,11 +80,48 @@ export async function collectRecentImages(projectDir, options = {}) {
       batchId: candidate.batchId,
       layoutMode: candidate.layoutMode,
       sourceObjectId: options.sourceObjectId || null
-    }, storeOptions);
+    }, { ...storeOptions, imageBuffer });
     imported.push(object);
   }
 
-  return { scannedRoots: roots, imported, skippedKnown: knownSources.size };
+  return { scannedRoots: roots, imported, repaired, skippedKnown: knownSources.size, pendingPaths: [...pendingPaths] };
+}
+
+// Only restore a proven prefix of its original generated PNG, within this
+// thread's own output directory. Do not replace other damaged or edited assets.
+async function repairTruncatedCollectedImages(projectDir, objects, threadRoot, storeOptions) {
+  if (!threadRoot) return 0;
+  let realRoot, realAssets;
+  try {
+    if (!(await fs.lstat(threadRoot)).isDirectory()) return 0;
+    realRoot = await fs.realpath(threadRoot);
+    realAssets = await fs.realpath(assetsDirFor(projectDir, storeOptions.canvasId));
+  } catch { return 0; }
+  let repaired = 0;
+  for (const object of objects) {
+    if ((object.type || "image") !== "image" || !object.layoutMode?.startsWith("session-") || !object.sourcePath || !object.assetPath) continue;
+    const source = path.resolve(object.sourcePath);
+    if (!isInsideDirectory(threadRoot, source)) continue;
+    try {
+      if (!(await fs.lstat(object.assetPath)).isFile() || path.dirname(await fs.realpath(object.assetPath)) !== realAssets) continue;
+      const asset = await fs.readFile(object.assetPath);
+      if (!hasPngSignature(asset) || isCompletePng(asset)) continue;
+      if (!(await fs.lstat(source)).isFile()) continue;
+      if (!isInsideDirectory(realRoot, await fs.realpath(source))) continue;
+      const full = await fs.readFile(source);
+      if (!isSupportedImageBuffer(full) || !hasPngSignature(full) || !isCompletePng(full)) continue;
+      if (asset.length >= full.length || !full.subarray(0, asset.length).equals(asset)) continue;
+      if (await repairTruncatedImageAsset(projectDir, object, asset, full, storeOptions)) repaired++;
+    } catch {
+      // A missing, changing, or inaccessible file can be retried on the next pass.
+    }
+  }
+  return repaired;
+}
+
+function isInsideDirectory(root, target) {
+  const relative = path.relative(root, target);
+  return relative !== "" && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
 function normalizeCollectLimit(value) {
@@ -234,10 +289,14 @@ async function walkImages(currentPath, context) {
     } catch {
       continue;
     }
-    if (stat.mtimeMs < context.sinceMs) continue;
+    if (stat.mtimeMs < context.sinceMs && !context.retryPaths.has(absolutePath)) continue;
 
-    const buffer = await fs.readFile(absolutePath);
-    if (!isSupportedImageBuffer(buffer)) continue;
+    let buffer;
+    try { buffer = await fs.readFile(absolutePath); } catch { continue; }
+    if (!isSupportedImageBuffer(buffer) || !isCompletePng(buffer)) {
+      context.pendingPaths.add(absolutePath);
+      continue;
+    }
     const hash = crypto.createHash("sha256").update(buffer).digest("hex");
     if (context.knownHashes.has(hash)) continue;
     context.knownHashes.add(hash);
@@ -250,11 +309,35 @@ async function walkImages(currentPath, context) {
   }
 }
 
+// A PNG's dimensions appear near the beginning, well before the image is fully
+// written. Wait for the complete chunk stream before collecting it.
+function isCompletePng(buffer) {
+  if (!hasPngSignature(buffer)) return true;
+  let offset = 8;
+  let hasImageData = false;
+  while (offset + 12 <= buffer.length) {
+    const length = buffer.readUInt32BE(offset);
+    const end = offset + 12 + length;
+    if (end > buffer.length) return false;
+    const type = buffer.toString("ascii", offset + 4, offset + 8);
+    if (offset === 8 && (type !== "IHDR" || length !== 13)) return false;
+    if (type === "IDAT") hasImageData = true;
+    if (type === "IEND") return length === 0 && hasImageData;
+    offset = end;
+  }
+  return false;
+}
+
+function hasPngSignature(buffer) {
+  return buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+}
+
 async function knownImageHashes(objects) {
   const hashes = new Set();
   for (const object of objects) {
     if (!object.assetPath) continue;
     try {
+      if (!(await fs.lstat(object.assetPath)).isFile()) continue;
       const buffer = await fs.readFile(object.assetPath);
       hashes.add(crypto.createHash("sha256").update(buffer).digest("hex"));
     } catch {

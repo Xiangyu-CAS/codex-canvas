@@ -710,6 +710,7 @@ async function registerProject(registry, projectDir, { autoCollect = true, chatT
     chatThreadId: normalizedThreadId,
     canvasId,
     collectSinceMs: Date.now(),
+    pendingCollectPaths: [],
     registeredAt: registeredAt || new Date().toISOString(),
     collectorTimer: null,
     collectorWatchers: [],
@@ -899,8 +900,10 @@ async function runAutoCollectorPass(project, registry) {
       stopAutoCollector(project);
       return;
     }
-    await collectRecentImages(project.projectDir, {
+    const result = await collectRecentImages(project.projectDir, {
       sinceMs: project.collectSinceMs,
+      pendingPaths: project.pendingCollectPaths,
+      repairTruncated: true,
       limit: 10,
       prompt: "Auto-collected while Codex-Canvas was open",
       excludePaths: getIgnoredGeneratedImagePaths(jobScopeFor(project)),
@@ -908,6 +911,7 @@ async function runAutoCollectorPass(project, registry) {
       threadId: project.chatThreadId,
       generatedImagesRoot: registry.generatedImagesRoot
     });
+    project.pendingCollectPaths = result.pendingPaths;
     project.collectSinceMs = Math.max(project.collectSinceMs, scanStartedAt);
   } finally {
     project.collectorRunning = false;
