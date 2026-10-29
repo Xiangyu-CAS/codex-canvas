@@ -3,8 +3,18 @@ import test from "node:test";
 import fs from "node:fs/promises";
 import vm from "node:vm";
 
-const source = (await fs.readFile(new URL("../ui/canvas-app.js", import.meta.url), "utf8"))
-  .replace(/^import .*;\n/gm, "").split("\ntry {\n  await app.connect")[0];
+const rawSource = await fs.readFile(new URL("../ui/canvas-app.js", import.meta.url), "utf8");
+function canvasScript(text) {
+  return text.replace(/\r\n/g, "\n")
+    .replace(/^import .*;\n/gm, "").split("\ntry {\n  await app.connect")[0];
+}
+const source = canvasScript(rawSource);
+
+test("source extraction supports LF and Windows CRLF checkouts", () => {
+  const crlf = canvasScript(rawSource.replace(/\r?\n/g, "\r\n"));
+  assert.equal(crlf, source);
+  assert.doesNotThrow(() => new vm.Script(crlf));
+});
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 const object = { id: "one", src: "/assets/one.png" };
 const result = () => ({ structuredContent: { status: 200, headers: { "content-type": "image/png" }, encoding: "base64", body: png } });
