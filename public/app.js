@@ -442,6 +442,9 @@ if (sidebar) sidebar.onScopeChange = async () => {
   currentProjectId = sidebar.scope.projectId;
   currentThreadId = sidebar.scope.threadId;
   await loadProjects();
+  // Drain a superseded state's request before loading this scope. Its rejection
+  // must not leave the new canvas behind the connection-error overlay.
+  await stateLoadPending?.catch(() => {});
   await loadState();
 };
 await loadProjects();
