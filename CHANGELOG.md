@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.4](https://github.com/Xiangyu-CAS/codex-canvas/compare/v0.4.3...v0.4.4) (2026-10-29)
+
+
+### Bug Fixes
+
+* make sidebar image loading portable and cancellable ([#22](https://github.com/Xiangyu-CAS/codex-canvas/issues/22)) ([861eff2](https://github.com/Xiangyu-CAS/codex-canvas/commit/861eff210f475e46f4ad825b5449d3073f0190a6))
+
 ## [0.4.3](https://github.com/Xiangyu-CAS/codex-canvas/compare/v0.4.2...v0.4.3) (2026-10-28)
 
 
