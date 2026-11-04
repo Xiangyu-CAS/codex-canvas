@@ -32,6 +32,7 @@ export async function startCodexImageJob({ projectDir, action, imagePath, output
   const operationSkill = {
     "remove-bg": "canvas-remove-bg",
     "quick-edit": "canvas-quick-edit",
+    "reference-generate": "canvas-generate",
     "edit-text": "canvas-edit-text",
     "edit-text-session": "canvas-edit-text"
   }[action];
@@ -287,6 +288,18 @@ export function promptForAction({ action, outputDir, userPrompt, transparentLaye
       "Do not ask follow-up questions.",
       "",
       "Finish with a concise message containing the saved output path."
+    ].join("\n");
+  }
+
+  if (action === "reference-generate") {
+    return [
+      "Use the canvas-generate skill and imagegen to create one image from all attached references.",
+      "All attachments are ordered visual references, not annotation boards.",
+      userPrompt,
+      "Generate exactly one image. Preserve requested subject identities and follow the requested ratio.",
+      `Save or copy the final PNG into this exact directory: ${outputDir}`,
+      "Do not modify source files. Do not create extra variants or ask follow-up questions.",
+      "Finish with the saved output path."
     ].join("\n");
   }
 

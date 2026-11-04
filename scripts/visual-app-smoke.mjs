@@ -77,6 +77,19 @@ try {
     await frame.waitForFunction(() => [...document.querySelectorAll("#objects img")].every(img => img.complete && img.naturalWidth > 0));
     const image = frame.locator("#objects img").first();
     await frame.locator("#objects .image-content").first().click();
+    await frame.locator("#nodePrompt").fill("A draft scoped to this sidebar canvas");
+    await frame.locator("#nodeRatio").selectOption("16:9");
+    // Change MCP sessions before the draft debounce expires. The old session owns the save.
+    const otherOpened = await call("open_canvas", { projectDir, threadId: `other-${width}` });
+    await page.evaluate(opened => document.querySelector("iframe").contentWindow.postMessage({ jsonrpc: "2.0", method: "ui/notifications/tool-result", params: opened }, "*"), otherOpened);
+    await frame.waitForFunction(() => document.querySelectorAll("#objects .canvas-object").length === 0);
+    await new Promise(resolve => setTimeout(resolve, 400));
+    const saved = (await call("canvas_app_request", { sessionId: opened._meta.canvasSession.sessionId, path: "/api/state" })).structuredContent.body;
+    assert.equal(saved.objects[0].generationDraft.prompt, "A draft scoped to this sidebar canvas");
+    assert.equal(saved.objects[0].generationDraft.ratio, "16:9");
+    await page.evaluate(opened => document.querySelector("iframe").contentWindow.postMessage({ jsonrpc: "2.0", method: "ui/notifications/tool-result", params: opened }, "*"), opened);
+    await frame.locator("#objects .image-content").first().click();
+    await frame.locator('#nodeComposer button[aria-label="Close / 关闭"]').click();
     if (hostDownload) {
       await frame.locator('[data-action="download"]').click();
       await page.waitForFunction(() => window.downloads.length === 1);
@@ -187,5 +200,5 @@ try {
     assert.deepEqual(network, []);
     await page.close();
   }
-  console.log("Native sidebar sandbox passed: render, images, drag, zoom, host download, panel reuse; no network requests.");
+  console.log("Native sidebar sandbox passed: render, images, drag, zoom, host download, panel reuse, node draft save across MCP scope switches; no network requests.");
 } finally { await browser.close(); await client.close(); await fs.rm(projectDir, { recursive: true, force: true }); await fs.rm(generatedRoot, { recursive: true, force: true }); }

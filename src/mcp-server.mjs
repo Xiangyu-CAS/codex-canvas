@@ -217,10 +217,12 @@ async function handle(method, params) {
               objectId: { type: "string", description: "Canvas image object id to edit." },
               action: {
                 type: "string",
-                enum: ["quick-edit", "remove-bg", "expand", "edit-elements"],
+                enum: ["quick-edit", "remove-bg", "expand", "edit-elements", "reference-generate"],
                 description: "Stable Codex-Canvas action id."
               },
-              prompt: { type: "string", description: "Optional user guidance for quick-edit or expand." },
+              prompt: { type: "string", description: "User guidance; required for reference-generate." },
+              referenceObjectIds: { type: "array", minItems: 1, maxItems: 8, items: { type: "string" }, description: "Ordered reference image ids for reference-generate, starting with objectId." },
+              ratio: { type: "string", enum: ["original", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"], description: "Requested output ratio for reference-generate." },
               threadId: { type: "string", description: "Codex thread id whose canvas owns the selected object. Pass explicitly for thread-scoped canvases." },
               canvasId: { type: "string", description: "Explicit Codex-Canvas canvas id. Overrides the canvas id derived from threadId." }
             }
@@ -369,6 +371,8 @@ async function handle(method, params) {
       const job = await createImageJob(projectDir, {
         objectId: args.objectId,
         action: args.action,
+        referenceObjectIds: args.referenceObjectIds,
+        ratio: args.ratio,
         prompt: args.prompt || ""
       }, { canvasId: canvas.canvasId });
       return textResult(`Started ${args.action} for Codex-Canvas object ${args.objectId}.`, job);

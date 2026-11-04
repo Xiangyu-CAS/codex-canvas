@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import fs from "node:fs/promises";
 import vm from "node:vm";
+import * as generationOptions from "../src/generation-options.mjs";
 import { posix as path } from "node:path";
 
 // Run the actual jobs module against simulated I/O and a controlled clock.
@@ -51,6 +52,7 @@ async function fixture({ local = false, inventory = true, collectionError = fals
       .map((file) => ({ name: path.basename(file), isFile: () => true, isDirectory: () => false }))
   };
   const modules = {
+    "./generation-options.mjs": generationOptions,
     "node:child_process": { execFile() {} }, "node:fs/promises": { default: fakeFs },
     "node:os": { default: { homedir: () => "/fake-home" } }, "node:path": { default: path },
     "node:crypto": { default: {} }, "node:util": { promisify: () => () => {} },

@@ -1,3 +1,4 @@
+import { generationDraft, referenceIds } from "./generation-options.mjs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -735,6 +736,8 @@ export async function addImage(projectDir, input, options = {}) {
       prompt: sanitizeString(input.prompt, "", 4000),
       imagegenPrompt: sanitizeString(input.imagegenPrompt, "", 20000),
       sourceObjectId: typeof input.sourceObjectId === "string" ? input.sourceObjectId.slice(0, 300) : null,
+      referenceObjectIds: referenceIds(input.referenceObjectIds),
+      ...(input.generationDraft ? { generationDraft: generationDraft(input.generationDraft) } : {}),
       batchId: typeof input.batchId === "string" ? input.batchId.slice(0, 300) : null,
       layoutMode: sanitizeString(input.layoutMode, "manual", 80),
       x: Number.isFinite(input.x) ? sanitizeCoordinate(input.x) : 120 + (count % 5) * 56,
@@ -900,6 +903,16 @@ export async function addJobPlaceholder(projectDir, input, options = {}) {
     const width = sanitizeDimension(Number.isFinite(input.width) ? input.width : source.width);
     const height = sanitizeDimension(Number.isFinite(input.height) ? input.height : source.height);
     const position = adjacentDerivedPosition(source);
+    if (input.action === "reference-generate") {
+      const ids = new Set(referenceIds(input.referenceObjectIds));
+      const references = state.objects.filter(item => ids.has(item.id));
+      position.x = Math.max(...references.map(item => item.x + item.width), source.x + source.width) + 140;
+      position.y = Math.round(references.reduce((sum, item) => sum + item.y + item.height / 2, 0) / Math.max(1, references.length) - height / 2);
+      // New branches use free space without moving existing nodes and their descendants.
+      while (state.objects.some(item => position.x < item.x + item.width + 48
+        && position.x + width + 48 > item.x && position.y < item.y + item.height + 48
+        && position.y + height + 48 > item.y)) position.y += height + 80;
+    }
     const shift = width + derivedGap;
     const object = {
       id: input.id || `job_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`,
@@ -908,6 +921,8 @@ export async function addJobPlaceholder(projectDir, input, options = {}) {
       action: sanitizeString(input.action, "image-job", 80),
       status: sanitizeString(input.status, "running", 80),
       sourceObjectId: source.id,
+      referenceObjectIds: referenceIds(input.referenceObjectIds),
+      ...(input.generationDraft ? { generationDraft: generationDraft(input.generationDraft) } : {}),
       layoutMode: "canvas-row",
       src: source.src || null,
       assetPath: source.assetPath || null,
@@ -921,6 +936,7 @@ export async function addJobPlaceholder(projectDir, input, options = {}) {
     };
 
     const shiftedObjects = state.objects.map((item) => {
+      if (input.action === "reference-generate") return item;
       if (item.sourceObjectId !== source.id) return item;
       if (item.x < position.x) return item;
       return { ...item, x: item.x + shift };
@@ -1018,6 +1034,8 @@ function normalizePersistedObject(object, context = {}) {
     width: sanitizeDimension(object.width, type === "text" ? 220 : 1),
     height: sanitizeDimension(object.height, type === "text" ? 80 : 1)
   };
+  if (object.generationDraft) normalized.generationDraft = generationDraft(object.generationDraft);
+  if (object.referenceObjectIds) normalized.referenceObjectIds = referenceIds(object.referenceObjectIds);
   if (typeof object.createdAt !== "string") normalized.createdAt = new Date().toISOString();
   if (Number.isFinite(object.durationMs)) normalized.durationMs = sanitizeDurationMs(object.durationMs);
   if (type === "text") {
@@ -1422,6 +1440,8 @@ function sanitizeObjectPatch(patch = {}) {
       next[key] = patch[key].slice(0, limit);
     }
   }
+  if (Array.isArray(patch.referenceObjectIds)) next.referenceObjectIds = referenceIds(patch.referenceObjectIds);
+  if (patch.generationDraft && typeof patch.generationDraft === "object") next.generationDraft = generationDraft(patch.generationDraft);
   if (typeof patch.layerGroupLocked === "boolean") next.layerGroupLocked = patch.layerGroupLocked;
   if (patch.crop && typeof patch.crop === "object") {
     const crop = sanitizeCrop(patch.crop);

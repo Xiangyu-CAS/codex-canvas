@@ -66,6 +66,10 @@ jobs:
         if: runner.os == 'Linux' && matrix.node == '22.x'
         run: npm run smoke:app
 
+      - name: Verify node canvas interactions
+        if: runner.os == 'Linux' && matrix.node == '22.x'
+        run: npm run smoke:nodes
+
       - name: Verify release metadata
         if: runner.os == 'Linux' && matrix.node == '22.x'
         run: npm run verify:release

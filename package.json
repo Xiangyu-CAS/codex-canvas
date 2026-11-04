@@ -40,7 +40,8 @@
     "skills/",
     "src/",
     "public/canvas-app.html",
-    "public/canvas-transport.js"
+    "public/canvas-transport.js",
+    "public/node-canvas.js"
   ],
   "scripts": {
     "setup:ocr": "node ./bin/codex-canvas.mjs setup-ocr",
@@ -60,12 +61,15 @@
     "verify:release": "node ./scripts/verify-release.mjs",
     "verify:archive": "node ./scripts/verify-release-archive.mjs",
     "build:release": "node ./scripts/build-release.mjs",
-    "test": "npm run smoke && npm run test:app && npm run test:python && npm run test:edit-text",
+    "test": "npm run smoke && npm run test:app && npm run test:python && npm run test:edit-text && npm run test:nodes",
     "build:app": "node scripts/build-app.mjs",
     "test:edit-text": "node --experimental-vm-modules --test scripts/edit-text-timers.test.mjs",
     "test:python": "node --test scripts/python-runtime.test.mjs",
     "test:app": "node --test scripts/mcp-app.test.mjs scripts/collector-partial.test.mjs scripts/canvas-assets.test.mjs",
-    "smoke:app": "node scripts/visual-app-smoke.mjs"
+    "smoke:app": "node scripts/visual-app-smoke.mjs",
+    "test:nodes": "node --test scripts/node-canvas.test.mjs",
+    "smoke:nodes": "node scripts/node-canvas-ui-smoke.mjs",
+    "preview:nodes": "node scripts/node-canvas-preview.mjs"
   },
   "keywords": [
     "codex",

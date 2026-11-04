@@ -148,3 +148,14 @@ Thanks to [Cowart](https://github.com/zhongerxin/Cowart) for the canvas concept.
 If image post-processing reports `spawn … ENOENT` despite Python working in a terminal, run `npm run setup:image-deps` from the plugin source in that working environment. Once dependencies are verified, setup remembers the absolute Python executable for subsequent jobs, including jobs in an already running service with an older PATH. OCR setup stores its own interpreter. `doctor:*` remains read-only and reports `pythonExecutable`; a missing or broken saved interpreter falls back to PATH candidates.
 
 Set `CODEX_CANVAS_PYTHON` to an executable path (without arguments) to explicitly choose an interpreter for setup or the service. This override is authoritative. Records live in `~/.agents/codex-canvas/python/`; `CODEX_CANVAS_PYTHON_CONFIG_DIR` can override that directory and must match between setup and the service. No job installs Python or dependencies automatically. Services running older plugin code must first be restarted with the fix; a service with an incorrect explicit override also requires an environment correction and restart. See [installation troubleshooting](INSTALL.md) for examples.
+
+
+### Node canvas (local development)
+
+Use **Node canvas** to switch between the dark graph view and the original canvas. Select an image, write a prompt, add up to eight ordered canvas references, and choose a ratio and 1–4 outputs. Each output uses a separate `reference-generate` job through the existing Codex/ImageGen connection. The output retains all reference edges; its right-hand plus button starts the next iteration. The model label identifies the existing connection; no new provider or key is configured.
+
+Positions, viewport, references, and drafts persist with the canvas. Failed nodes can restore their request for retry. Deleting a reference hides its edges; undo restores them. Deleting a running output discards the collected result, but does not guarantee cancellation of generation already in progress. Legacy canvas data and existing import/edit/download tools remain supported.
+
+Run `npm run preview:nodes` for an isolated localhost demo using synthetic images and a mock generation process. It never uploads assets or replaces the installed plugin. Stop with Ctrl+C.
+
+Validate with `npm test`, `npm run test:nodes`, `npm run build:app`, `npm run smoke:nodes`, `npm run smoke:visual`, and `npm run smoke:app`. Browser tests need Playwright Chromium; the node UI test also accepts `NODE_CANVAS_BROWSER=chrome`. Generation is simulated in tests; actual ImageGen quality and aspect-ratio fidelity require a separate live check.

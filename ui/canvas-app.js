@@ -73,11 +73,12 @@ app.onclose = () => { showOpenAction("Canvas connection closed. Reopen it from t
 
 async function request(path, options = {}) {
   const requestedSession = session;
+  const requestedSessionId = options.canvasSessionId || requestedSession?.sessionId;
   await sessionReady;
   const requestSession = requestedSession || session;
   if (disposed) throw new Error("Canvas panel is closed.");
   const result = await app.callServerTool({ name: "canvas_app_request", arguments: {
-    sessionId: requestSession.sessionId, path, method: options.method || "GET",
+    sessionId: requestedSessionId || requestSession.sessionId, path, method: options.method || "GET",
     ...(options.body ? { body: JSON.parse(options.body) } : {})
   } }, { timeout: 120000, signal: options.signal });
   if (disposed) throw new Error("Canvas panel is closed.");
