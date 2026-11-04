@@ -1,3 +1,4 @@
+import { createNodeCanvas } from "./node-canvas.js";
 import { CanvasHistory } from "./canvas-history.js";
 import { sidebar, canvasOrigin, canvasFetch as fetch, preferences } from "./canvas-transport.js";
 
@@ -431,6 +432,22 @@ const singleSelectionActions = new Set([
   "send-to-chat",
   "copy-file-mention"
 ]);
+
+const nodeCanvas = createNodeCanvas({
+  shell: boardShell, world, layer: objectLayer, preferences, assetUrl,
+  getContext: () => ({ state, selectedId, language, sessionId: sidebar?.scope?.sessionId, scope: `${currentProjectId || ""}:${currentThreadId || ""}`, apiPath, editing: Boolean(quickEditObjectId || cropSession) }),
+  select: id => { setLocalSelection([id], { fromUser: true }); render(); },
+  request: async (url, method, body, canvasSessionId) => {
+    const response = await fetch(url, { method, canvasSessionId, headers: { "content-type": "application/json" }, ...(body ? { body: JSON.stringify(body) } : {}) });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Canvas request failed");
+    return payload;
+  },
+  refresh: loadState,
+  toast: showToast
+});
+
+new ResizeObserver(() => { if (state) updateSelectionUi(); }).observe(boardShell);
 
 initLayerBrowserUi();
 initPromptHistoryUi();
@@ -1540,7 +1557,8 @@ async function loadStateOnce() {
   const addedObjects = previousObjectIds
     ? nextState.objects.filter((object) => !previousObjectIds.has(object.id))
     : [];
-  const autoFocusObject = suppressNextAutoFocus ? null : autoFocusObjectForStateUpdate(nextState, addedObjects);
+  const autoFocusObject = suppressNextAutoFocus || nodeCanvas.active
+    || (nodeCanvas.enabled && addedObjects.some(object => object.referenceObjectIds?.length)) ? null : autoFocusObjectForStateUpdate(nextState, addedObjects);
   suppressNextAutoFocus = false;
 
   state = nextState;
@@ -1629,7 +1647,8 @@ function renderProjectMenu() {
   }
 }
 
-function switchProject(project) {
+async function switchProject(project) {
+  try { await nodeCanvas.flush(); } catch (error) { showToast(error.message); return; }
   const projectId = project?.id || "";
   if (!projectId || projectId === currentProjectId) {
     projectMenu.hidden = true;
@@ -3314,6 +3333,7 @@ function rectsIntersect(a, object) {
 }
 
 function updateSelectionUi() {
+  nodeCanvas.update();
   const object = state.objects.find((item) => item.id === selectedId);
   const groupId = selectedLayerGroupId();
   const isGroupSelection = Boolean(groupId);
@@ -3357,7 +3377,11 @@ function updateSelectionUi() {
   const preferredTop = aboveTop >= topSafeArea ? aboveTop : belowTop;
   const top = clamp(preferredTop, topSafeArea, Math.max(topSafeArea, boardRect.height - toolbarRect.height - 16));
   const left = clamp(objectCenter - toolbarRect.width / 2, 16, Math.max(16, boardRect.width - toolbarRect.width - 16));
-  toolbar.style.transform = `translate(${left}px, ${top}px)`;
+  const nodeTop = boardRect.width <= 600 ? 110 : 70;
+  const nodeLeft = clamp((boardRect.width - toolbarRect.width) / 2, 16, Math.max(16, boardRect.width - toolbarRect.width - 16));
+  toolbar.style.transform = nodeCanvas.enabled
+    ? `translate(${nodeLeft}px, ${nodeTop}px)`
+    : `translate(${left}px, ${top}px)`;
   updateQuickEditPosition();
 }
 

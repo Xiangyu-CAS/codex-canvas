@@ -1,3 +1,4 @@
+import { generationDraft, referenceIds, generationRatios } from "./generation-options.mjs";
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -16,7 +17,7 @@ import { createOperationLease } from "./operation-leases.mjs";
 const execFileAsync = promisify(execFile);
 const jobs = new Map();
 const textRecognitionJobs = new Map();
-const supportedActions = new Set(["remove-bg", "quick-edit", "expand", "edit-elements"]);
+const supportedActions = new Set(["remove-bg", "quick-edit", "expand", "edit-elements", "reference-generate"]);
 const ignoredGeneratedImagePaths = new Map();
 const globalIgnoredGeneratedImageScope = "__global__";
 const outputPollMs = 1000;
@@ -55,6 +56,30 @@ export async function createImageJob(projectDir, input, options = {}) {
 
   const object = await requireImageObject(projectDir, input.objectId, storeOptions);
 
+  let generation = null;
+  let references = [];
+  if (action === "reference-generate") {
+    const ids = referenceIds(input.referenceObjectIds);
+    if (!ids.length || ids[0] !== object.id || typeof input.prompt !== "string" || !input.prompt.trim()
+      || !generationRatios.has(input.ratio || "original")
+      || !Array.isArray(input.referenceObjectIds) || input.referenceObjectIds.length > 8
+      || ids.length !== input.referenceObjectIds.length) {
+      const error = new Error("Reference generation requires a prompt, 1–8 image references starting with the source, and a supported ratio.");
+      error.statusCode = 400;
+      throw error;
+    }
+    references = await Promise.all(ids.map(id => requireImageObject(projectDir, id, storeOptions)));
+    for (const reference of references) {
+      if (!reference.assetPath && !reference.sourcePath) {
+        const error = new Error("Every reference must be a local canvas image.");
+        error.statusCode = 400;
+        throw error;
+      }
+      await fs.access(reference.assetPath || reference.sourcePath);
+    }
+    generation = generationDraft({ ...input, count: 1 });
+  }
+
   const imagePath = object.assetPath || object.sourcePath;
   if (!imagePath) {
     const error = new Error("The selected image must be a local canvas asset before running image jobs.");
@@ -90,6 +115,9 @@ export async function createImageJob(projectDir, input, options = {}) {
     sourceObjectId: object.id,
     sourceImagePath: imagePath,
     imagePath,
+    generation,
+    referenceObjectIds: references.map(item => item.id),
+    referenceImagePaths: references.map(item => item.assetPath || item.sourcePath),
     expandOptions,
     expandInputPath: null,
     transparentLayerMode,
@@ -125,8 +153,12 @@ export async function createImageJob(projectDir, input, options = {}) {
       status: "running",
       name: actionLabel(action),
       sourceObjectId: object.id,
+      referenceObjectIds: job.referenceObjectIds,
+      ...(generation ? { generationDraft: generation } : {}),
       width: expandOptions?.targetWidth || object.width,
-      height: expandOptions?.targetHeight || object.height
+      height: generation && generation.ratio !== "original"
+        ? Math.round(object.width * Number(generation.ratio.split(":")[1]) / Number(generation.ratio.split(":")[0]))
+        : expandOptions?.targetHeight || object.height
     }, storeOptions);
   } catch (error) {
     await operationLease.release();
@@ -705,6 +737,12 @@ function pollDelay(ms, signal) {
 }
 
 async function prepareCodexInputForJob(job) {
+  if (job.action === "reference-generate") {
+    return {
+      imagePath: job.referenceImagePaths,
+      prompt: `Requested aspect ratio: ${job.generation.ratio}.\nReferences are attached in order (1–${job.referenceImagePaths.length}).\nUser request: ${job.prompt}`
+    };
+  }
   if (job.action === "expand") {
     const inputsDir = path.join(path.dirname(job.outputDir), "inputs");
     const expandInputPath = path.join(inputsDir, "expand-padded-input.png");
@@ -1178,6 +1216,18 @@ function rectsIntersect(a, b) {
 
 async function collectAndPlaceResult(projectDir, job, startedAtMs, { final, detectedImagePath = null }) {
   if (job.status === "done") return true;
+  if (job.action === "reference-generate") {
+    const state = await readState(projectDir, { canvasId: job.canvasId });
+    const placeholder = state.objects.find(item => item.id === job.placeholderId);
+    if (!placeholder) {
+      // Deleting a pending node discards its result without resurrecting it.
+      job.status = "done";
+      job.completedAt = new Date().toISOString();
+      job.durationMs = Date.now() - startedAtMs;
+      return true;
+    }
+    job.placeholder = placeholder;
+  }
 
   const collectionImagePath = await prepareImageForCollection(job, startedAtMs, detectedImagePath);
   const roots = collectionImagePath ? [path.dirname(collectionImagePath)] : [job.outputDir];
@@ -1189,6 +1239,8 @@ async function collectAndPlaceResult(projectDir, job, startedAtMs, { final, dete
     prompt: jobPrompt(job),
     imagegenPrompt: job.imagegenPrompt || "",
     sourceObjectId: job.sourceObjectId,
+    referenceObjectIds: job.referenceObjectIds,
+    allowDuplicateContent: job.action === "reference-generate",
     annotationSessionId: job.annotationSessionId || null,
     canvasId: job.canvasId
   });
@@ -1202,6 +1254,8 @@ async function collectAndPlaceResult(projectDir, job, startedAtMs, { final, dete
       prompt: jobPrompt(job),
       imagegenPrompt: job.imagegenPrompt || "",
       sourceObjectId: job.sourceObjectId,
+      referenceObjectIds: job.referenceObjectIds,
+      allowDuplicateContent: job.action === "reference-generate",
       canvasId: job.canvasId
     });
   }
@@ -1223,11 +1277,12 @@ async function collectAndPlaceResult(projectDir, job, startedAtMs, { final, dete
   }
 
   job.imported = result.imported;
-  job.status = "done";
+  if (job.action !== "reference-generate") job.status = "done";
   if (job.stage === "generating") job.stage = job.status;
   job.completedAt = new Date().toISOString();
   job.durationMs = Date.now() - startedAtMs;
   await placeImportedAtPlaceholder(projectDir, job);
+  job.status = "done";
   await appendJobLog(job, `Collected ${result.imported.length} image(s) after ${formatDuration(job.durationMs)}.`);
   return true;
 }
@@ -1464,6 +1519,7 @@ async function waitForJobOutputImage(job, startedAtMs, timeoutMs, signal) {
   const startedAt = Date.now();
   const sinceMs = startedAtMs - 1000;
   while (!signal?.aborted && Date.now() - startedAt < timeoutMs) {
+    if (job.status === "done" || job.status === "failed") return null;
     const sessionId = job.codexSessionId || await readCodexSessionId(job.logPath);
     if (sessionId && sessionId !== job.codexSessionId) {
       job.codexSessionId = sessionId;
@@ -1752,6 +1808,7 @@ async function requireImageObject(projectDir, objectId, options = {}) {
 }
 
 function jobPrompt(job) {
+  if (job.action === "reference-generate") return job.prompt;
   if (job.action === "quick-edit") return `Canvas Quick Edit: ${job.prompt || "edited image"}`;
   if (job.action === "expand") return `Canvas Expand: ${job.prompt || "expanded image"}`;
   if (job.action === "edit-text") return "Canvas Edit Text result";
@@ -1790,6 +1847,7 @@ function buildEditTextPrompt(changes) {
 }
 
 function actionLabel(action) {
+  if (action === "reference-generate") return "Reference generation";
   if (action === "quick-edit") return "Quick Edit";
   if (action === "expand") return "Expand";
   if (action === "edit-text") return "Edit Text";
@@ -1815,6 +1873,32 @@ async function placeImportedAtPlaceholder(projectDir, job) {
   const storeOptions = { canvasId: job.canvasId || null };
   const [imported] = job.imported;
   if (!imported || !job.placeholder) return;
+  if (job.action === "reference-generate") {
+    await transformState(projectDir, storeOptions, state => {
+      const placeholder = state.objects.find(item => item.id === job.placeholderId);
+      const importedIds = new Set(job.imported.map(item => item.id));
+      if (!placeholder) {
+        state.objects = state.objects.filter(item => !importedIds.has(item.id));
+        if (importedIds.has(state.selection)) state.selection = null;
+        job.imported = [];
+        return { state, value: job.imported };
+      }
+      let offset = 0;
+      state.objects = state.objects.filter(item => item.id !== job.placeholderId).map(item => {
+        if (!importedIds.has(item.id)) return item;
+        const positioned = { ...item, x: placeholder.x + offset, y: placeholder.y,
+          width: placeholder.width,
+          height: Math.round(placeholder.width * (item.naturalHeight || item.height) / (item.naturalWidth || item.width)),
+          layoutMode: "canvas-row", sourceObjectId: job.sourceObjectId, jobId: job.id,
+          referenceObjectIds: job.referenceObjectIds, generationDraft: job.generation };
+        offset += positioned.width + 80;
+        return positioned;
+      });
+      job.imported = state.objects.filter(item => importedIds.has(item.id));
+      return { state, value: job.imported };
+    });
+    return;
+  }
   if (job.action === "edit-elements") {
     await placeImportedElementLayers(projectDir, job);
     return;

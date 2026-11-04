@@ -36,7 +36,7 @@ export async function collectRecentImages(projectDir, options = {}) {
       .filter(Boolean)
       .map((sourcePath) => path.resolve(sourcePath))
   );
-  const knownHashes = await knownImageHashes(state.objects);
+  const knownHashes = options.allowDuplicateContent ? new Set() : await knownImageHashes(state.objects);
 
   const candidates = [];
   for (const root of roots) {
@@ -72,6 +72,7 @@ export async function collectRecentImages(projectDir, options = {}) {
     }
     const object = await addImage(projectDir, {
       path: candidate.path,
+      allowDuplicate: options.allowDuplicateContent === true,
       name: path.basename(candidate.path),
       prompt: options.prompt || "Collected recent image",
       imagegenPrompt: options.imagegenPrompt || "",
@@ -79,6 +80,7 @@ export async function collectRecentImages(projectDir, options = {}) {
       y: candidate.y,
       batchId: candidate.batchId,
       layoutMode: candidate.layoutMode,
+      referenceObjectIds: options.referenceObjectIds,
       sourceObjectId: options.sourceObjectId || null
     }, { ...storeOptions, imageBuffer });
     imported.push(object);

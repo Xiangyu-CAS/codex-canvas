@@ -133,3 +133,14 @@ node ./bin/codex-canvas.mjs open --project .
 ## 致谢
 
 感谢 [Cowart](https://github.com/zhongerxin/Cowart) 提供的画布思路
+
+
+### 节点画布（本地开发）
+
+右上角“节点画布”可切换深色点阵视图与原有画布。选中图片后，在生成面板输入提示词，添加最多 8 张画布参考图，选择比例和 1–4 张结果。参考顺序与缩略图编号一致，当前源图是参考 1。每张结果由独立的 `reference-generate` 后台任务生成，保存全部参考连线；右侧圆形加号从该结果继续迭代。模型沿用现有 Codex/ImageGen 连接，面板显示当前通道，不添加新的服务或密钥。
+
+节点、视口、参考关系和生成草稿随画布保存。失败节点的加号可恢复请求并重试；删除参考图隐藏对应连线，撤销删除后恢复。删除运行中的结果节点会丢弃其最终回收结果，但不保证中止已经提交的生成计算。旧画布仍能读取，现有导入、编辑、下载和工具栏保持可用。
+
+本地安全演示：`npm run preview:nodes`。命令打印仅绑定 localhost 的地址，使用合成素材和模拟生成进程，不发送素材到外部服务，也不替换已安装插件。按 Ctrl+C 停止。
+
+开发验证：`npm test`、`npm run test:nodes`、`npm run build:app`、`npm run smoke:nodes`、`npm run smoke:visual`、`npm run smoke:app`。浏览器测试需要 Playwright Chromium；节点测试也支持 `NODE_CANVAS_BROWSER=chrome` 使用已安装 Chrome。测试中的生成结果均为模拟，真实 ImageGen 的画质与比例遵循能力需单独验证。
